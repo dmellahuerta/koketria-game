@@ -108,6 +108,16 @@ Servicios:
 - App (frontend + proxy): `http://<IP_EC2>:80`
 - Backend interno: `backend:3000` (no expuesto directo)
 
+Cache de navegador en producción:
+
+- `index.html`: sin cache (para tomar updates al recargar).
+- `dist/assets/*` (hash de Vite): cache agresivo (`1 año`, `immutable`).
+- assets públicos (`.glb`, `.gltf`, `.mp3`, etc.): cache `7 días`.
+
+Si cambias un asset público con el mismo nombre, para invalidar más rápido:
+- cambia el nombre del archivo, o
+- agrega query string de versión (por ejemplo `modelo.glb?v=2`).
+
 Variables útiles (opcional):
 
 - `APP_PORT` (default `80`): puerto público de la app.
