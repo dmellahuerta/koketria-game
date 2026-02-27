@@ -124,6 +124,16 @@ app.innerHTML = `
   </div>
 
   <div id="crosshair" aria-hidden="true"></div>
+
+  <div id="chatFeed" class="chat-feed">
+    <div id="chatLog" class="chat-log"></div>
+  </div>
+
+  <div id="chatPanel" class="chat-panel">
+    <div id="chatInputWrap" class="chat-input-wrap hidden">
+      <input id="chatInput" type="text" maxlength="180" placeholder="Escribe un mensaje..." autocomplete="off" />
+    </div>
+  </div>
 `;
 
 const connectionStatus = document.querySelector('#connectionStatus');
@@ -163,6 +173,11 @@ const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
 const leaveRoomHudBtn = document.querySelector('#leaveRoomHudBtn');
+const chatFeed = document.querySelector('#chatFeed');
+const chatPanel = document.querySelector('#chatPanel');
+const chatLog = document.querySelector('#chatLog');
+const chatInputWrap = document.querySelector('#chatInputWrap');
+const chatInput = document.querySelector('#chatInput');
 
 const state = {
   ws: null,
@@ -176,6 +191,84 @@ const state = {
   showPerf: false,
   fps: 0,
   latencyMs: null,
+};
+
+const chatMessages = [];
+const maxChatMessages = 40;
+const chatMessageTtlMs = 8000;
+let isChatTyping = false;
+
+const clearMovementKeys = () => {
+  keys.KeyW = false;
+  keys.KeyA = false;
+  keys.KeyS = false;
+  keys.KeyD = false;
+  keys.Space = false;
+};
+
+const renderChat = () => {
+  if (!chatLog) {
+    return;
+  }
+  const now = Date.now();
+  for (let i = chatMessages.length - 1; i >= 0; i -= 1) {
+    if (now - chatMessages[i].ts > chatMessageTtlMs) {
+      chatMessages.splice(i, 1);
+    }
+  }
+  chatFeed.classList.toggle('open', chatMessages.length > 0);
+  const recent = chatMessages.slice(-8);
+  chatLog.innerHTML = recent.map((msg) => {
+    const selfTag = msg.isSelf ? ' (Tú)' : '';
+    return `<p><strong>${msg.playerName}${selfTag}:</strong> ${msg.text}</p>`;
+  }).join('');
+  chatLog.scrollTop = chatLog.scrollHeight;
+};
+
+const pushChatMessage = (playerName, text) => {
+  if (!text) {
+    return;
+  }
+  const isSelf = Boolean(state.self && String(playerName || '') === String(state.self.name || ''));
+  chatMessages.push({
+    playerName: String(playerName || 'Player'),
+    text: String(text || ''),
+    isSelf,
+    ts: Date.now(),
+  });
+  if (chatMessages.length > maxChatMessages) {
+    chatMessages.splice(0, chatMessages.length - maxChatMessages);
+  }
+  renderChat();
+};
+
+setInterval(() => {
+  if (chatMessages.length > 0 && !isChatTyping) {
+    renderChat();
+  }
+}, 500);
+
+const openChatInput = () => {
+  if (!state.joinedRoom) {
+    return;
+  }
+  isChatTyping = true;
+  clearMovementKeys();
+  isFiring = false;
+  chatPanel.classList.add('open');
+  chatInputWrap.classList.remove('hidden');
+  if (document.pointerLockElement) {
+    document.exitPointerLock();
+  }
+  chatInput.value = '';
+  chatInput.focus();
+};
+
+const closeChatInput = () => {
+  isChatTyping = false;
+  chatPanel.classList.remove('open');
+  chatInputWrap.classList.add('hidden');
+  chatInput.blur();
 };
 
 const setLobbyError = (message = '') => {
@@ -209,6 +302,12 @@ const setInRoom = (value) => {
   }
   if (!value && document.pointerLockElement) {
     document.exitPointerLock();
+  }
+  if (!value) {
+    chatMessages.length = 0;
+    renderChat();
+    closeChatInput();
+    chatFeed.classList.remove('open');
   }
 };
 
@@ -3152,6 +3251,18 @@ const connectWebSocket = () => {
       return;
     }
 
+    if (payload.type === 'chat_message') {
+      const msg = payload.data || {};
+      const playerName = String(msg.playerName || 'Player');
+      const text = String(msg.text || '').trim();
+      if (!text) {
+        return;
+      }
+      pushChatMessage(playerName, text);
+      chatFeed.classList.add('open');
+      return;
+    }
+
     if (payload.type === 'player_funny') {
       const playerId = payload.data?.playerId;
       if (!playerId || !state.remotePlayers.has(playerId)) {
@@ -3446,6 +3557,31 @@ window.addEventListener('mouseup', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'Enter') {
+    event.preventDefault();
+    if (!state.joinedRoom) {
+      return;
+    }
+    if (!isChatTyping) {
+      openChatInput();
+      return;
+    }
+    const text = chatInput.value.trim();
+    if (text) {
+      sendWs({ type: 'chat_message', text });
+    }
+    closeChatInput();
+    return;
+  }
+
+  if (isChatTyping) {
+    if (event.code === 'Escape') {
+      event.preventDefault();
+      closeChatInput();
+    }
+    return;
+  }
+
   if (event.code === 'Tab') {
     event.preventDefault();
     if (state.joinedRoom) {
@@ -3510,6 +3646,10 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  if (isChatTyping) {
+    return;
+  }
+
   if (event.code === 'Space') {
     event.preventDefault();
   }

@@ -1241,6 +1241,34 @@ const start = async () => {
           return;
         }
 
+        if (message.type === 'chat_message') {
+          if (!current.roomId) {
+            return;
+          }
+
+          const room = rooms.get(current.roomId);
+          if (!room) {
+            return;
+          }
+
+          const rawText = String(message.text || '').trim();
+          if (!rawText) {
+            return;
+          }
+          const text = rawText.slice(0, 180);
+
+          broadcastToRoom(room, {
+            type: 'chat_message',
+            ...json(true, {
+              playerId: current.id,
+              playerName: current.name,
+              text,
+              ts: Date.now(),
+            }),
+          });
+          return;
+        }
+
         if (message.type === 'player_death') {
           // Deprecated on client side: deaths are server-authoritative via player_shoot
           return;
