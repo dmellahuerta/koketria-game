@@ -25,6 +25,7 @@ const maxHealth = 100;
 const maxShield = 100;
 const startShield = 0;
 const hitDamage = Math.ceil(maxHealth / 3);
+const specialHitDamage = Math.ceil(hitDamage / 2);
 const shieldDamageReduction = 0.6;
 const shieldDamageCostFactor = 0.85;
 const headshotRadius = envNumber('HEADSHOT_RADIUS', 0.5);
@@ -43,7 +44,7 @@ const lunarRainDurationMs = 10_000;
 const lunarRainWaveIntervalMs = 320;
 const lunarRainProjectilesPerWave = 8;
 const lunarRainRadius = 22;
-const lunarRainStrikeDamage = hitDamage;
+const lunarRainStrikeDamage = specialHitDamage;
 const lunarRainStrikeAoeRadius = 4.2;
 const lunarRainSkyMinY = 30;
 const lunarRainSkyMaxY = 52;
@@ -59,7 +60,7 @@ const neoorphenMeteorDurationMs = 10_000;
 const neoorphenMeteorWaveIntervalMs = 180;
 const neoorphenMeteorProjectilesPerWave = 12;
 const neoorphenMeteorRadius = lunarRainRadius;
-const neoorphenMeteorStrikeDamage = hitDamage;
+const neoorphenMeteorStrikeDamage = specialHitDamage;
 const neoorphenMeteorStrikeAoeRadius = lunarRainStrikeAoeRadius;
 const neoorphenMeteorSkyMinY = 56;
 const neoorphenMeteorSkyMaxY = 88;
@@ -984,15 +985,7 @@ const triggerSilentmanConeSpecial = (room, caster) => {
       continue;
     }
     const prev = hitByVictim.get(hit.victimId);
-    if (!prev) {
-      hitByVictim.set(hit.victimId, hit);
-      continue;
-    }
-    if (prev.hitType !== 'head' && hit.hitType === 'head') {
-      hitByVictim.set(hit.victimId, hit);
-      continue;
-    }
-    if (prev.hitType === hit.hitType && hit.t < prev.t) {
+    if (!prev || hit.t < prev.t) {
       hitByVictim.set(hit.victimId, hit);
     }
   }
@@ -1027,16 +1020,13 @@ const triggerSilentmanConeSpecial = (room, caster) => {
       continue;
     }
 
-    if (hit.hitType === 'head') {
-      victimCombat.health = 0;
-      victimCombat.shield = Math.max(0, victimCombat.shield);
-    } else if (victimCombat.shield > 0) {
-      const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
-      const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
+    if (victimCombat.shield > 0) {
+      const reducedDamage = Math.ceil(specialHitDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(specialHitDamage * shieldDamageCostFactor);
       victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
       victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
     } else {
-      victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
+      victimCombat.health = Math.max(0, victimCombat.health - specialHitDamage);
     }
 
     const victim = getClientById(victimId);
@@ -1047,7 +1037,7 @@ const triggerSilentmanConeSpecial = (room, caster) => {
           fromPlayerId: caster.id,
           health: victimCombat.health,
           shield: victimCombat.shield,
-          headshot: hit.hitType === 'head',
+          headshot: false,
         }),
       });
     }
@@ -1055,7 +1045,7 @@ const triggerSilentmanConeSpecial = (room, caster) => {
       type: 'hit_confirm',
       ...json(true, {
         victimId,
-        headshot: hit.hitType === 'head',
+        headshot: false,
         ts: nowMs,
       }),
     });
@@ -1239,12 +1229,12 @@ const applyPumoriOrbitDamage = (room, casterId, center) => {
     }
 
     if (victimCombat.shield > 0) {
-      const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
-      const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
+      const reducedDamage = Math.ceil(specialHitDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(specialHitDamage * shieldDamageCostFactor);
       victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
       victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
     } else {
-      victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
+      victimCombat.health = Math.max(0, victimCombat.health - specialHitDamage);
     }
 
     send(victimClient.ws, {
