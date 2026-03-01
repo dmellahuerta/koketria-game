@@ -56,6 +56,16 @@ app.innerHTML = `
         </select>
       </label>
       <p id="versusWaitingInfo">Esperando jugadores...</p>
+      <div id="versusTeams" class="versus-teams">
+        <div class="versus-team">
+          <h3>Lado Izquierdo</h3>
+          <div id="versusLeftPlayers" class="versus-players"></div>
+        </div>
+        <div class="versus-team">
+          <h3>Lado Derecho</h3>
+          <div id="versusRightPlayers" class="versus-players"></div>
+        </div>
+      </div>
       <div class="lobby-actions">
         <button id="versusStartBtn" type="button">Iniciar partida</button>
         <button id="versusLeaveBtn" type="button">Volver al lobby</button>
@@ -227,6 +237,8 @@ const versusLobby = document.querySelector('#versusLobby');
 const versusRoomInfo = document.querySelector('#versusRoomInfo');
 const versusTypeSelect = document.querySelector('#versusTypeSelect');
 const versusWaitingInfo = document.querySelector('#versusWaitingInfo');
+const versusLeftPlayers = document.querySelector('#versusLeftPlayers');
+const versusRightPlayers = document.querySelector('#versusRightPlayers');
 const versusStartBtn = document.querySelector('#versusStartBtn');
 const versusLeaveBtn = document.querySelector('#versusLeaveBtn');
 const matchInfo = document.querySelector('#matchInfo');
@@ -674,6 +686,26 @@ const syncLobbyScreens = () => {
   }
 };
 
+const renderVersusSlots = (container, players, slotCount) => {
+  if (!container) {
+    return;
+  }
+  const safePlayers = Array.isArray(players) ? players : [];
+  const slots = Math.max(1, Number(slotCount) || 1);
+  const rows = [];
+  for (let i = 0; i < slots; i += 1) {
+    const player = safePlayers[i];
+    if (player) {
+      const name = String(player.name || `Player ${i + 1}`);
+      const character = getCharacterLabel(player.character || '-');
+      rows.push(`<div class="versus-player"><strong>${name}</strong><span>${character}</span></div>`);
+    } else {
+      rows.push('<div class="versus-player empty"><strong>Esperando...</strong><span>Slot libre</span></div>');
+    }
+  }
+  container.innerHTML = rows.join('');
+};
+
 const updateVersusLobbyUi = () => {
   if (!versusLobby) {
     return;
@@ -689,6 +721,15 @@ const updateVersusLobbyUi = () => {
   const versusType = String(room.versusType || '');
   const isHostPlayer = isHost();
   const hasType = versusType === '1v1' || versusType === '2v2';
+  const players = Array.isArray(state.joinedRoom.players) ? [...state.joinedRoom.players] : [];
+  players.sort((a, b) => {
+    if (a.id === state.self?.id) return -1;
+    if (b.id === state.self?.id) return 1;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  const teamSize = hasType ? (versusType === '2v2' ? 2 : 1) : Math.max(1, Math.ceil(maxPlayers / 2));
+  const leftPlayers = players.slice(0, teamSize);
+  const rightPlayers = players.slice(teamSize, teamSize * 2);
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
   versusLobby.classList.remove('hidden');
   versusRoomInfo.textContent = `Sala: ${room.name} (${room.id})`;
@@ -697,6 +738,8 @@ const updateVersusLobbyUi = () => {
   versusWaitingInfo.textContent = hasType
     ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType})`
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
+  renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize);
+  renderVersusSlots(versusRightPlayers, rightPlayers, teamSize);
   versusStartBtn.disabled = !isHostPlayer || !enoughPlayers;
 };
 
@@ -3117,7 +3160,12 @@ const updateHud = () => {
 
   if (isHost()) {
     hostControls.classList.remove('hidden');
-    startGameBtn.disabled = room.status === 'in_game';
+    const roomPlayers = Number(state.joinedRoom.players?.length || 0);
+    const roomMode = String(room.mode || 'freeforall').toLowerCase();
+    const requiredPlayers = Number(room.requiredPlayers || 0);
+    const canStartVersus = roomMode !== 'versusmatch'
+      || (requiredPlayers > 0 && roomPlayers === requiredPlayers);
+    startGameBtn.disabled = room.status === 'in_game' || !canStartVersus;
     endGameBtn.disabled = room.status !== 'in_game';
   } else {
     hostControls.classList.add('hidden');
