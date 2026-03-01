@@ -2255,7 +2255,9 @@ const leaveCurrentRoom = (client) => {
   }
 
   if (room.mode === 'versusmatch') {
-    rebalanceVersusTeams(room);
+    if (room.status === 'waiting') {
+      rebalanceVersusTeams(room);
+    }
     if (room.status === 'in_game' && !room.roundResetTimer) {
       const redCount = getTeamPlayerCount(room, 'red');
       const blueCount = getTeamPlayerCount(room, 'blue');
@@ -2288,7 +2290,7 @@ const joinRoom = (client, room) => {
   }
 
   room.players.add(client.id);
-  if (room.mode === 'versusmatch') {
+  if (room.mode === 'versusmatch' && room.status === 'waiting') {
     rebalanceVersusTeams(room);
   }
   if (!room.stats.has(client.id)) {
@@ -2655,6 +2657,7 @@ const start = async () => {
               });
               return;
             }
+            rebalanceVersusTeams(room);
           }
 
           room.status = message.type === 'start_game' ? 'in_game' : 'finished';
