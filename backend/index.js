@@ -26,8 +26,8 @@ const startShield = 0;
 const hitDamage = Math.ceil(maxHealth / 3);
 const shieldDamageReduction = 0.6;
 const shieldDamageCostFactor = 0.85;
-const headshotRadius = 0.42;
-const bodyshotRadius = 0.75;
+const headshotRadius = envNumber('HEADSHOT_RADIUS', 0.5);
+const bodyshotRadius = envNumber('BODYSHOT_RADIUS', 0.92);
 const headCenterOffsetY = 0.18;
 const bodyCenterOffsetY = -0.45;
 const magicAttackIntervalMs = 1000;
@@ -52,6 +52,9 @@ const mapBoundaryMaxRadius = 1.24;
 const playerCollisionRadius = 0.55;
 const spawnMinDistanceToPlayers = 4.5;
 const spawnFallbackDistanceToPlayers = 2.5;
+const movingTargetSpeedThreshold = envNumber('MOVING_TARGET_SPEED_THRESHOLD', 2.4);
+const movingTargetHeadRadiusBonus = envNumber('MOVING_TARGET_HEAD_BONUS', 0.05);
+const movingTargetBodyRadiusBonus = envNumber('MOVING_TARGET_BODY_BONUS', 0.14);
 
 const json = (ok, data, error) => {
   return { ok, data, error };
@@ -233,6 +236,31 @@ const getClientPositionAt = (client, targetTsMs) => {
   return { x: p.x, y: p.y, z: p.z };
 };
 
+const getClientHorizontalSpeedAt = (client, targetTsMs) => {
+  const history = Array.isArray(client?.stateHistory) ? client.stateHistory : [];
+  if (history.length < 2) {
+    return 0;
+  }
+
+  let prev = history[0];
+  let next = history[history.length - 1];
+  for (let i = 1; i < history.length; i += 1) {
+    const a = history[i - 1];
+    const b = history[i];
+    if (targetTsMs < a.ts || targetTsMs > b.ts) {
+      continue;
+    }
+    prev = a;
+    next = b;
+    break;
+  }
+
+  const dtSec = Math.max(0.001, (next.ts - prev.ts) / 1000);
+  const dx = next.position.x - prev.position.x;
+  const dz = next.position.z - prev.position.z;
+  return Math.sqrt((dx * dx) + (dz * dz)) / dtSec;
+};
+
 const vectorSub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const vectorDot = (a, b) => ((a.x * b.x) + (a.y * b.y) + (a.z * b.z));
 const vectorLenSq = (a) => vectorDot(a, a);
@@ -333,11 +361,6 @@ const isManaCharacter = (characterId) => {
     || id === 'neoorphen'
     || id === 'pezunalunar'
     || id === 'pezuanalunar';
-};
-
-const isWideProjectileCharacter = (characterId) => {
-  const id = normalizeCharacterId(characterId);
-  return id === 'pumori' || id === 'neoorphen';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -601,11 +624,8 @@ const intersectRaySphere = (origin, directionNorm, maxDistance, center, radius) 
   return t;
 };
 
-const resolveShotHitOnPlayers = (room, shooterId, shooterCharacter, origin, directionNorm, maxDistance, rewindTsMs) => {
+const resolveShotHitOnPlayers = (room, shooterId, origin, directionNorm, maxDistance, rewindTsMs) => {
   let best = null;
-  const wideProjectile = isWideProjectileCharacter(shooterCharacter);
-  const effectiveHeadRadius = headshotRadius + (wideProjectile ? 0.1 : 0);
-  const effectiveBodyRadius = bodyshotRadius + (wideProjectile ? 0.22 : 0);
 
   room.players.forEach((candidateId) => {
     if (candidateId === shooterId) {
@@ -623,6 +643,11 @@ const resolveShotHitOnPlayers = (room, shooterId, shooterCharacter, origin, dire
     if (!pos || !validNumber(pos.x) || !validNumber(pos.y) || !validNumber(pos.z)) {
       return;
     }
+
+    const horizontalSpeed = getClientHorizontalSpeedAt(target, rewindTsMs);
+    const movingBoost = horizontalSpeed >= movingTargetSpeedThreshold;
+    const effectiveHeadRadius = headshotRadius + (movingBoost ? movingTargetHeadRadiusBonus : 0);
+    const effectiveBodyRadius = bodyshotRadius + (movingBoost ? movingTargetBodyRadiusBonus : 0);
 
     const headCenter = { x: pos.x, y: pos.y + headCenterOffsetY, z: pos.z };
     const bodyCenter = { x: pos.x, y: pos.y + bodyCenterOffsetY, z: pos.z };
@@ -1374,7 +1399,6 @@ const start = async () => {
           const hit = resolveShotHitOnPlayers(
             room,
             current.id,
-            current.character || '',
             originClamped,
             directionNorm,
             effectiveDistance,

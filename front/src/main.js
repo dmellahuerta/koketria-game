@@ -1956,8 +1956,8 @@ const maxShieldPickups = 30;
 const shieldPickupRespawnMs = 60_000;
 const shieldPickupAmount = 25;
 const hitDamage = Math.ceil(maxHealth / 3);
-const headshotRadius = 0.42;
-const bodyshotRadius = 0.75;
+const headshotRadius = 0.5;
+const bodyshotRadius = 0.92;
 const headCenterOffsetY = 0.18;
 const bodyCenterOffsetY = -0.45;
 const remoteHealthBarYOffset = 2.45;
@@ -4792,13 +4792,11 @@ const shoot = () => {
     : origin.clone().add(shotDirection.clone().multiplyScalar(120));
 
   if (usingMana || usingHammer || usingPoison) {
-    const assistHeadRadius = headshotRadius + ((usingHammer || usingPoison) ? 0.1 : 0);
-    const assistBodyRadius = bodyshotRadius + ((usingHammer || usingPoison) ? 0.22 : 0);
     const characterHit = getClosestRemoteCharacterHitPoint(
       origin,
       shotDirection,
       origin.distanceTo(hitPoint),
-      { headRadius: assistHeadRadius, bodyRadius: assistBodyRadius },
+      { headRadius: headshotRadius, bodyRadius: bodyshotRadius },
     );
     if (characterHit?.point) {
       hitPoint.copy(characterHit.point);
