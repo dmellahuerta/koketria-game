@@ -1019,20 +1019,49 @@ const loadPickupModelTemplate = async (kind) => {
 
 const createPickupVisualGroup = (kind, fallbackMeshFactory) => {
   const group = new THREE.Group();
+  const content = new THREE.Group();
+  group.add(content);
   const fallback = fallbackMeshFactory();
   fallback.name = '__pickup_fallback__';
-  group.add(fallback);
+  content.add(fallback);
+
+  const glowColor = kind === 'defensa' ? 0x6ef8ff : 0x77b6ff;
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.28, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: glowColor,
+      transparent: true,
+      opacity: 0.26,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.54, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: glowColor,
+      transparent: true,
+      opacity: 0.15,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  group.add(core);
+  group.add(halo);
+  group.userData.glowCore = core;
+  group.userData.glowHalo = halo;
 
   loadPickupModelTemplate(kind).then((template) => {
     if (!template || !group.parent) {
       return;
     }
-    while (group.children.length > 0) {
-      group.remove(group.children[0]);
+    while (content.children.length > 0) {
+      content.remove(content.children[0]);
     }
     const model = template.clone(true);
     model.name = `pickup_${kind}`;
-    group.add(model);
+    content.add(model);
     group.userData.modelLoaded = true;
   });
 
@@ -5090,6 +5119,15 @@ const updateAmmoPickups = (delta) => {
 
     pickup.mesh.rotation.y += delta * 2.2;
     pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2.4 + pickup.phase) * 0.09;
+    const manaPulse = 0.78 + (Math.sin((nowSeconds * 3.8) + pickup.phase) * 0.22);
+    if (pickup.mesh.userData.glowCore) {
+      pickup.mesh.userData.glowCore.scale.setScalar(0.9 + (manaPulse * 0.35));
+      pickup.mesh.userData.glowCore.material.opacity = 0.2 + (manaPulse * 0.18);
+    }
+    if (pickup.mesh.userData.glowHalo) {
+      pickup.mesh.userData.glowHalo.scale.setScalar(1 + (manaPulse * 0.45));
+      pickup.mesh.userData.glowHalo.material.opacity = 0.12 + (manaPulse * 0.14);
+    }
 
     if (!canPlay() || (isManaCharacter(activeCharacter) ? mana >= maxMana : ammoReserve >= maxAmmoTotal)) {
       continue;
@@ -5123,6 +5161,15 @@ const updateShieldPickups = (delta) => {
     pickup.mesh.rotation.x += delta * 1.3;
     pickup.mesh.rotation.y += delta * 1.7;
     pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2 + pickup.phase) * 0.1;
+    const shieldPulse = 0.76 + (Math.sin((nowSeconds * 3.4) + pickup.phase) * 0.24);
+    if (pickup.mesh.userData.glowCore) {
+      pickup.mesh.userData.glowCore.scale.setScalar(0.95 + (shieldPulse * 0.38));
+      pickup.mesh.userData.glowCore.material.opacity = 0.22 + (shieldPulse * 0.2);
+    }
+    if (pickup.mesh.userData.glowHalo) {
+      pickup.mesh.userData.glowHalo.scale.setScalar(1.05 + (shieldPulse * 0.5));
+      pickup.mesh.userData.glowHalo.material.opacity = 0.14 + (shieldPulse * 0.16);
+    }
 
     if (!canPlay() || shield >= maxShield) {
       continue;
