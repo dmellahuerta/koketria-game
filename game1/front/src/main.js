@@ -709,6 +709,13 @@ const getVersusScoreTarget = (room) => {
   return 20;
 };
 
+const getRespawnDurationSeconds = () => {
+  if (state.joinedRoom && isVersusRoom(state.joinedRoom.room)) {
+    return 3;
+  }
+  return 10;
+};
+
 const updateTeamScoreHud = () => {
   if (!teamScoreHud || !teamScoreRed || !teamScoreBlue || !teamScoreTarget) {
     return;
@@ -2635,7 +2642,6 @@ const recoilHorizontal = 0.008;
 const maxShotSpread = 1.2;
 const spreadDecayPerSecond = 2.25;
 const reloadTime = 1.2;
-const respawnDurationSeconds = 10;
 const maxHealth = 100;
 const maxShield = 100;
 const startShield = 0;
@@ -2679,7 +2685,7 @@ let isJumping = false;
 let jumpVelocity = 0;
 let isRespawning = false;
 let respawnEndsAt = 0;
-let respawnSecondsLeft = respawnDurationSeconds;
+let respawnSecondsLeft = getRespawnDurationSeconds();
 let isMatchEnding = false;
 let matchWinnerEndsAt = 0;
 let matchWinnerSecondsLeft = 0;
@@ -3457,7 +3463,7 @@ const showWinnerOverlay = (winner, countdownSeconds) => {
   if (isRespawning) {
     isRespawning = false;
     respawnEndsAt = 0;
-    respawnSecondsLeft = respawnDurationSeconds;
+    respawnSecondsLeft = getRespawnDurationSeconds();
     updateRespawnOverlay();
   }
 };
@@ -3562,7 +3568,7 @@ const resetCombatStats = () => {
   jumpVelocity = 0;
   kills = 0;
   isRespawning = false;
-  respawnSecondsLeft = respawnDurationSeconds;
+  respawnSecondsLeft = getRespawnDurationSeconds();
   respawnEndsAt = 0;
   hideWinnerOverlay();
   isFiring = false;
@@ -3630,7 +3636,7 @@ const respawnPlayer = () => {
   isJumping = false;
   jumpVelocity = 0;
   isRespawning = false;
-  respawnSecondsLeft = respawnDurationSeconds;
+  respawnSecondsLeft = getRespawnDurationSeconds();
   respawnEndsAt = 0;
   updateRespawnOverlay();
   sendWs({ type: 'player_respawn' });
@@ -3646,6 +3652,7 @@ const startRespawnCountdown = () => {
   isFiring = false;
   isJumping = false;
   jumpVelocity = 0;
+  const respawnDurationSeconds = getRespawnDurationSeconds();
   respawnEndsAt = performance.now() + respawnDurationSeconds * 1000;
   respawnSecondsLeft = respawnDurationSeconds;
 
@@ -4824,7 +4831,7 @@ const applyOwnStateFromRoom = (roomState) => {
   if (selfPlayer.alive === true && isRespawning) {
     isRespawning = false;
     respawnEndsAt = 0;
-    respawnSecondsLeft = respawnDurationSeconds;
+    respawnSecondsLeft = getRespawnDurationSeconds();
     updateRespawnOverlay();
   }
 };
@@ -5277,7 +5284,7 @@ const connectWebSocket = () => {
         pendingHealthRegen = 0;
         isRespawning = false;
         respawnEndsAt = 0;
-        respawnSecondsLeft = respawnDurationSeconds;
+        respawnSecondsLeft = getRespawnDurationSeconds();
         updateRespawnOverlay();
         updateHud();
         return;
@@ -5371,7 +5378,7 @@ const connectWebSocket = () => {
         if (payload.data.status !== 'in_game' && isRespawning) {
           isRespawning = false;
           respawnEndsAt = 0;
-          respawnSecondsLeft = respawnDurationSeconds;
+          respawnSecondsLeft = getRespawnDurationSeconds();
           updateRespawnOverlay();
         }
         if (payload.data.status !== 'cooldown') {
@@ -7330,7 +7337,7 @@ const updateRespawnCountdown = () => {
     if (isRespawning && !isMatchRunning()) {
       isRespawning = false;
       respawnEndsAt = 0;
-      respawnSecondsLeft = respawnDurationSeconds;
+      respawnSecondsLeft = getRespawnDurationSeconds();
       updateRespawnOverlay();
     }
     return;
