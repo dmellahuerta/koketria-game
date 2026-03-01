@@ -1,20 +1,14 @@
 services:
-  caddy:
-    image: caddy:2.8-alpine
+  nginx:
+    image: nginx:1.27-alpine
     restart: unless-stopped
     depends_on:
       - web
+      - front
     ports:
       - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
-    environment:
-      - WEB_DOMAIN=${WEB_DOMAIN:-misterrii.com}
-      - GAME_DOMAIN=${GAME_DOMAIN:-koketria.misterrii.com}
-      - ACME_EMAIL=${ACME_EMAIL:-}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
 
   backend:
     build:
@@ -46,7 +40,3 @@ services:
     restart: unless-stopped
     expose:
       - "80"
-
-volumes:
-  caddy_data:
-  caddy_config:
