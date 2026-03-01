@@ -20,6 +20,8 @@ const battleThemes = ['battle1', 'battle2', 'battle3'];
 const maxRooms = 1;
 const maxPlayersPerRoom = 5;
 const serverRoomId = 'main';
+const versusRoomMax = envNumber('VERSUS_ROOM_MAX', 4);
+const maxCustomRooms = envNumber('MAX_CUSTOM_ROOMS', 6);
 const killsToWin = 20;
 const roundResetSeconds = 10;
 const maxHealth = 100;
@@ -142,6 +144,56 @@ const clearRoomSpecialTimers = (room) => {
   room.specialTimers.clear();
 };
 
+const getVersusRequirements = (versusType) => {
+  const normalized = String(versusType || '').trim().toLowerCase();
+  if (normalized === '1v1') {
+    return { versusType: '1v1', requiredPlayers: 2, maxPlayers: 2 };
+  }
+  if (normalized === '2v2') {
+    return { versusType: '2v2', requiredPlayers: 4, maxPlayers: 4 };
+  }
+  return null;
+};
+
+const countCustomRooms = () => {
+  let total = 0;
+  rooms.forEach((room) => {
+    if (!room.isServerManaged) {
+      total += 1;
+    }
+  });
+  return total;
+};
+
+const createVersusRoom = (hostClient, roomName = '') => {
+  const baseName = String(roomName || '').trim();
+  const safeName = baseName ? baseName.slice(0, 36) : `Versus-${Math.random().toString(36).slice(2, 7)}`;
+  const room = {
+    id: randomUUID().slice(0, 8),
+    name: safeName,
+    hostId: hostClient.id,
+    status: 'waiting',
+    weather: pickWeather(),
+    battleTheme: pickBattleTheme(),
+    mode: 'versusmatch',
+    versusType: null,
+    requiredPlayers: 0,
+    maxPlayers: versusRoomMax,
+    mapSeed: Math.floor(Math.random() * 0x7fffffff),
+    isServerManaged: false,
+    players: new Set(),
+    stats: new Map(),
+    combat: new Map(),
+    mapCollision: null,
+    mapProfile: null,
+    roundResetTimer: null,
+    specialTimers: new Set(),
+    combatEventQueue: [],
+  };
+  rooms.set(room.id, room);
+  return room;
+};
+
 const ensureServerRoom = () => {
   const existing = rooms.get(serverRoomId);
   if (existing) {
@@ -155,6 +207,10 @@ const ensureServerRoom = () => {
     status: 'in_game',
     weather: pickWeather(),
     battleTheme: pickBattleTheme(),
+    mode: 'freeforall',
+    versusType: null,
+    requiredPlayers: 0,
+    maxPlayers: maxPlayersPerRoom,
     mapSeed: Math.floor(Math.random() * 0x7fffffff),
     isServerManaged: true,
     players: new Set(),
@@ -1746,6 +1802,10 @@ const startRoundResetCountdown = (room, winnerId) => {
       roomId: room.id,
       status: room.status,
       hostId: room.hostId,
+      mode: room.mode || 'freeforall',
+      versusType: room.versusType || null,
+      requiredPlayers: Number(room.requiredPlayers) || 0,
+      maxPlayers: Number(room.maxPlayers) || maxPlayersPerRoom,
       weather: room.weather,
       battleTheme: room.battleTheme,
     }),
@@ -1781,6 +1841,10 @@ const startRoundResetCountdown = (room, winnerId) => {
         roomId: room.id,
         status: room.status,
         hostId: room.hostId,
+        mode: room.mode || 'freeforall',
+        versusType: room.versusType || null,
+        requiredPlayers: Number(room.requiredPlayers) || 0,
+        maxPlayers: Number(room.maxPlayers) || maxPlayersPerRoom,
         weather: room.weather,
         battleTheme: room.battleTheme,
       }),
@@ -1826,6 +1890,10 @@ const getRoomSummary = (room) => {
     players: room.players.size,
     hostId: room.hostId,
     status: room.status,
+    mode: room.mode || 'freeforall',
+    versusType: room.versusType || null,
+    requiredPlayers: Number(room.requiredPlayers) || 0,
+    maxPlayers: Number(room.maxPlayers) || maxPlayersPerRoom,
     weather: room.weather,
     battleTheme: room.battleTheme,
     mapSeed: ensureRoomMapSeed(room),
@@ -2158,13 +2226,38 @@ const start = async () => {
         }
 
         if (message.type === 'create_room') {
-          send(ws, {
-            type: 'error',
-            ...json(false, null, {
-              code: 'ROOM_CREATION_DISABLED',
-              message: 'La sala es gestionada por el servidor',
-            }),
-          });
+          const mode = String(message.mode || '').trim().toLowerCase();
+          const roomName = String(message.roomName || '').trim();
+          const playerName = String(message.playerName || '').trim();
+          const character = String(message.character || '').trim();
+          if (mode !== 'versusmatch') {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'UNSUPPORTED_MODE',
+                message: 'Modo de sala no soportado',
+              }),
+            });
+            return;
+          }
+          if (countCustomRooms() >= maxCustomRooms) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'ROOM_LIMIT_REACHED',
+                message: `Se alcanzo el maximo de ${maxCustomRooms} salas`,
+              }),
+            });
+            return;
+          }
+          if (playerName) {
+            current.name = playerName.slice(0, 24);
+          }
+          if (character) {
+            current.character = character.slice(0, 96);
+          }
+          const room = createVersusRoom(current, roomName);
+          joinRoom(current, room);
           return;
         }
 
@@ -2182,10 +2275,21 @@ const start = async () => {
             return;
           }
 
-          if (!room.players.has(current.id) && room.players.size >= maxPlayersPerRoom) {
+          const roomCapacity = Number(room.maxPlayers) > 0 ? Number(room.maxPlayers) : maxPlayersPerRoom;
+          if (!room.players.has(current.id) && room.players.size >= roomCapacity) {
             send(ws, {
               type: 'error',
-              ...json(false, null, { code: 'ROOM_FULL', message: `La sala alcanzo el maximo de ${maxPlayersPerRoom} jugadores` }),
+              ...json(false, null, { code: 'ROOM_FULL', message: `La sala alcanzo el maximo de ${roomCapacity} jugadores` }),
+            });
+            return;
+          }
+          if (room.mode === 'versusmatch' && room.status !== 'waiting' && !room.players.has(current.id)) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'MATCH_ALREADY_STARTED',
+                message: 'La partida versus ya inicio',
+              }),
             });
             return;
           }
@@ -2198,6 +2302,54 @@ const start = async () => {
           }
 
           joinRoom(current, room);
+          return;
+        }
+
+        if (message.type === 'room_set_versus_type') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.mode !== 'versusmatch') {
+            return;
+          }
+          if (room.hostId !== current.id) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, { code: 'FORBIDDEN', message: 'Solo el host puede configurar el versus' }),
+            });
+            return;
+          }
+          if (room.status !== 'waiting') {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, { code: 'MATCH_ALREADY_STARTED', message: 'No se puede cambiar el tipo con la partida iniciada' }),
+            });
+            return;
+          }
+          const requirements = getVersusRequirements(message.versusType);
+          if (!requirements) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, { code: 'INVALID_VERSUS_TYPE', message: 'Tipo de versus invalido' }),
+            });
+            return;
+          }
+          if (room.players.size > requirements.maxPlayers) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'TOO_MANY_PLAYERS',
+                message: `Hay demasiados jugadores para ${requirements.versusType} (${room.players.size}/${requirements.maxPlayers})`,
+              }),
+            });
+            return;
+          }
+          room.versusType = requirements.versusType;
+          room.requiredPlayers = requirements.requiredPlayers;
+          room.maxPlayers = requirements.maxPlayers;
+          broadcastRoomState(room);
+          broadcastRoomList();
           return;
         }
 
@@ -2230,6 +2382,29 @@ const start = async () => {
             return;
           }
 
+          if (message.type === 'start_game' && room.mode === 'versusmatch') {
+            if (!room.versusType || room.requiredPlayers <= 0) {
+              send(ws, {
+                type: 'error',
+                ...json(false, null, {
+                  code: 'VERSUS_TYPE_REQUIRED',
+                  message: 'Debes elegir 1v1 o 2v2 antes de iniciar',
+                }),
+              });
+              return;
+            }
+            if (room.players.size !== room.requiredPlayers) {
+              send(ws, {
+                type: 'error',
+                ...json(false, null, {
+                  code: 'NOT_ENOUGH_PLAYERS',
+                  message: `Jugadores requeridos: ${room.requiredPlayers} (actual: ${room.players.size})`,
+                }),
+              });
+              return;
+            }
+          }
+
           room.status = message.type === 'start_game' ? 'in_game' : 'finished';
           if (message.type === 'start_game') {
             room.players.forEach((playerId) => {
@@ -2244,6 +2419,10 @@ const start = async () => {
               roomId: room.id,
               status: room.status,
               hostId: room.hostId,
+              mode: room.mode || 'freeforall',
+              versusType: room.versusType || null,
+              requiredPlayers: Number(room.requiredPlayers) || 0,
+              maxPlayers: Number(room.maxPlayers) || maxPlayersPerRoom,
               weather: room.weather,
               battleTheme: room.battleTheme,
             }),

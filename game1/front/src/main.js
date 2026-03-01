@@ -34,11 +34,33 @@ app.innerHTML = `
         <div id="characterPreview" class="character-preview"></div>
         <div class="lobby-actions">
           <button id="refreshRoomsBtn" type="button">Refrescar</button>
+          <button id="createVersusBtn" type="button">Crear Versusmatch</button>
         </div>
         <h2>Salas activas</h2>
         <div id="roomList" class="room-list"></div>
         <p id="lobbyError" class="error hidden"></p>
       </div>
+    </div>
+  </section>
+
+  <section id="versusLobby" class="hidden">
+    <div class="versus-card">
+      <h2>Lobby 2 - Versusmatch</h2>
+      <p id="versusRoomInfo">Sala: -</p>
+      <label>
+        Modalidad
+        <select id="versusTypeSelect">
+          <option value="">Selecciona tipo...</option>
+          <option value="1v1">1v1</option>
+          <option value="2v2">2v2</option>
+        </select>
+      </label>
+      <p id="versusWaitingInfo">Esperando jugadores...</p>
+      <div class="lobby-actions">
+        <button id="versusStartBtn" type="button">Iniciar partida</button>
+        <button id="versusLeaveBtn" type="button">Volver al lobby</button>
+      </div>
+      <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
     </div>
   </section>
 
@@ -198,8 +220,15 @@ const playerNameInput = document.querySelector('#playerName');
 const characterSelect = document.querySelector('#characterSelect');
 const characterPreview = document.querySelector('#characterPreview');
 const refreshRoomsBtn = document.querySelector('#refreshRoomsBtn');
+const createVersusBtn = document.querySelector('#createVersusBtn');
 const roomList = document.querySelector('#roomList');
 const lobbyError = document.querySelector('#lobbyError');
+const versusLobby = document.querySelector('#versusLobby');
+const versusRoomInfo = document.querySelector('#versusRoomInfo');
+const versusTypeSelect = document.querySelector('#versusTypeSelect');
+const versusWaitingInfo = document.querySelector('#versusWaitingInfo');
+const versusStartBtn = document.querySelector('#versusStartBtn');
+const versusLeaveBtn = document.querySelector('#versusLeaveBtn');
 const matchInfo = document.querySelector('#matchInfo');
 const respawnScreen = document.querySelector('#respawnScreen');
 const respawnCounter = document.querySelector('#respawnCounter');
@@ -627,6 +656,50 @@ const updatePerfMetrics = () => {
   requestLatencyProbe();
 };
 
+const isVersusRoom = (room) => {
+  return String(room?.mode || '').toLowerCase() === 'versusmatch';
+};
+
+const isInVersusWaitingLobby = () => {
+  return Boolean(state.joinedRoom && isVersusRoom(state.joinedRoom.room) && state.joinedRoom.room.status === 'waiting');
+};
+
+const syncLobbyScreens = () => {
+  const showVersusLobby = isInVersusWaitingLobby();
+  if (versusLobby) {
+    versusLobby.classList.toggle('hidden', !showVersusLobby);
+  }
+  if (showVersusLobby && lobbySection) {
+    lobbySection.classList.add('hidden');
+  }
+};
+
+const updateVersusLobbyUi = () => {
+  if (!versusLobby) {
+    return;
+  }
+  if (!isInVersusWaitingLobby()) {
+    versusLobby.classList.add('hidden');
+    return;
+  }
+  const room = state.joinedRoom.room;
+  const currentPlayers = Number(state.joinedRoom.players?.length || 0);
+  const requiredPlayers = Number(room.requiredPlayers || 0);
+  const maxPlayers = Number(room.maxPlayers || 4);
+  const versusType = String(room.versusType || '');
+  const isHostPlayer = isHost();
+  const hasType = versusType === '1v1' || versusType === '2v2';
+  const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
+  versusLobby.classList.remove('hidden');
+  versusRoomInfo.textContent = `Sala: ${room.name} (${room.id})`;
+  versusTypeSelect.value = hasType ? versusType : '';
+  versusTypeSelect.disabled = !isHostPlayer;
+  versusWaitingInfo.textContent = hasType
+    ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType})`
+    : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
+  versusStartBtn.disabled = !isHostPlayer || !enoughPlayers;
+};
+
 const renderRooms = () => {
   roomList.innerHTML = '';
 
@@ -639,13 +712,17 @@ const renderRooms = () => {
   }
 
   state.rooms.forEach((room) => {
+    const mode = isVersusRoom(room) ? 'versusmatch' : 'freeforall';
+    const versusType = room.versusType ? ` (${room.versusType})` : '';
+    const maxPlayers = Number(room.maxPlayers) > 0 ? Number(room.maxPlayers) : 5;
     const card = document.createElement('article');
     card.className = 'room-card';
     card.innerHTML = `
       <div>
         <strong>${room.name}</strong>
         <p>ID: ${room.id}</p>
-        <p>Jugadores: ${room.players}</p>
+        <p>Modo: ${mode}${versusType}</p>
+        <p>Jugadores: ${room.players}/${maxPlayers}</p>
         <p>Estado: ${room.status}</p>
       </div>
       <button type="button">Unirse</button>
@@ -663,6 +740,7 @@ const renderRooms = () => {
 
     roomList.appendChild(card);
   });
+  updateVersusLobbyUi();
 };
 
 const resolveWsUrl = () => {
@@ -4457,13 +4535,12 @@ const applyRoomState = (roomState, options = {}) => {
     applyOwnStateFromRoom(roomState);
   }
 
-  setInRoom(true);
-  if (isHost() && roomState.room.status !== 'in_game') {
-    sendWs({ type: 'start_game' });
-  }
+  setInRoom(roomState.room.status === 'in_game');
+  syncLobbyScreens();
   if (roomState.room.status !== 'cooldown') {
     hideWinnerOverlay();
   }
+  updateVersusLobbyUi();
   updateHud();
 };
 
@@ -4506,6 +4583,7 @@ const connectWebSocket = () => {
       state.rooms = payload.data.rooms || [];
       mountPreviewModel();
       renderRooms();
+      syncLobbyScreens();
       return;
     }
 
@@ -4538,6 +4616,8 @@ const connectWebSocket = () => {
       resetCombatStats();
       hideWinnerOverlay();
       updateHud();
+      syncLobbyScreens();
+      updateVersusLobbyUi();
       refreshBackgroundMusic();
       return;
     }
@@ -4941,6 +5021,18 @@ const connectWebSocket = () => {
       if (state.joinedRoom && state.joinedRoom.room.id === payload.data.roomId) {
         state.joinedRoom.room.status = payload.data.status;
         state.joinedRoom.room.hostId = payload.data.hostId;
+        if (payload.data.mode) {
+          state.joinedRoom.room.mode = payload.data.mode;
+        }
+        if (Object.prototype.hasOwnProperty.call(payload.data, 'versusType')) {
+          state.joinedRoom.room.versusType = payload.data.versusType;
+        }
+        if (Number.isFinite(Number(payload.data.requiredPlayers))) {
+          state.joinedRoom.room.requiredPlayers = Number(payload.data.requiredPlayers);
+        }
+        if (Number.isFinite(Number(payload.data.maxPlayers))) {
+          state.joinedRoom.room.maxPlayers = Number(payload.data.maxPlayers);
+        }
         if (payload.data.weather) {
           state.joinedRoom.room.weather = payload.data.weather;
           applyWeather(payload.data.weather);
@@ -4958,6 +5050,9 @@ const connectWebSocket = () => {
         if (payload.data.status !== 'cooldown') {
           hideWinnerOverlay();
         }
+        setInRoom(payload.data.status === 'in_game');
+        syncLobbyScreens();
+        updateVersusLobbyUi();
         updateHud();
         refreshBackgroundMusic();
       }
@@ -4994,6 +5089,8 @@ const connectWebSocket = () => {
     resetCombatStats();
     hideWinnerOverlay();
     updateHud();
+    syncLobbyScreens();
+    updateVersusLobbyUi();
     refreshBackgroundMusic();
     setTimeout(connectWebSocket, 1200);
   });
@@ -5018,6 +5115,38 @@ characterSelect.addEventListener('change', () => {
 refreshRoomsBtn.addEventListener('click', () => {
   sendWs({ type: 'list_rooms' });
   loadCatalogs();
+});
+
+createVersusBtn.addEventListener('click', () => {
+  setLobbyError();
+  sendWs({
+    type: 'create_room',
+    mode: 'versusmatch',
+    playerName: playerNameInput.value.trim(),
+    character: characterSelect.value || activeCharacter,
+  });
+});
+
+versusTypeSelect.addEventListener('change', () => {
+  if (!isInVersusWaitingLobby()) {
+    return;
+  }
+  const versusType = versusTypeSelect.value;
+  if (!versusType) {
+    return;
+  }
+  sendWs({ type: 'room_set_versus_type', versusType });
+});
+
+versusStartBtn.addEventListener('click', () => {
+  if (!isInVersusWaitingLobby()) {
+    return;
+  }
+  sendWs({ type: 'start_game' });
+});
+
+versusLeaveBtn.addEventListener('click', () => {
+  sendWs({ type: 'leave_room' });
 });
 
 leaveRoomHudBtn.addEventListener('click', () => {

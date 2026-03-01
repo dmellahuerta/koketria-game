@@ -72,6 +72,8 @@ Podés tunear estos valores sin cambiar código:
 
 - `LAG_COMP_MS` (default `120`): ventana de lag compensation para impactos.
 - `MAX_AIM_DELTA_DEG` (default `95`): tolerancia angular entre aim cliente y aim autoritativo servidor.
+- `MAX_CUSTOM_ROOMS` (default `6`): máximo de salas custom `versusmatch`.
+- `VERSUS_ROOM_MAX` (default `4`): capacidad inicial máxima de una sala `versusmatch` antes de elegir `1v1`/`2v2`.
 
 Ejemplo para EC2 (Chile -> `us-east-2`):
 
@@ -83,6 +85,7 @@ LAG_COMP_MS=160 MAX_AIM_DELTA_DEG=95 docker compose -f docker/docker-compose.yml
 
 - Eventos cliente -> servidor:
   - `create_room`, `join_room`, `leave_room`, `list_rooms`
+  - `room_set_versus_type` (host de `versusmatch`: `1v1` o `2v2`)
   - `start_game`, `end_game` (solo host)
   - `player_move`, `player_shoot`, `player_death`
 - Eventos servidor -> cliente:
@@ -93,6 +96,10 @@ Estados de sala:
 - `waiting`: lobby de sala
 - `in_game`: partida activa
 - `finished`: partida finalizada
+
+Modos de sala:
+- `freeforall`: sala principal gestionada por servidor.
+- `versusmatch`: sala custom creada desde lobby, con espera en `lobby2` hasta completar cupo (`1v1` o `2v2`).
 
 Clima por partida (asignado al crear sala):
 - `rainy`
