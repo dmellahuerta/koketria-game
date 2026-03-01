@@ -90,6 +90,11 @@ app.innerHTML = `
     <div id="perfPanel" class="hidden">
       <p>FPS: <span id="fpsValue">0</span></p>
       <p>Latencia: <span id="latencyValue">--</span></p>
+      <p>Draw calls: <span id="drawCallsValue">0</span></p>
+      <p>Triángulos: <span id="trianglesValue">0</span></p>
+      <p>Geometrías: <span id="geometriesValue">0</span></p>
+      <p>Texturas: <span id="texturesValue">0</span></p>
+      <p>VFX activos: <span id="vfxValue">0</span></p>
     </div>
   </div>
 
@@ -214,6 +219,11 @@ const playersHud = document.querySelector('#playersHud');
 const perfPanel = document.querySelector('#perfPanel');
 const fpsValue = document.querySelector('#fpsValue');
 const latencyValue = document.querySelector('#latencyValue');
+const drawCallsValue = document.querySelector('#drawCallsValue');
+const trianglesValue = document.querySelector('#trianglesValue');
+const geometriesValue = document.querySelector('#geometriesValue');
+const texturesValue = document.querySelector('#texturesValue');
+const vfxValue = document.querySelector('#vfxValue');
 const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
@@ -250,6 +260,13 @@ const state = {
   showPerf: false,
   fps: 0,
   latencyMs: null,
+};
+const renderPerfStats = {
+  drawCalls: 0,
+  triangles: 0,
+  geometries: 0,
+  textures: 0,
+  vfx: 0,
 };
 
 const chatMessages = [];
@@ -450,6 +467,11 @@ const renderPerfPanel = () => {
   latencyValue.textContent = Number.isFinite(state.latencyMs)
     ? `${Math.round(state.latencyMs)} ms`
     : '--';
+  drawCallsValue.textContent = String(Math.round(renderPerfStats.drawCalls));
+  trianglesValue.textContent = String(Math.round(renderPerfStats.triangles));
+  geometriesValue.textContent = String(Math.round(renderPerfStats.geometries));
+  texturesValue.textContent = String(Math.round(renderPerfStats.textures));
+  vfxValue.textContent = String(Math.round(renderPerfStats.vfx));
   perfPanel.classList.remove('hidden');
 };
 
@@ -5775,6 +5797,16 @@ const animate = () => {
     previewState.renderer.render(previewState.scene, previewState.camera);
   }
   renderer.render(scene, getRenderCamera());
+  renderPerfStats.drawCalls = renderer.info.render.calls || 0;
+  renderPerfStats.triangles = renderer.info.render.triangles || 0;
+  renderPerfStats.geometries = renderer.info.memory.geometries || 0;
+  renderPerfStats.textures = renderer.info.memory.textures || 0;
+  renderPerfStats.vfx = activeTracers.length
+    + activeImpacts.length
+    + activeHolyProjectiles.length
+    + activeHammerProjectiles.length
+    + activePoisonProjectiles.length
+    + activeLunarProjectiles.length;
 };
 
 window.addEventListener('resize', () => {
