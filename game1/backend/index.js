@@ -216,6 +216,19 @@ const getTeamKills = (room, team) => {
   return total;
 };
 
+const getTeamPlayerCount = (room, team) => {
+  if (!room || !team) {
+    return 0;
+  }
+  let total = 0;
+  room.players.forEach((playerId) => {
+    if (getPlayerTeam(room, playerId) === team) {
+      total += 1;
+    }
+  });
+  return total;
+};
+
 const rebalanceVersusTeams = (room) => {
   if (!room) {
     return;
@@ -1920,6 +1933,81 @@ const triggerNeoorphenMeteorSpecial = (room, caster) => {
   }, neoorphenMeteorDurationMs);
 };
 
+const startVersusRoomDeletionCountdown = (room, winnerTeam) => {
+  if (!room || room.roundResetTimer || room.mode !== 'versusmatch') {
+    return;
+  }
+  const winnerTeamId = normalizePlayerTeamId(winnerTeam);
+  if (!winnerTeamId) {
+    return;
+  }
+
+  clearRoomSpecialTimers(room);
+  room.status = 'cooldown';
+
+  let winnerId = null;
+  room.players.forEach((playerId) => {
+    if (!winnerId && getPlayerTeam(room, playerId) === winnerTeamId) {
+      winnerId = playerId;
+    }
+  });
+  const winnerClient = winnerId ? getClientById(winnerId) : null;
+
+  broadcastToRoom(room, {
+    type: 'game_state',
+    ...json(true, {
+      roomId: room.id,
+      status: room.status,
+      hostId: room.hostId,
+      mode: room.mode || 'freeforall',
+      versusType: room.versusType || null,
+      requiredPlayers: Number(room.requiredPlayers) || 0,
+      maxPlayers: Number(room.maxPlayers) || maxPlayersPerRoom,
+      weather: room.weather,
+      battleTheme: room.battleTheme,
+    }),
+  });
+
+  broadcastToRoom(room, {
+    type: 'match_winner',
+    ...json(true, {
+      winner: winnerClient ? {
+        id: winnerClient.id,
+        name: winnerClient.name,
+        character: winnerClient.character || null,
+        team: winnerTeamId,
+      } : {
+        id: '',
+        name: `Equipo ${winnerTeamId === 'red' ? 'Rojo' : 'Azul'}`,
+        character: null,
+        team: winnerTeamId,
+      },
+      winnerTeam: winnerTeamId,
+      winnerScore: getTeamKills(room, winnerTeamId),
+      killsToWin: getVersusKillsTarget(room),
+      countdownSeconds: roundResetSeconds,
+    }),
+  });
+
+  broadcastRoomState(room);
+  broadcastRoomList();
+
+  room.roundResetTimer = setTimeout(() => {
+    room.roundResetTimer = null;
+    room.players.forEach((playerId) => {
+      const client = getClientById(playerId);
+      if (!client) {
+        return;
+      }
+      client.roomId = null;
+      send(client.ws, { type: 'left_room', ...json(true, null) });
+    });
+    clearRoomSpecialTimers(room);
+    rooms.delete(room.id);
+    broadcastRoomList();
+  }, roundResetSeconds * 1000);
+};
+
 const startRoundResetCountdown = (room, winnerId, options = {}) => {
   if (!room || room.roundResetTimer) {
     return;
@@ -2168,6 +2256,18 @@ const leaveCurrentRoom = (client) => {
 
   if (room.mode === 'versusmatch') {
     rebalanceVersusTeams(room);
+    if (room.status === 'in_game' && !room.roundResetTimer) {
+      const redCount = getTeamPlayerCount(room, 'red');
+      const blueCount = getTeamPlayerCount(room, 'blue');
+      if (redCount <= 0 && blueCount > 0) {
+        startVersusRoomDeletionCountdown(room, 'blue');
+        return;
+      }
+      if (blueCount <= 0 && redCount > 0) {
+        startVersusRoomDeletionCountdown(room, 'red');
+        return;
+      }
+    }
   }
 
   if (!room.isServerManaged && room.status === 'in_game' && room.players.size < 2) {
