@@ -2262,6 +2262,31 @@ const leaveCurrentRoom = (client) => {
     if (room.status === 'in_game' && !room.roundResetTimer) {
       const redCount = getTeamPlayerCount(room, 'red');
       const blueCount = getTeamPlayerCount(room, 'blue');
+      const requiredPlayers = Math.max(2, Number(room.requiredPlayers) || 2);
+      const isOneVsOne = String(room.versusType || '').toLowerCase() === '1v1';
+      const isTwoVsTwo = String(room.versusType || '').toLowerCase() === '2v2';
+
+      if (room.players.size < requiredPlayers) {
+        let inferredWinnerTeam = null;
+        if (redCount > 0 && blueCount <= 0) {
+          inferredWinnerTeam = 'red';
+        } else if (blueCount > 0 && redCount <= 0) {
+          inferredWinnerTeam = 'blue';
+        } else if (leavingTeam === 'red') {
+          inferredWinnerTeam = 'blue';
+        } else if (leavingTeam === 'blue') {
+          inferredWinnerTeam = 'red';
+        } else if (room.players.size > 0) {
+          const remainingId = room.players.values().next().value;
+          inferredWinnerTeam = getPlayerTeam(room, remainingId);
+        }
+
+        if (inferredWinnerTeam) {
+          startVersusRoomDeletionCountdown(room, inferredWinnerTeam);
+          return;
+        }
+      }
+
       if (redCount <= 0 && blueCount > 0) {
         startVersusRoomDeletionCountdown(room, 'blue');
         return;
@@ -2270,7 +2295,7 @@ const leaveCurrentRoom = (client) => {
         startVersusRoomDeletionCountdown(room, 'red');
         return;
       }
-      if (room.players.size > 0 && redCount <= 0 && blueCount <= 0) {
+      if ((isOneVsOne || isTwoVsTwo) && room.players.size > 0 && redCount <= 0 && blueCount <= 0) {
         let inferredWinnerTeam = null;
         if (leavingTeam === 'red') {
           inferredWinnerTeam = 'blue';
@@ -2290,7 +2315,7 @@ const leaveCurrentRoom = (client) => {
     }
   }
 
-  if (!room.isServerManaged && room.status === 'in_game' && room.players.size < 2) {
+  if (!room.isServerManaged && room.mode !== 'versusmatch' && room.status === 'in_game' && room.players.size < 2) {
     room.status = 'finished';
   }
 
