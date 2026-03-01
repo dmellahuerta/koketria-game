@@ -958,37 +958,7 @@ const pickupModelSpecs = {
 const pickupModelTemplateCache = new Map();
 const pickupModelPromiseCache = new Map();
 
-const applyPickupMaterialBoost = (root, kind) => {
-  const isShield = kind === 'defensa';
-  const tint = new THREE.Color(isShield ? 0x8cf6ff : 0x8ab8ff);
-  const emissiveBoost = isShield ? 1.35 : 1.15;
-
-  root.traverse((node) => {
-    if (!node.isMesh || !node.material) {
-      return;
-    }
-    const materials = Array.isArray(node.material) ? node.material : [node.material];
-    materials.forEach((material) => {
-      if (material.color && typeof material.color.multiplyScalar === 'function') {
-        material.color.multiplyScalar(1.22);
-      }
-      if ('emissive' in material && material.emissive) {
-        const next = material.color ? material.color.clone() : tint.clone();
-        material.emissive.copy(next.lerp(tint, 0.55));
-        material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, emissiveBoost);
-      }
-      if ('metalness' in material) {
-        material.metalness = Math.min(0.18, Number(material.metalness || 0));
-      }
-      if ('roughness' in material) {
-        material.roughness = Math.max(0.55, Number(material.roughness || 0.8));
-      }
-      material.needsUpdate = true;
-    });
-  });
-};
-
-const normalizePickupTemplate = (root, targetHeight, kind) => {
+const normalizePickupTemplate = (root, targetHeight) => {
   const box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new THREE.Vector3());
   if (Number.isFinite(size.y) && size.y > 0.0001) {
@@ -999,7 +969,6 @@ const normalizePickupTemplate = (root, targetHeight, kind) => {
   const center = box.getCenter(new THREE.Vector3());
   const minY = Number.isFinite(box.min.y) ? box.min.y : 0;
   root.position.set(-center.x, -minY, -center.z);
-  applyPickupMaterialBoost(root, kind);
   root.traverse((node) => {
     if (node.isMesh) {
       node.frustumCulled = true;
@@ -1031,7 +1000,7 @@ const loadPickupModelTemplate = async (kind) => {
           resolve(null);
           return;
         }
-        const normalized = normalizePickupTemplate(sceneRoot, targetHeight, key);
+        const normalized = normalizePickupTemplate(sceneRoot, targetHeight);
         pickupModelTemplateCache.set(key, normalized);
         resolve(normalized);
       },
@@ -2084,8 +2053,11 @@ const activeHolyProjectiles = [];
 const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
 const activeLunarProjectiles = [];
+const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
+const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
+const maxActivePickupSparks = 320;
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -5056,6 +5028,70 @@ const collectShieldPickup = (pickup, nowMs) => {
   updateHud();
 };
 
+const spawnPickupSpark = (pickup, color) => {
+  if (!pickup?.mesh || !pickup.active || !pickup.mesh.visible) {
+    return;
+  }
+
+  if (activePickupSparks.length >= maxActivePickupSparks) {
+    const oldSpark = activePickupSparks.shift();
+    if (oldSpark) {
+      scene.remove(oldSpark.mesh);
+      oldSpark.mesh.geometry.dispose();
+      oldSpark.mesh.material.dispose();
+    }
+  }
+
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.55 + (Math.random() * 0.25),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const spark = new THREE.Mesh(pickupSparkGeometry, material);
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 0.11 + (Math.random() * 0.28);
+  spark.position.set(
+    pickup.mesh.position.x + Math.cos(angle) * radius,
+    pickup.mesh.position.y + 0.08 + (Math.random() * 0.32),
+    pickup.mesh.position.z + Math.sin(angle) * radius,
+  );
+  scene.add(spark);
+
+  const life = 0.38 + (Math.random() * 0.3);
+  activePickupSparks.push({
+    mesh: spark,
+    life,
+    initialLife: life,
+    velocity: new THREE.Vector3(
+      (Math.random() - 0.5) * 0.22,
+      0.28 + (Math.random() * 0.34),
+      (Math.random() - 0.5) * 0.22,
+    ),
+  });
+};
+
+const updatePickupSparks = (delta) => {
+  for (let i = activePickupSparks.length - 1; i >= 0; i -= 1) {
+    const spark = activePickupSparks[i];
+    spark.life -= delta;
+    spark.mesh.position.addScaledVector(spark.velocity, delta);
+    spark.velocity.y += delta * 0.2;
+    spark.mesh.scale.multiplyScalar(1 + (delta * 1.2));
+
+    const opacityFactor = Math.max(0, spark.life / spark.initialLife);
+    spark.mesh.material.opacity = opacityFactor * 0.75;
+
+    if (spark.life <= 0) {
+      scene.remove(spark.mesh);
+      spark.mesh.geometry.dispose();
+      spark.mesh.material.dispose();
+      activePickupSparks.splice(i, 1);
+    }
+  }
+};
+
 const updateMovement = (delta) => {
   if (!canPlay() || isOptionsOpen) {
     moveVelocity.multiplyScalar(Math.max(0, 1 - (delta * 10)));
@@ -5159,6 +5195,9 @@ const updateAmmoPickups = (delta) => {
       pickup.mesh.userData.glowHalo.scale.setScalar(1 + (manaPulse * 0.45));
       pickup.mesh.userData.glowHalo.material.opacity = 0.12 + (manaPulse * 0.14);
     }
+    if (Math.random() < delta * 0.14) {
+      spawnPickupSpark(pickup, 0x8fc3ff);
+    }
 
     if (!canPlay() || (isManaCharacter(activeCharacter) ? mana >= maxMana : ammoReserve >= maxAmmoTotal)) {
       continue;
@@ -5200,6 +5239,9 @@ const updateShieldPickups = (delta) => {
     if (pickup.mesh.userData.glowHalo) {
       pickup.mesh.userData.glowHalo.scale.setScalar(1.05 + (shieldPulse * 0.5));
       pickup.mesh.userData.glowHalo.material.opacity = 0.14 + (shieldPulse * 0.16);
+    }
+    if (Math.random() < delta * 0.16) {
+      spawnPickupSpark(pickup, 0x8ff7ff);
     }
 
     if (!canPlay() || shield >= maxShield) {
@@ -5443,6 +5485,7 @@ const updateEffects = (delta) => {
   muzzleFlash.intensity = Math.max(0, muzzleFlash.intensity - 20 * delta);
   recoilKick = Math.max(0, recoilKick - (delta * 4.8));
   shotSpread = Math.max(0, shotSpread - (delta * spreadDecayPerSecond));
+  updatePickupSparks(delta);
 
   for (let i = activeTracers.length - 1; i >= 0; i -= 1) {
     const tracer = activeTracers[i];
@@ -5977,6 +6020,7 @@ const animate = () => {
   renderPerfStats.textures = renderer.info.memory.textures || 0;
   renderPerfStats.vfx = activeTracers.length
     + activeImpacts.length
+    + activePickupSparks.length
     + activeHolyProjectiles.length
     + activeHammerProjectiles.length
     + activePoisonProjectiles.length
