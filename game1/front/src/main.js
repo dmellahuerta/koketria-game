@@ -2870,7 +2870,9 @@ const isPezunalunarCharacter = (characterId) => {
 };
 
 const hasCharacterSpecial = (characterId) => {
-  return isPezunalunarCharacter(characterId) || isPumoriCharacter(characterId);
+  return isSilentmanCharacter(characterId)
+    || isPezunalunarCharacter(characterId)
+    || isPumoriCharacter(characterId);
 };
 
 const isUsingMana = () => {
@@ -3177,6 +3179,10 @@ const triggerCharacterSpecial = () => {
   }
   if (isPezunalunarCharacter(activeCharacter)) {
     sendWs({ type: 'player_special_lunar_rain' });
+    return true;
+  }
+  if (isSilentmanCharacter(activeCharacter)) {
+    sendWs({ type: 'player_special_silent_cone' });
     return true;
   }
   if (isPumoriCharacter(activeCharacter)) {
@@ -4587,6 +4593,50 @@ const connectWebSocket = () => {
         const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
         createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId });
         createImpact(impactVec, Math.random() > 0.5 ? 0xbce9ff : 0x84cfff);
+      }
+      return;
+    }
+
+    if (payload.type === 'special_silent_cone') {
+      const data = payload.data || {};
+      const ownerId = String(data.playerId || '');
+      const originData = data.origin || {};
+      const rays = Array.isArray(data.rays) ? data.rays : [];
+      if (
+        !ownerId
+        || !Number.isFinite(Number(originData.x))
+        || !Number.isFinite(Number(originData.y))
+        || !Number.isFinite(Number(originData.z))
+      ) {
+        return;
+      }
+      const origin = new THREE.Vector3(Number(originData.x), Number(originData.y), Number(originData.z));
+      const shooterEntry = state.remotePlayers.get(ownerId);
+      const shooterCharacter = data.character || shooterEntry?.character || 'silentman';
+      if (ownerId !== state.self?.id && shooterEntry && !shooterEntry.isDead) {
+        setRemoteAnimation(shooterEntry, 'shoot');
+        shooterEntry.animationUntil = performance.now() + 420;
+      }
+      for (let i = 0; i < rays.length; i += 1) {
+        const ray = rays[i] || {};
+        const direction = ray.direction || {};
+        const distance = Number(ray.distance || 0);
+        if (
+          !Number.isFinite(Number(direction.x))
+          || !Number.isFinite(Number(direction.y))
+          || !Number.isFinite(Number(direction.z))
+          || !Number.isFinite(distance)
+          || distance <= 0
+        ) {
+          continue;
+        }
+        const dir = new THREE.Vector3(Number(direction.x), Number(direction.y), Number(direction.z)).normalize();
+        const end = origin.clone().add(dir.multiplyScalar(distance));
+        createHolyShotVisual(origin.clone(), end, { source: 'local', ownerId });
+      }
+      triggerNaturePulse(origin);
+      if (ownerId !== state.self?.id) {
+        registerRemoteShootSound(origin, shooterCharacter);
       }
       return;
     }

@@ -51,6 +51,11 @@ const pumoriOrbitCooldownMs = 30_000;
 const pumoriOrbitDurationMs = 10_000;
 const pumoriOrbitDamageTickMs = 260;
 const pumoriOrbitDamageRadius = lunarRainRadius;
+const silentConeCooldownMs = 30_000;
+const silentConeProjectileCount = 15;
+const silentConeMaxDistance = 90;
+const silentConeHalfAngleHorizontalDeg = 42;
+const silentConeHalfAngleVerticalDeg = 18;
 const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
@@ -184,6 +189,7 @@ const resetRoomCombat = (room) => {
       lastShotAt: 0,
       lastLunarRainAt: 0,
       lastPumoriOrbitAt: 0,
+      lastSilentConeAt: 0,
     });
   });
 };
@@ -202,6 +208,7 @@ const getCombatState = (room, playerId) => {
       lastShotAt: 0,
       lastLunarRainAt: 0,
       lastPumoriOrbitAt: 0,
+      lastSilentConeAt: 0,
     });
   }
   return room.combat.get(playerId);
@@ -324,6 +331,11 @@ const vectorNorm = (v) => {
 };
 const vectorScale = (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s });
 const vectorAdd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+const vectorCross = (a, b) => ({
+  x: (a.y * b.z) - (a.z * b.y),
+  y: (a.z * b.x) - (a.x * b.z),
+  z: (a.x * b.y) - (a.y * b.x),
+});
 
 const createSeededRng = (seed) => {
   let t = Number(seed) >>> 0;
@@ -420,6 +432,11 @@ const isPezunalunarCharacter = (characterId) => {
 
 const isPumoriCharacter = (characterId) => {
   return normalizeCharacterId(characterId) === 'pumori';
+};
+
+const isSilentmanCharacter = (characterId) => {
+  const id = normalizeCharacterId(characterId);
+  return id === 'silentman' || id === 'silenmant';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -833,7 +850,21 @@ const getPumoriOrbitCooldownRemainingMs = (combat, nowMs = Date.now()) => {
   return Math.max(0, (last + pumoriOrbitCooldownMs) - nowMs);
 };
 
+const getSilentConeCooldownRemainingMs = (combat, nowMs = Date.now()) => {
+  if (!combat) {
+    return 0;
+  }
+  const last = Number(combat.lastSilentConeAt || 0);
+  if (!Number.isFinite(last) || last <= 0) {
+    return 0;
+  }
+  return Math.max(0, (last + silentConeCooldownMs) - nowMs);
+};
+
 const getSpecialCooldownRemainingMs = (combat, characterId, nowMs = Date.now()) => {
+  if (isSilentmanCharacter(characterId)) {
+    return getSilentConeCooldownRemainingMs(combat, nowMs);
+  }
   if (isPezunalunarCharacter(characterId)) {
     return getLunarRainCooldownRemainingMs(combat, nowMs);
   }
@@ -841,6 +872,175 @@ const getSpecialCooldownRemainingMs = (combat, characterId, nowMs = Date.now()) 
     return getPumoriOrbitCooldownRemainingMs(combat, nowMs);
   }
   return 0;
+};
+
+const getConeDirection = (baseDir, rightAxis, upAxis, horizontalDeg, verticalDeg) => {
+  const h = Math.tan((horizontalDeg * Math.PI) / 180);
+  const v = Math.tan((verticalDeg * Math.PI) / 180);
+  return vectorNorm(vectorAdd(baseDir, vectorAdd(vectorScale(rightAxis, h), vectorScale(upAxis, v))));
+};
+
+const triggerSilentmanConeSpecial = (room, caster) => {
+  if (!room || !caster || room.status !== 'in_game') {
+    return;
+  }
+  const nowMs = Date.now();
+  const casterCombat = getCombatState(room, caster.id);
+  if (!casterCombat.alive || !isSilentmanCharacter(caster.character)) {
+    return;
+  }
+
+  const cooldownRemaining = getSilentConeCooldownRemainingMs(casterCombat, nowMs);
+  if (cooldownRemaining > 0) {
+    send(caster.ws, {
+      type: 'player_resources',
+      ...json(true, {
+        mana: Math.round(casterCombat.mana),
+        lunarRainCooldownMs: cooldownRemaining,
+      }),
+    });
+    return;
+  }
+
+  const origin = getServerEyeOrigin(caster);
+  const baseDir = getServerAimDirection(caster);
+  if (!baseDir) {
+    return;
+  }
+  const worldUp = { x: 0, y: 1, z: 0 };
+  let rightAxis = vectorNorm(vectorCross(baseDir, worldUp));
+  if (!rightAxis) {
+    rightAxis = { x: 1, y: 0, z: 0 };
+  }
+  let upAxis = vectorNorm(vectorCross(rightAxis, baseDir));
+  if (!upAxis) {
+    upAxis = { x: 0, y: 1, z: 0 };
+  }
+
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const rays = [];
+  const hitByVictim = new Map();
+  const rewindTsMs = nowMs - lagCompensationMagicMs;
+
+  for (let i = 0; i < silentConeProjectileCount; i += 1) {
+    const t = silentConeProjectileCount <= 1 ? 0 : (i / (silentConeProjectileCount - 1));
+    const radiusNorm = Math.sqrt(t);
+    const angle = i * goldenAngle;
+    const horizontalDeg = Math.cos(angle) * silentConeHalfAngleHorizontalDeg * radiusNorm;
+    const verticalDeg = Math.sin(angle) * silentConeHalfAngleVerticalDeg * radiusNorm;
+    const directionNorm = getConeDirection(baseDir, rightAxis, upAxis, horizontalDeg, verticalDeg);
+    if (!directionNorm) {
+      continue;
+    }
+
+    const wallHitDistance = resolveWallHitDistance(room, origin, directionNorm, silentConeMaxDistance);
+    const effectiveDistance = wallHitDistance === null
+      ? silentConeMaxDistance
+      : Math.max(0, Math.min(silentConeMaxDistance, wallHitDistance));
+
+    rays.push({
+      direction: {
+        x: directionNorm.x,
+        y: directionNorm.y,
+        z: directionNorm.z,
+      },
+      distance: effectiveDistance,
+    });
+
+    const hit = resolveShotHitOnPlayers(
+      room,
+      caster.id,
+      origin,
+      directionNorm,
+      effectiveDistance,
+      rewindTsMs,
+    );
+    if (!hit) {
+      continue;
+    }
+    const prev = hitByVictim.get(hit.victimId);
+    if (!prev) {
+      hitByVictim.set(hit.victimId, hit);
+      continue;
+    }
+    if (prev.hitType !== 'head' && hit.hitType === 'head') {
+      hitByVictim.set(hit.victimId, hit);
+      continue;
+    }
+    if (prev.hitType === hit.hitType && hit.t < prev.t) {
+      hitByVictim.set(hit.victimId, hit);
+    }
+  }
+
+  casterCombat.lastSilentConeAt = nowMs;
+  send(caster.ws, {
+    type: 'player_resources',
+    ...json(true, {
+      mana: Math.round(casterCombat.mana),
+      lunarRainCooldownMs: silentConeCooldownMs,
+    }),
+  });
+
+  broadcastToRoom(room, {
+    type: 'special_silent_cone',
+    ...json(true, {
+      playerId: caster.id,
+      character: caster.character || null,
+      origin,
+      rays,
+      ts: nowMs,
+    }),
+  });
+
+  if (hitByVictim.size <= 0) {
+    return;
+  }
+
+  for (const [victimId, hit] of hitByVictim.entries()) {
+    const victimCombat = getCombatState(room, victimId);
+    if (!victimCombat.alive) {
+      continue;
+    }
+
+    if (hit.hitType === 'head') {
+      victimCombat.health = 0;
+      victimCombat.shield = Math.max(0, victimCombat.shield);
+    } else if (victimCombat.shield > 0) {
+      const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
+      victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
+      victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
+    } else {
+      victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
+    }
+
+    const victim = getClientById(victimId);
+    if (victim) {
+      send(victim.ws, {
+        type: 'player_damage',
+        ...json(true, {
+          fromPlayerId: caster.id,
+          health: victimCombat.health,
+          shield: victimCombat.shield,
+          headshot: hit.hitType === 'head',
+        }),
+      });
+    }
+    send(caster.ws, {
+      type: 'hit_confirm',
+      ...json(true, {
+        victimId,
+        headshot: hit.hitType === 'head',
+        ts: nowMs,
+      }),
+    });
+
+    if (victimCombat.health <= 0) {
+      processPlayerDeath(room, victimId, caster.id);
+    }
+  }
+
+  broadcastRoomState(room);
 };
 
 const pickLunarRainImpactPoint = (room, center, radius) => {
@@ -1374,6 +1574,7 @@ const joinRoom = (client, room) => {
     lastShotAt: 0,
     lastLunarRainAt: 0,
     lastPumoriOrbitAt: 0,
+    lastSilentConeAt: 0,
   });
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
@@ -1872,6 +2073,18 @@ const start = async () => {
             return;
           }
           triggerPezunalunarSpecial(room, current);
+          return;
+        }
+
+        if (message.type === 'player_special_silent_cone') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.status !== 'in_game') {
+            return;
+          }
+          triggerSilentmanConeSpecial(room, current);
           return;
         }
 
