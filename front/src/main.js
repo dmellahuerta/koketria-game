@@ -1373,10 +1373,16 @@ const fetchCharactersCatalog = async () => {
   return ['silentman', 'pumori', 'neoorphen', 'pezunalunar'];
 };
 
-const preloadAudioSource = (src) => {
+const preloadedAudioSources = new Set();
+
+const preloadAudioSource = (src, timeoutMs = 6000) => {
   return new Promise((resolve) => {
     if (!src) {
       resolve(false);
+      return;
+    }
+    if (preloadedAudioSources.has(src)) {
+      resolve(true);
       return;
     }
     const audio = new Audio();
@@ -1389,6 +1395,9 @@ const preloadAudioSource = (src) => {
       audio.removeEventListener('canplaythrough', onReady);
       audio.removeEventListener('loadedmetadata', onReady);
       audio.removeEventListener('error', onError);
+      if (ok) {
+        preloadedAudioSources.add(src);
+      }
       resolve(ok);
     };
     const onReady = () => finish(true);
@@ -1399,8 +1408,17 @@ const preloadAudioSource = (src) => {
     audio.addEventListener('error', onError, { once: true });
     audio.src = src;
     audio.load();
-    setTimeout(() => finish(false), 2000);
+    setTimeout(() => finish(false), timeoutMs);
   });
+};
+
+const preloadCharacterAttackSound = async (character) => {
+  const src = await resolveCharacterAttackSoundUrl(character);
+  const firstTry = await preloadAudioSource(src, 6000);
+  if (firstTry) {
+    return true;
+  }
+  return preloadAudioSource(src, 10000);
 };
 
 const bootLobbyLoader = async () => {
@@ -1437,13 +1455,13 @@ const bootLobbyLoader = async () => {
   for (let i = 0; i < charList.length; i += 1) {
     const character = charList[i];
     // eslint-disable-next-line no-await-in-loop
-    await resolveCharacterAttackSoundUrl(character);
+    await preloadCharacterAttackSound(character);
     tick(`Audio ataque: ${getCharacterLabel(character)}`);
   }
 
-  await preloadAudioSource(defaultAttackSoundUrl);
+  await preloadAudioSource(defaultAttackSoundUrl, 6000);
   tick('Audio base cargado');
-  await preloadAudioSource(lobbyTrackPath);
+  await preloadAudioSource(lobbyTrackPath, 10000);
   tick('Audio lobby cargado');
 
   await ensureLocalAvatar();
