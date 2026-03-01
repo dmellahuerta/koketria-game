@@ -174,6 +174,7 @@ app.innerHTML = `
       </label>
       <div class="options-actions">
         <button id="optResumeBtn" type="button">Volver al juego</button>
+        <button id="optLeaveLobbyBtn" type="button">Volver al lobby</button>
       </div>
       <p class="options-hint">ESC: abrir/cerrar opciones</p>
     </div>
@@ -247,6 +248,7 @@ const optFov = document.querySelector('#optFov');
 const optFovValue = document.querySelector('#optFovValue');
 const optShowPerf = document.querySelector('#optShowPerf');
 const optResumeBtn = document.querySelector('#optResumeBtn');
+const optLeaveLobbyBtn = document.querySelector('#optLeaveLobbyBtn');
 
 const state = {
   ws: null,
@@ -4606,6 +4608,11 @@ endGameBtn.addEventListener('click', () => {
 
 optResumeBtn.addEventListener('click', () => {
   closeOptionsMenu();
+});
+
+optLeaveLobbyBtn.addEventListener('click', () => {
+  closeOptionsMenu();
+  sendWs({ type: 'leave_room' });
 });
 
 optMouseSensitivity.addEventListener('input', () => {

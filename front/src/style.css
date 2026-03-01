@@ -789,6 +789,8 @@ button:disabled {
 
 .options-actions {
   margin-top: 10px;
+  display: grid;
+  gap: 8px;
 }
 
 .options-actions button {
