@@ -2188,7 +2188,7 @@ const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
-const maxActivePickupSparks = 720;
+const maxActivePickupSparks = 980;
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -5274,6 +5274,9 @@ const clampPendingHealthRegenToMissing = () => {
   pendingHealthRegen = Math.max(0, Math.min(pendingHealthRegen, maxRecoverable));
 };
 
+const pickupFloatSpeed = 2.2;
+const pickupFloatAmplitude = 0.1;
+
 const spawnPickupSpark = (pickup, color) => {
   if (!pickup?.mesh || !pickup.active || !pickup.mesh.visible) {
     return;
@@ -5305,15 +5308,15 @@ const spawnPickupSpark = (pickup, color) => {
   );
   scene.add(spark);
 
-  const life = 0.38 + (Math.random() * 0.3);
+  const life = 0.95 + (Math.random() * 0.85);
   activePickupSparks.push({
     mesh: spark,
     life,
     initialLife: life,
     velocity: new THREE.Vector3(
-      (Math.random() - 0.5) * 0.22,
-      0.28 + (Math.random() * 0.34),
-      (Math.random() - 0.5) * 0.22,
+      (Math.random() - 0.5) * 0.16,
+      1.6 + (Math.random() * 1.25),
+      (Math.random() - 0.5) * 0.16,
     ),
   });
 };
@@ -5323,8 +5326,8 @@ const updatePickupSparks = (delta) => {
     const spark = activePickupSparks[i];
     spark.life -= delta;
     spark.mesh.position.addScaledVector(spark.velocity, delta);
-    spark.velocity.y += delta * 0.2;
-    spark.mesh.scale.multiplyScalar(1 + (delta * 1.2));
+    spark.velocity.y += delta * 0.55;
+    spark.mesh.scale.multiplyScalar(1 + (delta * 1.45));
 
     const opacityFactor = Math.max(0, spark.life / spark.initialLife);
     spark.mesh.material.opacity = opacityFactor * 0.75;
@@ -5431,10 +5434,10 @@ const updateAmmoPickups = (delta) => {
     }
 
     pickup.mesh.rotation.y += delta * 2.2;
-    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2.4 + pickup.phase) * 0.09;
-    if (Math.random() < delta * 2.2) {
+    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * pickupFloatSpeed + pickup.phase) * pickupFloatAmplitude;
+    if (Math.random() < delta * 2.9) {
       spawnPickupSpark(pickup, 0x8fc3ff);
-      if (Math.random() < 0.55) {
+      if (Math.random() < 0.72) {
         spawnPickupSpark(pickup, 0x8fc3ff);
       }
     }
@@ -5470,10 +5473,10 @@ const updateShieldPickups = (delta) => {
 
     pickup.mesh.rotation.x += delta * 1.3;
     pickup.mesh.rotation.y += delta * 1.7;
-    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2 + pickup.phase) * 0.1;
-    if (Math.random() < delta * 2.4) {
+    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * pickupFloatSpeed + pickup.phase) * pickupFloatAmplitude;
+    if (Math.random() < delta * 3.1) {
       spawnPickupSpark(pickup, 0x8ff7ff);
-      if (Math.random() < 0.6) {
+      if (Math.random() < 0.75) {
         spawnPickupSpark(pickup, 0x8ff7ff);
       }
     }
@@ -5508,10 +5511,10 @@ const updateHealthPickups = (delta) => {
     }
 
     pickup.mesh.rotation.y += delta * 1.9;
-    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2.2 + pickup.phase) * 0.11;
-    if (Math.random() < delta * 2.8) {
+    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * pickupFloatSpeed + pickup.phase) * pickupFloatAmplitude;
+    if (Math.random() < delta * 3.5) {
       spawnPickupSpark(pickup, 0xa5ffb0);
-      if (Math.random() < 0.7) {
+      if (Math.random() < 0.82) {
         spawnPickupSpark(pickup, 0xa5ffb0);
       }
     }
