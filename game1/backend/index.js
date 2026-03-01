@@ -166,6 +166,19 @@ const getPlayerTeam = (room, playerId) => {
   return team === 'red' || team === 'blue' ? team : null;
 };
 
+const isFriendlyFireBlocked = (room, attackerId, victimId) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return false;
+  }
+  const versusType = String(room.versusType || '').trim().toLowerCase();
+  if (versusType !== '2v2') {
+    return false;
+  }
+  const attackerTeam = getPlayerTeam(room, attackerId);
+  const victimTeam = getPlayerTeam(room, victimId);
+  return Boolean(attackerTeam && victimTeam && attackerTeam === victimTeam);
+};
+
 const normalizePlayerTeamId = (value) => {
   const team = String(value || '').trim().toLowerCase();
   if (team === 'red' || team === 'blue') {
@@ -1143,6 +1156,9 @@ const resolveShotHitOnPlayers = (room, shooterId, origin, directionNorm, maxDist
     if (candidateId === shooterId) {
       return;
     }
+    if (isFriendlyFireBlocked(room, shooterId, candidateId)) {
+      return;
+    }
     const target = getClientById(candidateId);
     if (!target) {
       return;
@@ -1211,6 +1227,9 @@ const processPlayerDeath = (room, victimId, killerId) => {
 
   let killerKills = 0;
   const killer = String(killerId || '').trim();
+  if (killer && killer !== victimId && isFriendlyFireBlocked(room, killer, victimId)) {
+    return;
+  }
   if (killer && killer !== victimId && room.players.has(killer)) {
     const killerStats = getPlayerStats(room, killer);
     killerKills = killerStats.kills + 1;
@@ -1505,6 +1524,9 @@ const applyLunarRainStrikeDamage = (room, casterId, impactPoint) => {
     if (victimId === casterId) {
       continue;
     }
+    if (isFriendlyFireBlocked(room, casterId, victimId)) {
+      continue;
+    }
     const victimClient = getClientById(victimId);
     if (!victimClient?.state?.position) {
       continue;
@@ -1641,6 +1663,9 @@ const applyPumoriOrbitDamage = (room, casterId, center) => {
     if (victimId === casterId) {
       continue;
     }
+    if (isFriendlyFireBlocked(room, casterId, victimId)) {
+      continue;
+    }
     const victimClient = getClientById(victimId);
     if (!victimClient?.state?.position) {
       continue;
@@ -1761,6 +1786,9 @@ const applyNeoorphenMeteorStrikeDamage = (room, casterId, impactPoint) => {
 
   for (const victimId of room.players) {
     if (victimId === casterId) {
+      continue;
+    }
+    if (isFriendlyFireBlocked(room, casterId, victimId)) {
       continue;
     }
     const victimClient = getClientById(victimId);
