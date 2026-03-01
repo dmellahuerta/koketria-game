@@ -100,28 +100,31 @@ Clima por partida (asignado al crear sala):
 - `night`
 - `snow`
 
-## Producción (EC2 + Nginx por dominio)
+## Producción (EC2 + HTTPS por dominio)
 
 El stack productivo usa:
 - `web` (sitio estático HTML/CSS)
 - `front` (Nginx con assets estáticos + proxy interno a backend para `/ws` y API)
 - `backend` (Fastify + WebSocket)
-- `nginx` (reverse proxy por dominio)
+- `nginx` (routing interno por `Host`)
+- `caddy` (TLS automático Let's Encrypt)
 
 Para `misterrii.com` (web) y `koketria.misterrii.com` (juego), asegurate antes:
 - DNS `A` de ambos dominios apuntando al Elastic IP de la EC2.
-- Security Group con puerto `80` abierto.
+- Security Group con puertos `80` y `443` abiertos.
 
-Para levantar producción:
+Para levantar producción con HTTPS:
 
 ```bash
+WEB_DOMAIN=misterrii.com GAME_DOMAIN=koketria.misterrii.com \
+ACME_EMAIL=tu-correo@dominio.com \
 docker compose -f docker/docker-compose.prod.yml up -d --build
 ```
 
-Servicios:
+Servicios públicos:
 
-- Web: `http://misterrii.com`
-- Juego: `http://koketria.misterrii.com`
+- Web: `https://misterrii.com`
+- Juego: `https://koketria.misterrii.com`
 - Backend interno: `backend:3000` (no expuesto directo)
 
 Cache de navegador en producción:
@@ -137,12 +140,18 @@ Si cambias un asset público con el mismo nombre, para invalidar más rápido:
 Variables útiles (opcional):
 
 - `HTTP_PORT` (default `80`): puerto HTTP público.
+- `HTTPS_PORT` (default `443`): puerto HTTPS público.
+- `WEB_DOMAIN` (default `misterrii.com`): dominio de la web.
+- `GAME_DOMAIN` (default `koketria.misterrii.com`): dominio del juego.
+- `ACME_EMAIL` (recomendado): email para Let's Encrypt.
 - `LAG_COMP_MS` (default `160`): lag compensation backend.
 - `MAX_AIM_DELTA_DEG` (default `95`): tolerancia de aim backend.
 
 Ejemplo:
 
 ```bash
+WEB_DOMAIN=misterrii.com GAME_DOMAIN=koketria.misterrii.com \
+ACME_EMAIL=tu-correo@dominio.com \
 LAG_COMP_MS=160 MAX_AIM_DELTA_DEG=95 \
 docker compose -f docker/docker-compose.prod.yml up -d --build
 ```
