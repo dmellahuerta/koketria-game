@@ -1,4 +1,11 @@
 services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ../web:/usr/share/nginx/html:ro
+
   backend:
     image: node:20-alpine
     working_dir: /app

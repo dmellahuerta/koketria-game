@@ -21,7 +21,8 @@ docker compose -f docker/docker-compose.yml up --build
 
 Servicios expuestos:
 
-- Frontend: `http://localhost:5173`
+- Web (HTML/CSS estática): `http://localhost:80`
+- Frontend juego (Vite dev): `http://localhost:5173`
 - Backend: `http://localhost:3000`
 - WebSocket salas: `ws://localhost:3000/ws`
 
@@ -102,6 +103,7 @@ Clima por partida (asignado al crear sala):
 ## Producción (EC2 + HTTPS)
 
 El stack productivo usa:
+- `web` (sitio estático HTML/CSS en puerto 80/443 vía Caddy)
 - `front` (Nginx con assets estáticos + proxy interno a backend para `/ws` y API)
 - `backend` (Fastify + WebSocket)
 - `caddy` (terminación TLS con Let's Encrypt)
@@ -119,7 +121,7 @@ docker compose -f docker/docker-compose.prod.yml up -d --build
 
 Servicios:
 
-- App (HTTPS): `https://koketria.misterrii.com`
+- Web (HTTPS): `https://koketria.misterrii.com`
 - Backend interno: `backend:3000` (no expuesto directo)
 
 Cache de navegador en producción:
