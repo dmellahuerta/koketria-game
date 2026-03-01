@@ -4035,8 +4035,12 @@ const clearPumoriOrbitSpecialByOwner = (ownerId) => {
       continue;
     }
     for (let j = 0; j < special.hammers.length; j += 1) {
-      const hammer = special.hammers[j]?.mesh;
+      const hammerEntry = special.hammers[j];
+      const hammer = hammerEntry?.mesh;
       if (!hammer) {
+        continue;
+      }
+      if (hammerEntry.disposed) {
         continue;
       }
       scene.remove(hammer);
@@ -4051,6 +4055,7 @@ const clearPumoriOrbitSpecialByOwner = (ownerId) => {
           node.material.dispose();
         }
       });
+      hammerEntry.disposed = true;
     }
     activePumoriOrbitSpecials.splice(i, 1);
   }
@@ -4103,6 +4108,8 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
       spawnAt: now + (i * spawnStepMs),
       baseAngle: (i / totalHammers) * Math.PI * 2,
       maxRadius: ((i + 1) / totalHammers) * maxOrbitRadius,
+      prevPos: center.clone(),
+      disposed: false,
     });
   }
 
@@ -4114,6 +4121,40 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
     totalHammers,
     phase: Math.random() * Math.PI * 2,
   });
+};
+
+const disposePumoriOrbitHammer = (hammerEntry, impactPoint = null) => {
+  if (!hammerEntry?.mesh || hammerEntry.disposed) {
+    return;
+  }
+  const hammer = hammerEntry.mesh;
+  scene.remove(hammer);
+  hammer.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+    if (node.geometry) {
+      node.geometry.dispose();
+    }
+    if (node.material) {
+      node.material.dispose();
+    }
+  });
+  hammerEntry.disposed = true;
+  hammer.visible = false;
+
+  if (impactPoint) {
+    const impactA = createImpact(impactPoint, 0xfff2c6);
+    const impactB = createImpact(impactPoint, 0x9af0ff);
+    if (impactA) {
+      impactA.scale.setScalar(1.9);
+      impactA.userData.life = 0.28;
+    }
+    if (impactB) {
+      impactB.scale.setScalar(1.45);
+      impactB.userData.life = 0.24;
+    }
+  }
 };
 
 const createPoisonGasVisual = (start, end, options = {}) => {
@@ -6427,9 +6468,13 @@ const updatePumoriOrbitSpecials = (delta) => {
     const lifeRatio = Math.max(0, Math.min(1, (now - special.createdAt) / Math.max(1, special.endAt - special.createdAt)));
     const lift = 1.15 + (Math.sin(t * 5.5) * 0.12);
     const count = Math.max(1, special.totalHammers || special.hammers.length);
+    const ownerIsSelf = Boolean(state.self && special.ownerId === state.self.id);
     for (let j = 0; j < special.hammers.length; j += 1) {
       const hammerEntry = special.hammers[j];
       const hammer = hammerEntry.mesh;
+      if (!hammer || hammerEntry.disposed) {
+        continue;
+      }
       if (now < hammerEntry.spawnAt) {
         hammer.visible = false;
         continue;
@@ -6440,12 +6485,47 @@ const updatePumoriOrbitSpecials = (delta) => {
       const expandingRadius = hammerEntry.maxRadius * (0.25 + (0.75 * lifeRatio * appearedRatio));
       const angle = special.phase + (t * 5.4) + hammerEntry.baseAngle;
       const radius = expandingRadius + Math.sin((t * 3.4) + j) * 0.12;
+      hammerEntry.prevPos.copy(hammer.position);
       hammer.position.set(
         center.x + (Math.cos(angle) * radius),
         center.y + lift + (Math.sin((t * 3.1) + j) * 0.22),
         center.z + (Math.sin(angle) * radius),
       );
       hammer.rotation.set((t * 5.8) + j, (t * 6.5) + (j * 0.7), (t * 4.9) + j);
+
+      let impactPoint = null;
+      if (hammer.position.y <= 0.22) {
+        impactPoint = hammer.position.clone();
+        impactPoint.y = 0.22;
+      }
+      if (!impactPoint) {
+        impactPoint = getSegmentWallImpact(hammerEntry.prevPos, hammer.position, 0.34);
+      }
+      if (!impactPoint) {
+        if (ownerIsSelf) {
+          for (const entry of state.remotePlayers.values()) {
+            if (!entry?.group || entry.isDead) {
+              continue;
+            }
+            const headCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.85, entry.group.position.z);
+            const bodyCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.1, entry.group.position.z);
+            impactPoint = testSegmentSphereHit(hammerEntry.prevPos, hammer.position, headCenter, headshotRadius)
+              || testSegmentSphereHit(hammerEntry.prevPos, hammer.position, bodyCenter, bodyshotRadius);
+            if (impactPoint) {
+              break;
+            }
+          }
+        } else {
+          const localImpact = getLocalSegmentCharacterImpact(hammerEntry.prevPos, hammer.position);
+          if (localImpact) {
+            impactPoint = localImpact.point;
+          }
+        }
+      }
+      if (impactPoint) {
+        disposePumoriOrbitHammer(hammerEntry, impactPoint);
+        continue;
+      }
 
       if (Math.random() < 0.45) {
         const spark = createImpact(hammer.position, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
@@ -6466,7 +6546,7 @@ const getPumoriOrbitVfxCount = () => {
       continue;
     }
     for (let j = 0; j < special.hammers.length; j += 1) {
-      if (special.hammers[j]?.mesh?.visible) {
+      if (special.hammers[j]?.mesh?.visible && !special.hammers[j]?.disposed) {
         total += 1;
       }
     }
