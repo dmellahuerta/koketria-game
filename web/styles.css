@@ -132,6 +132,18 @@ body {
   transition: 120ms ease;
 }
 
+.play-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.play-link.is-dev {
+  border-color: rgba(130, 210, 255, 0.7);
+  color: #8ed9ff;
+}
+
 .play-link:hover {
   color: #041108;
   background: var(--accent);
