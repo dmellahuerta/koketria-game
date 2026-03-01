@@ -789,12 +789,25 @@ const syncVersusPlayerPreviews = () => {
   }
 };
 
-const renderVersusSlots = (container, players, slotCount) => {
+const renderVersusSlots = (container, players, slotCount, containerKey) => {
   if (!container) {
-    return;
+    return false;
   }
   const safePlayers = Array.isArray(players) ? players : [];
   const slots = Math.max(1, Number(slotCount) || 1);
+  const renderKeyParts = [String(containerKey || ''), String(slots)];
+  for (let i = 0; i < slots; i += 1) {
+    const player = safePlayers[i];
+    if (player) {
+      renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}`);
+    } else {
+      renderKeyParts.push('empty');
+    }
+  }
+  const renderKey = renderKeyParts.join('::');
+  if (container.dataset.renderKey === renderKey) {
+    return false;
+  }
   const rows = [];
   for (let i = 0; i < slots; i += 1) {
     const player = safePlayers[i];
@@ -819,6 +832,8 @@ const renderVersusSlots = (container, players, slotCount) => {
     }
   }
   container.innerHTML = rows.join('');
+  container.dataset.renderKey = renderKey;
+  return true;
 };
 
 const updateVersusLobbyUi = () => {
@@ -846,6 +861,7 @@ const updateVersusLobbyUi = () => {
   const teamSize = hasType ? (versusType === '2v2' ? 2 : 1) : Math.max(1, Math.ceil(maxPlayers / 2));
   const leftPlayers = players.slice(0, teamSize);
   const rightPlayers = players.slice(teamSize, teamSize * 2);
+  const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}`).join(',')}`;
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
   versusLobby.classList.remove('hidden');
   versusRoomInfo.textContent = `Sala: ${room.name} (${room.id})`;
@@ -854,9 +870,12 @@ const updateVersusLobbyUi = () => {
   versusWaitingInfo.textContent = hasType
     ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType})`
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
-  renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize);
-  renderVersusSlots(versusRightPlayers, rightPlayers, teamSize);
-  syncVersusPlayerPreviews();
+  const leftChanged = renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize, 'left');
+  const rightChanged = renderVersusSlots(versusRightPlayers, rightPlayers, teamSize, 'right');
+  if (leftChanged || rightChanged || layoutKey !== lastVersusLobbyLayoutKey || versusPreviewSlots.size === 0) {
+    syncVersusPlayerPreviews();
+    lastVersusLobbyLayoutKey = layoutKey;
+  }
   versusStartBtn.disabled = !isHostPlayer || !enoughPlayers;
 };
 
@@ -1138,6 +1157,7 @@ const previewState = {
   lastHeight: 0,
 };
 const versusPreviewSlots = new Map();
+let lastVersusLobbyLayoutKey = '';
 
 const localAvatar = {
   group: null,
@@ -1196,6 +1216,7 @@ const clearVersusPreviewSlots = () => {
   for (let i = 0; i < keys.length; i += 1) {
     disposeVersusPreviewSlot(keys[i]);
   }
+  lastVersusLobbyLayoutKey = '';
 };
 
 const getWeaponLabel = (weaponFile) => {
