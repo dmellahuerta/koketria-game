@@ -47,6 +47,10 @@ const lunarRainStrikeDamage = hitDamage;
 const lunarRainStrikeAoeRadius = 4.2;
 const lunarRainSkyMinY = 30;
 const lunarRainSkyMaxY = 52;
+const pumoriOrbitCooldownMs = 60_000;
+const pumoriOrbitDurationMs = 10_000;
+const pumoriOrbitDamageTickMs = 260;
+const pumoriOrbitDamageRadius = 4.2;
 const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
@@ -179,6 +183,7 @@ const resetRoomCombat = (room) => {
       lastManaRegenAt: now,
       lastShotAt: 0,
       lastLunarRainAt: 0,
+      lastPumoriOrbitAt: 0,
     });
   });
 };
@@ -196,6 +201,7 @@ const getCombatState = (room, playerId) => {
       lastManaRegenAt: now,
       lastShotAt: 0,
       lastLunarRainAt: 0,
+      lastPumoriOrbitAt: 0,
     });
   }
   return room.combat.get(playerId);
@@ -410,6 +416,10 @@ const isManaCharacter = (characterId) => {
 const isPezunalunarCharacter = (characterId) => {
   const id = normalizeCharacterId(characterId);
   return id === 'pezunalunar' || id === 'pezuanalunar';
+};
+
+const isPumoriCharacter = (characterId) => {
+  return normalizeCharacterId(characterId) === 'pumori';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -812,6 +822,27 @@ const getLunarRainCooldownRemainingMs = (combat, nowMs = Date.now()) => {
   return Math.max(0, (last + lunarRainCooldownMs) - nowMs);
 };
 
+const getPumoriOrbitCooldownRemainingMs = (combat, nowMs = Date.now()) => {
+  if (!combat) {
+    return 0;
+  }
+  const last = Number(combat.lastPumoriOrbitAt || 0);
+  if (!Number.isFinite(last) || last <= 0) {
+    return 0;
+  }
+  return Math.max(0, (last + pumoriOrbitCooldownMs) - nowMs);
+};
+
+const getSpecialCooldownRemainingMs = (combat, characterId, nowMs = Date.now()) => {
+  if (isPezunalunarCharacter(characterId)) {
+    return getLunarRainCooldownRemainingMs(combat, nowMs);
+  }
+  if (isPumoriCharacter(characterId)) {
+    return getPumoriOrbitCooldownRemainingMs(combat, nowMs);
+  }
+  return 0;
+};
+
 const pickLunarRainImpactPoint = (room, center, radius) => {
   const profile = getRoomMapProfile(room);
   for (let i = 0; i < 24; i += 1) {
@@ -959,6 +990,128 @@ const triggerPezunalunarSpecial = (room, caster) => {
   }, lunarRainDurationMs);
 };
 
+const applyPumoriOrbitDamage = (room, casterId, center) => {
+  const radiusSq = pumoriOrbitDamageRadius * pumoriOrbitDamageRadius;
+  let roomStateChanged = false;
+
+  for (const victimId of room.players) {
+    if (victimId === casterId) {
+      continue;
+    }
+    const victimClient = getClientById(victimId);
+    if (!victimClient?.state?.position) {
+      continue;
+    }
+    const victimCombat = getCombatState(room, victimId);
+    if (!victimCombat.alive) {
+      continue;
+    }
+
+    const dx = Number(victimClient.state.position.x) - center.x;
+    const dz = Number(victimClient.state.position.z) - center.z;
+    if ((dx * dx) + (dz * dz) > radiusSq) {
+      continue;
+    }
+
+    if (victimCombat.shield > 0) {
+      const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
+      victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
+      victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
+    } else {
+      victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
+    }
+
+    send(victimClient.ws, {
+      type: 'player_damage',
+      ...json(true, {
+        fromPlayerId: casterId,
+        health: victimCombat.health,
+        shield: victimCombat.shield,
+        headshot: false,
+      }),
+    });
+    roomStateChanged = true;
+
+    if (victimCombat.health <= 0) {
+      processPlayerDeath(room, victimId, casterId);
+    }
+  }
+
+  if (roomStateChanged) {
+    broadcastRoomState(room);
+  }
+};
+
+const triggerPumoriSpecial = (room, caster) => {
+  if (!room || !caster || room.status !== 'in_game') {
+    return;
+  }
+  const nowMs = Date.now();
+  const casterCombat = getCombatState(room, caster.id);
+  if (!casterCombat.alive || !isPumoriCharacter(caster.character)) {
+    return;
+  }
+
+  const cooldownRemaining = getPumoriOrbitCooldownRemainingMs(casterCombat, nowMs);
+  if (cooldownRemaining > 0) {
+    send(caster.ws, {
+      type: 'player_resources',
+      ...json(true, {
+        mana: Math.round(casterCombat.mana),
+        lunarRainCooldownMs: cooldownRemaining,
+      }),
+    });
+    return;
+  }
+
+  casterCombat.lastPumoriOrbitAt = nowMs;
+  send(caster.ws, {
+    type: 'player_resources',
+    ...json(true, {
+      mana: Math.round(casterCombat.mana),
+      lunarRainCooldownMs: pumoriOrbitCooldownMs,
+    }),
+  });
+
+  broadcastToRoom(room, {
+    type: 'special_pumori_orbit_start',
+    ...json(true, {
+      playerId: caster.id,
+      character: caster.character || null,
+      durationMs: pumoriOrbitDurationMs,
+      ts: nowMs,
+    }),
+  });
+
+  const intervalId = setInterval(() => {
+    if (room.status !== 'in_game' || !room.players.has(caster.id)) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+    const casterClient = getClientById(caster.id);
+    const currentCasterCombat = getCombatState(room, caster.id);
+    if (!casterClient || !currentCasterCombat.alive) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+
+    const center = {
+      x: Number(casterClient.state?.position?.x || 0),
+      z: Number(casterClient.state?.position?.z || 0),
+    };
+    applyPumoriOrbitDamage(room, caster.id, center);
+  }, pumoriOrbitDamageTickMs);
+
+  room.specialTimers?.add(intervalId);
+  setTimeout(() => {
+    clearInterval(intervalId);
+    room.specialTimers?.delete(intervalId);
+  }, pumoriOrbitDurationMs);
+};
+
 const startRoundResetCountdown = (room, winnerId) => {
   if (!room || room.roundResetTimer) {
     return;
@@ -1099,7 +1252,7 @@ const getRoomState = (room) => {
         health: Math.round(combat.health),
         shield: Math.round(combat.shield),
         mana: Math.round(combat.mana),
-        lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, Date.now()),
+        lunarRainCooldownMs: getSpecialCooldownRemainingMs(combat, client.character, Date.now()),
         pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
         alive: Boolean(combat.alive),
       });
@@ -1220,6 +1373,7 @@ const joinRoom = (client, room) => {
     lastManaRegenAt: now,
     lastShotAt: 0,
     lastLunarRainAt: 0,
+    lastPumoriOrbitAt: 0,
   });
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
@@ -1578,7 +1732,7 @@ const start = async () => {
                 type: 'player_resources',
                 ...json(true, {
                   mana: Math.round(shooterCombat.mana),
-                  lunarRainCooldownMs: getLunarRainCooldownRemainingMs(shooterCombat, nowMs),
+                  lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
                 }),
               });
               return;
@@ -1588,7 +1742,7 @@ const start = async () => {
               type: 'player_resources',
               ...json(true, {
                 mana: Math.round(shooterCombat.mana),
-                lunarRainCooldownMs: getLunarRainCooldownRemainingMs(shooterCombat, nowMs),
+                lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
               }),
             });
           }
@@ -1721,6 +1875,18 @@ const start = async () => {
           return;
         }
 
+        if (message.type === 'player_special_pumori_orbit') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.status !== 'in_game') {
+            return;
+          }
+          triggerPumoriSpecial(room, current);
+          return;
+        }
+
         if (message.type === 'player_funny') {
           if (!current.roomId) {
             return;
@@ -1769,7 +1935,7 @@ const start = async () => {
                 health: Number(combat.health || 0),
                 pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
                 mana: Math.round(combat.mana),
-                lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, nowMs),
+                lunarRainCooldownMs: getSpecialCooldownRemainingMs(combat, current.character, nowMs),
               }),
             });
             return;
@@ -1785,7 +1951,7 @@ const start = async () => {
               health: Number(combat.health || 0),
               pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
               mana: Math.round(combat.mana),
-              lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, nowMs),
+              lunarRainCooldownMs: getSpecialCooldownRemainingMs(combat, current.character, nowMs),
             }),
           });
           return;

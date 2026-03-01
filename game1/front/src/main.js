@@ -2200,6 +2200,7 @@ const activeHolyProjectiles = [];
 const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
 const activeLunarProjectiles = [];
+const activePumoriOrbitSpecials = [];
 const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
 const maxActiveTracers = 420;
@@ -2868,6 +2869,10 @@ const isPezunalunarCharacter = (characterId) => {
   return normalized === 'pezunalunar' || normalized === 'pezuanalunar';
 };
 
+const hasCharacterSpecial = (characterId) => {
+  return isPezunalunarCharacter(characterId) || isPumoriCharacter(characterId);
+};
+
 const isUsingMana = () => {
   return isManaCharacter(activeCharacter);
 };
@@ -2904,7 +2909,7 @@ const renderSpecialStat = (force = false) => {
     return;
   }
   const inRoom = Boolean(state.joinedRoom);
-  if (!isPezunalunarCharacter(activeCharacter)) {
+  if (!hasCharacterSpecial(activeCharacter)) {
     if (force || lastLunarCooldownShown !== -1) {
       specialStat.textContent = 'Especial R: -';
       lastLunarCooldownShown = -1;
@@ -3118,6 +3123,7 @@ const updateDamageIndicator = () => {
 };
 
 const resetCombatStats = () => {
+  clearAllPumoriOrbitSpecials();
   health = maxHealth;
   shield = startShield;
   ammoInMag = maxAmmoInMag;
@@ -3157,8 +3163,11 @@ const reloadWeapon = () => {
   updateHud();
 };
 
-const triggerLunarRainSpecial = () => {
-  if (!isPezunalunarCharacter(activeCharacter) || !canPlay()) {
+const triggerCharacterSpecial = () => {
+  if (!canPlay()) {
+    return false;
+  }
+  if (!hasCharacterSpecial(activeCharacter)) {
     return false;
   }
   const remainingMs = getLunarRainCooldownRemainingMs();
@@ -3166,7 +3175,14 @@ const triggerLunarRainSpecial = () => {
     renderSpecialStat(true);
     return true;
   }
-  sendWs({ type: 'player_special_lunar_rain' });
+  if (isPezunalunarCharacter(activeCharacter)) {
+    sendWs({ type: 'player_special_lunar_rain' });
+    return true;
+  }
+  if (isPumoriCharacter(activeCharacter)) {
+    sendWs({ type: 'player_special_pumori_orbit' });
+    return true;
+  }
   return true;
 };
 
@@ -3946,6 +3962,34 @@ const createHolyShotVisual = (start, end, options = {}) => {
   });
 };
 
+const createHammerMesh = (scale = 1, opacity = 1) => {
+  const hammer = new THREE.Group();
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.46 * scale, 0.26 * scale, 0.22 * scale),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff2c6,
+      transparent: true,
+      opacity: Math.max(0.1, Math.min(1, 0.98 * opacity)),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05 * scale, 0.05 * scale, 0.7 * scale, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x9af0ff,
+      transparent: true,
+      opacity: Math.max(0.1, Math.min(1, 0.95 * opacity)),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  handle.rotation.z = Math.PI / 2;
+  hammer.add(head);
+  hammer.add(handle);
+  return hammer;
+};
+
 const createSacredHammerVisual = (start, end, options = {}) => {
   const direction = end.clone().sub(start);
   const distance = direction.length();
@@ -3962,30 +4006,7 @@ const createSacredHammerVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const hammer = new THREE.Group();
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.46, 0.26, 0.22),
-    new THREE.MeshBasicMaterial({
-      color: 0xfff2c6,
-      transparent: true,
-      opacity: 0.98,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  const handle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05, 0.05, 0.7, 10),
-    new THREE.MeshBasicMaterial({
-      color: 0x9af0ff,
-      transparent: true,
-      opacity: 0.95,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  handle.rotation.z = Math.PI / 2;
-  hammer.add(head);
-  hammer.add(handle);
+  const hammer = createHammerMesh(1, 1);
   hammer.position.copy(start);
   scene.add(hammer);
 
@@ -4003,6 +4024,82 @@ const createSacredHammerVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+  });
+};
+
+const clearPumoriOrbitSpecialByOwner = (ownerId) => {
+  const targetOwner = String(ownerId || '');
+  for (let i = activePumoriOrbitSpecials.length - 1; i >= 0; i -= 1) {
+    const special = activePumoriOrbitSpecials[i];
+    if (special.ownerId !== targetOwner) {
+      continue;
+    }
+    for (let j = 0; j < special.hammers.length; j += 1) {
+      const hammer = special.hammers[j];
+      scene.remove(hammer);
+      hammer.traverse((node) => {
+        if (!node.isMesh) {
+          return;
+        }
+        if (node.geometry) {
+          node.geometry.dispose();
+        }
+        if (node.material) {
+          node.material.dispose();
+        }
+      });
+    }
+    activePumoriOrbitSpecials.splice(i, 1);
+  }
+};
+
+const clearAllPumoriOrbitSpecials = () => {
+  for (let i = activePumoriOrbitSpecials.length - 1; i >= 0; i -= 1) {
+    clearPumoriOrbitSpecialByOwner(activePumoriOrbitSpecials[i]?.ownerId);
+  }
+};
+
+const getPlayerPositionById = (playerId) => {
+  const id = String(playerId || '');
+  if (!id) {
+    return null;
+  }
+  if (state.self && id === state.self.id) {
+    return camera.position.clone();
+  }
+  const entry = state.remotePlayers.get(id);
+  if (entry?.group) {
+    return entry.group.position.clone();
+  }
+  return null;
+};
+
+const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
+  const ownerId = String(playerId || '');
+  if (!ownerId) {
+    return;
+  }
+  clearPumoriOrbitSpecialByOwner(ownerId);
+  const center = getPlayerPositionById(ownerId);
+  if (!center) {
+    return;
+  }
+
+  const hammers = [];
+  for (let i = 0; i < 5; i += 1) {
+    const hammer = createHammerMesh(0.82, 0.95);
+    hammer.position.copy(center);
+    scene.add(hammer);
+    hammers.push(hammer);
+  }
+
+  activePumoriOrbitSpecials.push({
+    ownerId,
+    hammers,
+    createdAt: performance.now(),
+    endAt: performance.now() + Math.max(500, Number(durationMs) || 10_000),
+    baseRadius: 2.2,
+    phase: Math.random() * Math.PI * 2,
   });
 };
 
@@ -4353,6 +4450,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'player_left') {
       const playerId = payload.data?.playerId;
+      clearPumoriOrbitSpecialByOwner(playerId);
       if (playerId && state.remotePlayers.has(playerId)) {
         disposeRemotePlayer(state.remotePlayers.get(playerId));
         state.remotePlayers.delete(playerId);
@@ -4451,6 +4549,16 @@ const connectWebSocket = () => {
       return;
     }
 
+    if (payload.type === 'special_pumori_orbit_start') {
+      const ownerId = String(payload.data?.playerId || '');
+      const durationMs = Number(payload.data?.durationMs || 10_000);
+      if (!ownerId) {
+        return;
+      }
+      startPumoriOrbitSpecialVisual(ownerId, durationMs);
+      return;
+    }
+
     if (payload.type === 'player_damage') {
       if (!state.self || !canPlay()) {
         return;
@@ -4509,6 +4617,7 @@ const connectWebSocket = () => {
       if (!playerId) {
         return;
       }
+      clearPumoriOrbitSpecialByOwner(playerId);
       if (state.self && payload.data?.killerId === state.self.id && playerId !== state.self.id) {
         triggerKillConfirm();
       }
@@ -5184,7 +5293,7 @@ window.addEventListener('keydown', (event) => {
 
   if (event.code === 'KeyR') {
     cancelLocalFunnyAnimation();
-    if (!triggerLunarRainSpecial()) {
+    if (!triggerCharacterSpecial()) {
       reloadWeapon();
     }
   }
@@ -6286,6 +6395,46 @@ const updateLunarProjectiles = (delta) => {
   }
 };
 
+const updatePumoriOrbitSpecials = (delta) => {
+  void delta;
+  const now = performance.now();
+  for (let i = activePumoriOrbitSpecials.length - 1; i >= 0; i -= 1) {
+    const special = activePumoriOrbitSpecials[i];
+    if (!special || now >= special.endAt) {
+      clearPumoriOrbitSpecialByOwner(special?.ownerId);
+      continue;
+    }
+    const center = getPlayerPositionById(special.ownerId);
+    if (!center) {
+      clearPumoriOrbitSpecialByOwner(special.ownerId);
+      continue;
+    }
+
+    const t = (now - special.createdAt) / 1000;
+    const lift = 1.15 + (Math.sin(t * 5.5) * 0.12);
+    const count = Math.max(1, special.hammers.length);
+    for (let j = 0; j < special.hammers.length; j += 1) {
+      const hammer = special.hammers[j];
+      const angle = special.phase + (t * 5.4) + ((j / count) * Math.PI * 2);
+      const radius = special.baseRadius + Math.sin((t * 3.4) + j) * 0.14;
+      hammer.position.set(
+        center.x + (Math.cos(angle) * radius),
+        center.y + lift + (Math.sin((t * 3.1) + j) * 0.22),
+        center.z + (Math.sin(angle) * radius),
+      );
+      hammer.rotation.set((t * 5.8) + j, (t * 6.5) + (j * 0.7), (t * 4.9) + j);
+
+      if (Math.random() < 0.45) {
+        const spark = createImpact(hammer.position, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
+        if (spark) {
+          spark.scale.setScalar(0.45 + Math.random() * 0.35);
+          spark.userData.life = 0.1 + Math.random() * 0.1;
+        }
+      }
+    }
+  }
+};
+
 const updateShooting = (delta) => {
   const usingMana = isManaCharacter(activeCharacter);
 
@@ -6402,6 +6551,7 @@ const animate = () => {
   updateHammerProjectiles(delta);
   updatePoisonProjectiles(delta);
   updateLunarProjectiles(delta);
+  updatePumoriOrbitSpecials(delta);
   updateShooting(delta);
   updateRespawnCountdown();
   updateWinnerCountdown();
@@ -6432,7 +6582,8 @@ const animate = () => {
     + activeHolyProjectiles.length
     + activeHammerProjectiles.length
     + activePoisonProjectiles.length
-    + activeLunarProjectiles.length;
+    + activeLunarProjectiles.length
+    + (activePumoriOrbitSpecials.length * 5);
 };
 
 window.addEventListener('resize', () => {
