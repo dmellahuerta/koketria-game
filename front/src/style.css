@@ -23,6 +23,68 @@ canvas {
   display: block;
 }
 
+#bootLoader {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(44, 112, 44, 0.35), rgba(0, 8, 0, 0.92) 68%),
+    rgba(0, 8, 0, 0.95);
+}
+
+#bootLoader.hidden {
+  display: none;
+}
+
+.boot-card {
+  width: min(92vw, 520px);
+  border: 1px solid rgba(112, 255, 112, 0.48);
+  border-radius: 12px;
+  padding: 18px;
+  background: rgba(0, 20, 0, 0.86);
+  color: #b7ffbc;
+  box-shadow: 0 0 36px rgba(57, 214, 57, 0.2);
+}
+
+.boot-card h1 {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+}
+
+.boot-card p {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.boot-track {
+  margin-top: 12px;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 255, 130, 0.45);
+  background: rgba(2, 36, 2, 0.8);
+  overflow: hidden;
+}
+
+.boot-fill {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #1bc431 0%, #9bff9b 100%);
+  box-shadow: 0 0 12px rgba(142, 255, 142, 0.55);
+  transition: width 180ms linear;
+}
+
+#bootLoaderPercent {
+  margin-top: 8px;
+  text-align: right;
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
 #lobby {
   position: fixed;
   top: 50%;
@@ -369,6 +431,8 @@ button:disabled {
   top: 50%;
   width: 12px;
   height: 12px;
+  --crosshair-gap: 5px;
+  --crosshair-size: 14px;
   margin-left: -6px;
   margin-top: -6px;
   pointer-events: none;
@@ -595,16 +659,74 @@ button:disabled {
 
 #crosshair::before {
   left: 5px;
-  top: -2px;
+  top: calc(6px - var(--crosshair-gap) - var(--crosshair-size));
   width: 2px;
-  height: 16px;
+  height: var(--crosshair-size);
+  box-shadow:
+    0 0 8px rgba(102, 255, 122, 0.95),
+    0 calc((var(--crosshair-gap) * 2) + var(--crosshair-size) + 2px) 0 rgba(154, 255, 162, 0.95);
 }
 
 #crosshair::after {
-  left: -2px;
+  left: calc(6px - var(--crosshair-gap) - var(--crosshair-size));
   top: 5px;
-  width: 16px;
+  width: var(--crosshair-size);
   height: 2px;
+  box-shadow:
+    0 0 8px rgba(102, 255, 122, 0.95),
+    calc((var(--crosshair-gap) * 2) + var(--crosshair-size) + 2px) 0 0 rgba(154, 255, 162, 0.95);
+}
+
+#crosshair.hit::before,
+#crosshair.hit::after {
+  background: rgba(255, 244, 173, 0.98);
+  box-shadow: 0 0 11px rgba(255, 235, 125, 0.98);
+}
+
+#crosshair.headshot::before,
+#crosshair.headshot::after {
+  background: rgba(255, 132, 132, 0.99);
+  box-shadow: 0 0 12px rgba(255, 92, 92, 0.99);
+}
+
+#crosshair.kill::before,
+#crosshair.kill::after {
+  background: rgba(120, 220, 255, 0.99);
+  box-shadow: 0 0 14px rgba(95, 200, 255, 0.99);
+}
+
+#damageIndicator {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 120px;
+  height: 120px;
+  margin-left: -60px;
+  margin-top: -60px;
+  pointer-events: none;
+  z-index: 23;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+
+#damageIndicator.visible {
+  opacity: 1;
+}
+
+#damageIndicator::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 0;
+  height: 0;
+  margin-left: -10px;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 18px solid rgba(255, 100, 100, 0.92);
+  filter: drop-shadow(0 0 6px rgba(255, 70, 70, 0.9));
+  transform: rotate(var(--damage-angle, 0deg));
+  transform-origin: 50% 60px;
 }
 
 #app:not(.in-room) #hud,
@@ -613,6 +735,10 @@ button:disabled {
 }
 
 #app:not(.in-room) #damageOverlay {
+  display: none;
+}
+
+#app:not(.in-room) #damageIndicator {
   display: none;
 }
 
@@ -628,8 +754,74 @@ button:disabled {
   display: none;
 }
 
+#optionsScreen {
+  position: fixed;
+  inset: 0;
+  z-index: 32;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.58);
+  pointer-events: auto;
+}
+
+#optionsScreen:not(.hidden) {
+  display: flex;
+}
+
+.options-card {
+  width: min(92vw, 420px);
+  border: 1px solid rgba(120, 255, 120, 0.62);
+  border-radius: 12px;
+  background: rgba(0, 20, 0, 0.95);
+  color: #b8ffbf;
+  padding: 14px 14px 12px;
+  box-shadow: 0 0 28px rgba(76, 222, 76, 0.28);
+}
+
+.options-card h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+}
+
+.options-card label {
+  display: block;
+  margin: 8px 0;
+  font-size: 0.82rem;
+}
+
+.options-card input[type="range"] {
+  width: 100%;
+  margin: 6px 0 3px;
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.options-actions {
+  margin-top: 10px;
+}
+
+.options-actions button {
+  width: 100%;
+}
+
+.options-hint {
+  margin: 8px 0 0;
+  opacity: 0.86;
+  font-size: 0.75rem;
+}
+
 #app:not(.in-room) .chat-panel,
 #app:not(.in-room) .chat-feed {
+  display: none;
+}
+
+#app:not(.in-room) #optionsScreen {
   display: none;
 }
 

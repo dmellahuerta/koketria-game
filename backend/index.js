@@ -23,7 +23,7 @@ const roundResetSeconds = 10;
 const maxHealth = 100;
 const maxShield = 100;
 const startShield = 0;
-const hitDamage = 18;
+const hitDamage = Math.ceil(maxHealth / 3);
 const shieldDamageReduction = 0.6;
 const shieldDamageCostFactor = 0.85;
 const headshotRadius = 0.42;
@@ -39,8 +39,16 @@ const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
 const lagCompensationMs = envNumber('LAG_COMP_MS', 120);
+const lagCompensationBulletMs = envNumber('LAG_COMP_BULLET_MS', lagCompensationMs);
+const lagCompensationMagicMs = envNumber('LAG_COMP_MAGIC_MS', Math.max(lagCompensationMs + 30, 150));
 const stateHistoryWindowMs = 1500;
 const roomStateSyncIntervalMs = 1000;
+const mapPillarCount = 180;
+const mapBorderSegments = 42;
+const mapAxisXBase = 118;
+const mapAxisZBase = 96;
+const mapBoundaryMinRadius = 0.74;
+const mapBoundaryMaxRadius = 1.24;
 
 const json = (ok, data, error) => {
   return { ok, data, error };
@@ -245,6 +253,56 @@ const createSeededRng = (seed) => {
   };
 };
 
+const createMapProfile = (seed) => {
+  const rnd = createSeededRng((Number(seed) ^ 0x5f356495) >>> 0);
+  return {
+    axisX: mapAxisXBase * (0.94 + rnd() * 0.1),
+    axisZ: mapAxisZBase * (0.94 + rnd() * 0.1),
+    amp1: 0.1 + rnd() * 0.09,
+    amp2: 0.07 + rnd() * 0.07,
+    amp3: 0.05 + rnd() * 0.06,
+    freq1: 2 + Math.floor(rnd() * 3),
+    freq2: 3 + Math.floor(rnd() * 3),
+    freq3: 5 + Math.floor(rnd() * 4),
+    phase1: rnd() * Math.PI * 2,
+    phase2: rnd() * Math.PI * 2,
+    phase3: rnd() * Math.PI * 2,
+  };
+};
+
+const getMapBoundaryRadius = (profile, theta) => {
+  if (!profile) {
+    return 1;
+  }
+  const waveA = Math.sin((theta * profile.freq1) + profile.phase1) * profile.amp1;
+  const waveB = Math.sin((theta * profile.freq2) + profile.phase2) * profile.amp2;
+  const waveC = Math.cos((theta * profile.freq3) + profile.phase3) * profile.amp3;
+  return clamp(1 + waveA + waveB + waveC, mapBoundaryMinRadius, mapBoundaryMaxRadius);
+};
+
+const getMapTheta = (profile, x, z) => {
+  return Math.atan2(z / Math.max(1, profile.axisZ), x / Math.max(1, profile.axisX));
+};
+
+const isInsideMapBounds = (profile, x, z, padding = 0) => {
+  const theta = getMapTheta(profile, x, z);
+  const boundary = getMapBoundaryRadius(profile, theta);
+  const norm = Math.sqrt(
+    (x * x) / (profile.axisX * profile.axisX)
+    + (z * z) / (profile.axisZ * profile.axisZ),
+  );
+  const normalizedPadding = padding / Math.max(1, Math.min(profile.axisX, profile.axisZ));
+  return norm <= (boundary - normalizedPadding);
+};
+
+const getBoundaryPointAt = (profile, theta, extra = 0) => {
+  const radius = getMapBoundaryRadius(profile, theta) + extra;
+  return {
+    x: Math.cos(theta) * profile.axisX * radius,
+    z: Math.sin(theta) * profile.axisZ * radius,
+  };
+};
+
 const normalizeCharacterId = (value) => {
   return String(value || '')
     .normalize('NFD')
@@ -261,6 +319,11 @@ const isManaCharacter = (characterId) => {
     || id === 'neoorphen'
     || id === 'pezunalunar'
     || id === 'pezuanalunar';
+};
+
+const isWideProjectileCharacter = (characterId) => {
+  const id = normalizeCharacterId(characterId);
+  return id === 'pumori' || id === 'neoorphen';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -416,8 +479,11 @@ const intersectRaySphere = (origin, directionNorm, maxDistance, center, radius) 
   return t;
 };
 
-const resolveShotHitOnPlayers = (room, shooterId, origin, directionNorm, maxDistance, rewindTsMs) => {
+const resolveShotHitOnPlayers = (room, shooterId, shooterCharacter, origin, directionNorm, maxDistance, rewindTsMs) => {
   let best = null;
+  const wideProjectile = isWideProjectileCharacter(shooterCharacter);
+  const effectiveHeadRadius = headshotRadius + (wideProjectile ? 0.1 : 0);
+  const effectiveBodyRadius = bodyshotRadius + (wideProjectile ? 0.22 : 0);
 
   room.players.forEach((candidateId) => {
     if (candidateId === shooterId) {
@@ -438,8 +504,8 @@ const resolveShotHitOnPlayers = (room, shooterId, origin, directionNorm, maxDist
 
     const headCenter = { x: pos.x, y: pos.y + headCenterOffsetY, z: pos.z };
     const bodyCenter = { x: pos.x, y: pos.y + bodyCenterOffsetY, z: pos.z };
-    const headT = intersectRaySphere(origin, directionNorm, maxDistance, headCenter, headshotRadius);
-    const bodyT = intersectRaySphere(origin, directionNorm, maxDistance, bodyCenter, bodyshotRadius);
+    const headT = intersectRaySphere(origin, directionNorm, maxDistance, headCenter, effectiveHeadRadius);
+    const bodyT = intersectRaySphere(origin, directionNorm, maxDistance, bodyCenter, effectiveBodyRadius);
 
     if (headT !== null) {
       if (!best || headT < best.t) {
@@ -621,6 +687,7 @@ const serializePlayer = (client) => {
     id: client.id,
     name: client.name,
     character: client.character || null,
+    ts: Date.now(),
     state: {
       position: { ...client.state.position },
       rotation: { ...client.state.rotation },
@@ -1167,10 +1234,12 @@ const start = async () => {
             }),
           }, current.id);
 
-          const rewindTsMs = nowMs - lagCompensationMs;
+          const rewindLagMs = shooterIsMana ? lagCompensationMagicMs : lagCompensationBulletMs;
+          const rewindTsMs = nowMs - rewindLagMs;
           const hit = resolveShotHitOnPlayers(
             room,
             current.id,
+            current.character || '',
             originClamped,
             directionNorm,
             effectiveDistance,
@@ -1211,6 +1280,14 @@ const start = async () => {
               }),
             });
           }
+          send(current.ws, {
+            type: 'hit_confirm',
+            ...json(true, {
+              victimId: hit.victimId,
+              headshot: hit.hitType === 'head',
+              ts: nowMs,
+            }),
+          });
           broadcastRoomState(room);
 
           if (victimCombat.health <= 0) {

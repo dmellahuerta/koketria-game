@@ -5,7 +5,18 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 
 const app = document.querySelector('#app');
 app.innerHTML = `
-  <section id="lobby">
+  <section id="bootLoader">
+    <div class="boot-card">
+      <h1>Cargando Assets</h1>
+      <p id="bootLoaderText">Inicializando...</p>
+      <div class="boot-track">
+        <div id="bootLoaderFill" class="boot-fill"></div>
+      </div>
+      <p id="bootLoaderPercent">0%</p>
+    </div>
+  </section>
+
+  <section id="lobby" class="hidden">
     <div class="lobby-layout">
       <div class="lobby-main">
         <h1>Matrix Lobby</h1>
@@ -110,6 +121,7 @@ app.innerHTML = `
   </div>
 
   <div id="damageOverlay"></div>
+  <div id="damageIndicator"></div>
 
   <div id="scoreboard" class="hidden">
     <div class="scoreboard-card">
@@ -134,8 +146,52 @@ app.innerHTML = `
       <input id="chatInput" type="text" maxlength="180" placeholder="Escribe un mensaje..." autocomplete="off" />
     </div>
   </div>
+
+  <div id="optionsScreen" class="hidden">
+    <div class="options-card">
+      <h2>Opciones</h2>
+      <label>
+        Sensibilidad mouse
+        <input id="optMouseSensitivity" type="range" min="0.4" max="2.5" step="0.05" />
+        <span id="optMouseSensitivityValue">1.00</span>
+      </label>
+      <label>
+        Volumen maestro
+        <input id="optMasterVolume" type="range" min="0" max="1" step="0.01" />
+        <span id="optMasterVolumeValue">100%</span>
+      </label>
+      <label>
+        Volumen musica
+        <input id="optMusicVolume" type="range" min="0" max="1" step="0.01" />
+        <span id="optMusicVolumeValue">100%</span>
+      </label>
+      <label>
+        Volumen efectos
+        <input id="optSfxVolume" type="range" min="0" max="1" step="0.01" />
+        <span id="optSfxVolumeValue">100%</span>
+      </label>
+      <label>
+        FOV
+        <input id="optFov" type="range" min="60" max="100" step="1" />
+        <span id="optFovValue">75</span>
+      </label>
+      <label class="checkbox-line">
+        <input id="optShowPerf" type="checkbox" />
+        Mostrar panel FPS/latencia por defecto
+      </label>
+      <div class="options-actions">
+        <button id="optResumeBtn" type="button">Volver al juego</button>
+      </div>
+      <p class="options-hint">ESC: abrir/cerrar opciones</p>
+    </div>
+  </div>
 `;
 
+const bootLoader = document.querySelector('#bootLoader');
+const bootLoaderText = document.querySelector('#bootLoaderText');
+const bootLoaderFill = document.querySelector('#bootLoaderFill');
+const bootLoaderPercent = document.querySelector('#bootLoaderPercent');
+const lobbySection = document.querySelector('#lobby');
 const connectionStatus = document.querySelector('#connectionStatus');
 const playerNameInput = document.querySelector('#playerName');
 const characterSelect = document.querySelector('#characterSelect');
@@ -150,6 +206,7 @@ const winnerScreen = document.querySelector('#winnerScreen');
 const winnerText = document.querySelector('#winnerText');
 const winnerCounter = document.querySelector('#winnerCounter');
 const damageOverlay = document.querySelector('#damageOverlay');
+const damageIndicator = document.querySelector('#damageIndicator');
 const scoreboard = document.querySelector('#scoreboard');
 const scoreboardBody = document.querySelector('#scoreboardBody');
 const healthStat = document.querySelector('#healthStat');
@@ -178,6 +235,20 @@ const chatPanel = document.querySelector('#chatPanel');
 const chatLog = document.querySelector('#chatLog');
 const chatInputWrap = document.querySelector('#chatInputWrap');
 const chatInput = document.querySelector('#chatInput');
+const crosshair = document.querySelector('#crosshair');
+const optionsScreen = document.querySelector('#optionsScreen');
+const optMouseSensitivity = document.querySelector('#optMouseSensitivity');
+const optMouseSensitivityValue = document.querySelector('#optMouseSensitivityValue');
+const optMasterVolume = document.querySelector('#optMasterVolume');
+const optMasterVolumeValue = document.querySelector('#optMasterVolumeValue');
+const optMusicVolume = document.querySelector('#optMusicVolume');
+const optMusicVolumeValue = document.querySelector('#optMusicVolumeValue');
+const optSfxVolume = document.querySelector('#optSfxVolume');
+const optSfxVolumeValue = document.querySelector('#optSfxVolumeValue');
+const optFov = document.querySelector('#optFov');
+const optFovValue = document.querySelector('#optFovValue');
+const optShowPerf = document.querySelector('#optShowPerf');
+const optResumeBtn = document.querySelector('#optResumeBtn');
 
 const state = {
   ws: null,
@@ -197,6 +268,16 @@ const chatMessages = [];
 const maxChatMessages = 40;
 const chatMessageTtlMs = 8000;
 let isChatTyping = false;
+let isOptionsOpen = false;
+const settingsStorageKey = 'koketria_settings_v1';
+const settings = {
+  mouseSensitivity: 1,
+  masterVolume: 1,
+  musicVolume: 1,
+  sfxVolume: 1,
+  fov: 75,
+  showPerfByDefault: false,
+};
 
 const clearMovementKeys = () => {
   keys.KeyW = false;
@@ -282,6 +363,36 @@ const setLobbyError = (message = '') => {
   lobbyError.textContent = message;
 };
 
+const clampSetting = (value, min, max, fallback) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, num));
+};
+
+const loadSettings = () => {
+  try {
+    const raw = localStorage.getItem(settingsStorageKey);
+    if (!raw) {
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    settings.mouseSensitivity = clampSetting(parsed.mouseSensitivity, 0.4, 2.5, settings.mouseSensitivity);
+    settings.masterVolume = clampSetting(parsed.masterVolume, 0, 1, settings.masterVolume);
+    settings.musicVolume = clampSetting(parsed.musicVolume, 0, 1, settings.musicVolume);
+    settings.sfxVolume = clampSetting(parsed.sfxVolume, 0, 1, settings.sfxVolume);
+    settings.fov = clampSetting(parsed.fov, 60, 100, settings.fov);
+    settings.showPerfByDefault = Boolean(parsed.showPerfByDefault);
+  } catch {
+    // ignore persisted settings parse errors
+  }
+};
+
+const saveSettings = () => {
+  localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
+};
+
 const shuffleArray = (values) => {
   const out = [...values];
   for (let i = out.length - 1; i > 0; i -= 1) {
@@ -304,6 +415,7 @@ const setInRoom = (value) => {
     document.exitPointerLock();
   }
   if (!value) {
+    closeOptionsMenu();
     chatMessages.length = 0;
     renderChat();
     closeChatInput();
@@ -379,40 +491,47 @@ const applyWeather = (weather) => {
 
   rain.visible = value === 'rainy';
   snow.visible = value === 'snow';
-  stars.visible = value === 'night';
+  stars.visible = value === 'night' || value === 'snow';
+  lowSparks.visible = false;
+  moon.visible = false;
+  secondMoon.visible = false;
 
   if (value === 'sunny') {
-    scene.background = new THREE.Color(0x8dd5ff);
-    scene.fog.color.set(0x8dd5ff);
+    scene.background = new THREE.Color(0xb7dfff);
+    scene.fog.color.set(0xb7dfff);
     scene.fog.near = 90;
     scene.fog.far = 400;
     ambient.intensity = 0.74;
     keyLight.intensity = 1.2;
     keyLight.color.set(0xfff2c2);
+    lowSparkMat.opacity = 0.35;
   } else if (value === 'rainy') {
-    scene.background = new THREE.Color(0x4b5e69);
-    scene.fog.color.set(0x4b5e69);
+    scene.background = new THREE.Color(0x5b6670);
+    scene.fog.color.set(0x5b6670);
     scene.fog.near = 10;
     scene.fog.far = 95;
     ambient.intensity = 0.26;
     keyLight.intensity = 0.42;
     keyLight.color.set(0x8bb7d7);
+    lowSparkMat.opacity = 0.25;
   } else if (value === 'snow') {
-    scene.background = new THREE.Color(0xc9e4f2);
-    scene.fog.color.set(0xc9e4f2);
+    scene.background = new THREE.Color(0xd8e9f4);
+    scene.fog.color.set(0xd8e9f4);
     scene.fog.near = 26;
     scene.fog.far = 200;
     ambient.intensity = 0.65;
     keyLight.intensity = 0.9;
     keyLight.color.set(0xe7f6ff);
+    lowSparkMat.opacity = 0.42;
   } else {
-    scene.background = new THREE.Color(0x020409);
-    scene.fog.color.set(0x020409);
+    scene.background = new THREE.Color(0x070b14);
+    scene.fog.color.set(0x070b14);
     scene.fog.near = 16;
     scene.fog.far = 140;
-    ambient.intensity = 0.2;
-    keyLight.intensity = 0.32;
-    keyLight.color.set(0x5c6bb3);
+    ambient.intensity = 0.26;
+    keyLight.intensity = 0.38;
+    keyLight.color.set(0x7f79c8);
+    lowSparkMat.opacity = 0.6;
   }
 };
 
@@ -588,35 +707,44 @@ const grid = new THREE.GridHelper(320, 80, 0x3fff66, 0x0f4a1f);
 grid.position.y = 0.01;
 scene.add(grid);
 
+let terrainMesh = null;
+let edgeMistMesh = null;
+
 const blockMat = new THREE.MeshStandardMaterial({
-  color: 0x071d0b,
-  emissive: 0x0f5e24,
-  emissiveIntensity: 0.5,
-  metalness: 0.1,
-  roughness: 0.85,
+  color: 0x5b5264,
+  emissive: 0x2a2532,
+  emissiveIntensity: 0.18,
+  metalness: 0.06,
+  roughness: 0.9,
+});
+const borderMat = new THREE.MeshStandardMaterial({
+  color: 0x7b6f84,
+  emissive: 0x2c2536,
+  emissiveIntensity: 0.14,
+  metalness: 0.04,
+  roughness: 0.92,
+});
+const mushroomRockMat = new THREE.MeshStandardMaterial({
+  color: 0x8f768f,
+  emissive: 0x34253d,
+  emissiveIntensity: 0.11,
+  metalness: 0.04,
+  roughness: 0.9,
 });
 
 const shootables = [];
 const pillarBounds = [];
 const playerCollisionRadius = 0.55;
+const mapPillarCount = 180;
+const mapBorderSegments = 42;
+const mapAxisXBase = 118;
+const mapAxisZBase = 96;
+const mapBoundaryMinRadius = 0.74;
+const mapBoundaryMaxRadius = 1.24;
 const mapHalfExtent = 156;
+const terrainBaseY = -2.25;
 let currentMapSeed = null;
-for (let i = 0; i < 220; i += 1) {
-  const w = 1 + Math.random() * 3;
-  const d = 1 + Math.random() * 3;
-  const h = 3 + Math.random() * 24;
-  const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), blockMat.clone());
-  box.position.set((Math.random() - 0.5) * 220, h / 2, (Math.random() - 0.5) * 220);
-  box.userData.hp = 1 + Math.floor(Math.random() * 3);
-  scene.add(box);
-  shootables.push(box);
-  pillarBounds.push({
-    minX: box.position.x - (w / 2),
-    maxX: box.position.x + (w / 2),
-    minZ: box.position.z - (d / 2),
-    maxZ: box.position.z + (d / 2),
-  });
-}
+let currentMapProfile = null;
 
 const rainCount = 5600;
 const rainPos = new Float32Array(rainCount * 3);
@@ -680,6 +808,47 @@ const starMat = new THREE.PointsMaterial({
 });
 const stars = new THREE.Points(starGeo, starMat);
 scene.add(stars);
+
+const lowSparkCount = 900;
+const lowSparkPos = new Float32Array(lowSparkCount * 3);
+const lowSparkVel = new Float32Array(lowSparkCount);
+for (let i = 0; i < lowSparkCount; i += 1) {
+  lowSparkPos[i * 3] = (Math.random() - 0.5) * 300;
+  lowSparkPos[i * 3 + 1] = 8 + Math.random() * 34;
+  lowSparkPos[i * 3 + 2] = (Math.random() - 0.5) * 300;
+  lowSparkVel[i] = 0.4 + Math.random() * 0.9;
+}
+const lowSparkGeo = new THREE.BufferGeometry();
+lowSparkGeo.setAttribute('position', new THREE.BufferAttribute(lowSparkPos, 3));
+const lowSparkMat = new THREE.PointsMaterial({
+  color: 0xfff0bf,
+  size: 0.18,
+  transparent: true,
+  opacity: 0.62,
+  sizeAttenuation: true,
+  depthWrite: false,
+});
+const lowSparks = new THREE.Points(lowSparkGeo, lowSparkMat);
+scene.add(lowSparks);
+
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(8.5, 24, 24),
+  new THREE.MeshBasicMaterial({ color: 0xe9f1ff, transparent: true, opacity: 0.9 }),
+);
+moon.position.set(78, 95, -124);
+scene.add(moon);
+
+const secondMoon = new THREE.Mesh(
+  new THREE.SphereGeometry(4.2, 18, 18),
+  new THREE.MeshBasicMaterial({ color: 0xf9d8a0, transparent: true, opacity: 0.74 }),
+);
+secondMoon.position.set(-104, 76, -112);
+scene.add(secondMoon);
+
+const koketriaDecor = [];
+const reactiveNatureMaterials = [];
+let naturePulse = 0;
+const naturePulseOrigin = new THREE.Vector3();
 
 const gltfLoader = new GLTFLoader();
 const characterResources = new Map();
@@ -1175,22 +1344,127 @@ const populateCharacterSelect = (characters) => {
   characterSelect.value = activeCharacter;
 };
 
-const loadCatalogs = async () => {
-  const apiBase = resolveApiBaseUrl();
-  let characters = null;
+const updateBootLoader = (done, total, label = '') => {
+  const safeTotal = Math.max(1, total);
+  const progress = Math.max(0, Math.min(1, done / safeTotal));
+  const percent = Math.round(progress * 100);
+  if (bootLoaderFill) {
+    bootLoaderFill.style.width = `${percent}%`;
+  }
+  if (bootLoaderPercent) {
+    bootLoaderPercent.textContent = `${percent}%`;
+  }
+  if (bootLoaderText && label) {
+    bootLoaderText.textContent = label;
+  }
+};
 
+const fetchCharactersCatalog = async () => {
+  const apiBase = resolveApiBaseUrl();
   try {
     const charactersRes = await fetch(`${apiBase}/characters`);
     const charactersPayload = await charactersRes.json();
-
     if (charactersPayload?.ok && Array.isArray(charactersPayload.data) && charactersPayload.data.length > 0) {
-      characters = charactersPayload.data;
+      return charactersPayload.data;
     }
   } catch {
     // fallback below
   }
+  return ['silentman', 'pumori', 'neoorphen', 'pezunalunar'];
+};
 
-  populateCharacterSelect(characters || ['silentman', 'pumori', 'neoorphen', 'pezunalunar']);
+const preloadAudioSource = (src) => {
+  return new Promise((resolve) => {
+    if (!src) {
+      resolve(false);
+      return;
+    }
+    const audio = new Audio();
+    let done = false;
+    const finish = (ok) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      audio.removeEventListener('canplaythrough', onReady);
+      audio.removeEventListener('loadedmetadata', onReady);
+      audio.removeEventListener('error', onError);
+      resolve(ok);
+    };
+    const onReady = () => finish(true);
+    const onError = () => finish(false);
+    audio.preload = 'auto';
+    audio.addEventListener('canplaythrough', onReady, { once: true });
+    audio.addEventListener('loadedmetadata', onReady, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+    audio.src = src;
+    audio.load();
+    setTimeout(() => finish(false), 2000);
+  });
+};
+
+const bootLobbyLoader = async () => {
+  if (bootLoader) {
+    bootLoader.classList.remove('hidden');
+  }
+  if (lobbySection) {
+    lobbySection.classList.add('hidden');
+  }
+
+  const characters = await fetchCharactersCatalog();
+  populateCharacterSelect(characters);
+  configureLocalAttackSound(activeCharacter);
+
+  const charList = [...availableCharacters];
+  const totalTasks = 2 + (charList.length * 2) + 2;
+  let done = 0;
+  const tick = (label) => {
+    done += 1;
+    updateBootLoader(done, totalTasks, label);
+  };
+
+  updateBootLoader(0, totalTasks, 'Preparando catalogo...');
+  setupCharacterPreview();
+  tick('Catalogo listo');
+
+  for (let i = 0; i < charList.length; i += 1) {
+    const character = charList[i];
+    // eslint-disable-next-line no-await-in-loop
+    await ensureCharacterResource(character);
+    tick(`Modelo: ${getCharacterLabel(character)}`);
+  }
+
+  for (let i = 0; i < charList.length; i += 1) {
+    const character = charList[i];
+    // eslint-disable-next-line no-await-in-loop
+    await resolveCharacterAttackSoundUrl(character);
+    tick(`Audio ataque: ${getCharacterLabel(character)}`);
+  }
+
+  await preloadAudioSource(defaultAttackSoundUrl);
+  tick('Audio base cargado');
+  await preloadAudioSource(lobbyTrackPath);
+  tick('Audio lobby cargado');
+
+  await ensureLocalAvatar();
+  mountPreviewModel();
+  for (const entry of state.remotePlayers.values()) {
+    upgradeRemotePlayerToCharacter(entry);
+  }
+  tick('Lobby listo');
+
+  if (bootLoader) {
+    bootLoader.classList.add('hidden');
+  }
+  if (lobbySection) {
+    lobbySection.classList.remove('hidden');
+  }
+  startLobbyMusic();
+};
+
+const loadCatalogs = async () => {
+  const characters = await fetchCharactersCatalog();
+  populateCharacterSelect(characters);
   configureLocalAttackSound(activeCharacter);
   await ensureCharacterResource(activeCharacter);
   await ensureLocalAvatar();
@@ -1309,21 +1583,66 @@ lobbyMusic.loop = true;
 lobbyMusic.volume = 0.34;
 let lobbyMusicUnlocked = false;
 let lobbyMusicActive = false;
-const remoteShootSound = new Audio('/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3');
-remoteShootSound.preload = 'auto';
-remoteShootSound.loop = true;
-remoteShootSound.volume = 0.12;
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
 const attackSoundExtensions = ['.ogg', '.mp3', '.wav', '.m4a', ''];
 const attackSoundUrlCache = new Map();
 let localAttackSoundCharacter = '';
-let remoteAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
-const remoteShootHoldMs = 220;
-let remoteShootSoundActive = false;
-let remoteShootSoundUntil = 0;
-let remoteShootTargetVolume = 0;
+const remoteAttackVoices = [];
+const maxRemoteAttackVoices = 24;
+
+const applyGameSettings = () => {
+  const effectiveMaster = Math.max(0, Math.min(1, settings.masterVolume));
+  shootSound.volume = 0.24 * effectiveMaster * settings.sfxVolume;
+  lobbyMusic.volume = 0.34 * effectiveMaster * settings.musicVolume;
+  camera.fov = settings.fov;
+  camera.updateProjectionMatrix();
+  thirdPersonCamera.fov = settings.fov;
+  thirdPersonCamera.updateProjectionMatrix();
+  state.showPerf = settings.showPerfByDefault || state.showPerf;
+  renderPerfPanel();
+};
+
+const syncOptionsUi = () => {
+  optMouseSensitivity.value = String(settings.mouseSensitivity);
+  optMouseSensitivityValue.textContent = settings.mouseSensitivity.toFixed(2);
+  optMasterVolume.value = String(settings.masterVolume);
+  optMasterVolumeValue.textContent = `${Math.round(settings.masterVolume * 100)}%`;
+  optMusicVolume.value = String(settings.musicVolume);
+  optMusicVolumeValue.textContent = `${Math.round(settings.musicVolume * 100)}%`;
+  optSfxVolume.value = String(settings.sfxVolume);
+  optSfxVolumeValue.textContent = `${Math.round(settings.sfxVolume * 100)}%`;
+  optFov.value = String(Math.round(settings.fov));
+  optFovValue.textContent = String(Math.round(settings.fov));
+  optShowPerf.checked = Boolean(settings.showPerfByDefault);
+};
+
+const closeOptionsMenu = () => {
+  isOptionsOpen = false;
+  optionsScreen.classList.add('hidden');
+};
+
+const openOptionsMenu = () => {
+  if (!state.joinedRoom) {
+    return;
+  }
+  isOptionsOpen = true;
+  isFiring = false;
+  clearMovementKeys();
+  optionsScreen.classList.remove('hidden');
+  if (document.pointerLockElement) {
+    document.exitPointerLock();
+  }
+};
+
+const toggleOptionsMenu = () => {
+  if (isOptionsOpen) {
+    closeOptionsMenu();
+  } else {
+    openOptionsMenu();
+  }
+};
 
 const buildAttackSoundCandidates = (characterId) => {
   const normalized = getCharacterAssetKey(characterId);
@@ -1419,24 +1738,8 @@ const configureLocalAttackSound = async (characterId) => {
   applyAudioSource(shootSound, src);
 };
 
-const configureRemoteAttackSound = async (characterId) => {
-  const normalized = String(characterId || '').trim();
-  if (normalized === remoteAttackSoundCharacter && remoteShootSound.getAttribute('data-attack-src')) {
-    return;
-  }
-
-  remoteAttackSoundCharacter = normalized;
-  const src = await resolveCharacterAttackSoundUrl(normalized);
-  if (normalized !== remoteAttackSoundCharacter) {
-    return;
-  }
-
-  stopRemoteShootSound();
-  applyAudioSource(remoteShootSound, src);
-};
-
 const shouldPlayLobbyMusic = () => {
-  return !state.joinedRoom;
+  return !state.joinedRoom && lobbySection && !lobbySection.classList.contains('hidden');
 };
 
 const startLobbyMusic = () => {
@@ -1530,75 +1833,58 @@ const getRemoteShootVolume = (origin) => {
   return 0.02 + shaped * 0.2;
 };
 
-const startRemoteShootSound = () => {
-  if (remoteShootSoundActive) {
-    return;
-  }
-
-  remoteShootSoundActive = true;
-  const maybePromise = remoteShootSound.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {
-      const currentSrc = remoteShootSound.getAttribute('data-attack-src') || '';
-      const fallbackApplied = remoteShootSound.getAttribute('data-fallback-applied') === '1';
-      if (currentSrc !== defaultAttackSoundUrl && !fallbackApplied) {
-        remoteShootSound.setAttribute('data-fallback-applied', '1');
-        applyAudioSource(remoteShootSound, defaultAttackSoundUrl);
-        const retry = remoteShootSound.play();
-        if (retry && typeof retry.catch === 'function') {
-          retry.catch(() => {
-            remoteShootSoundActive = false;
-          });
-        }
-        return;
-      }
-      remoteShootSoundActive = false;
-    });
-  }
-};
-
 const stopRemoteShootSound = () => {
-  if (!remoteShootSoundActive) {
-    return;
+  for (let i = 0; i < remoteAttackVoices.length; i += 1) {
+    const voice = remoteAttackVoices[i];
+    voice.pause();
+    voice.currentTime = 0;
   }
-
-  remoteShootSound.pause();
-  remoteShootSound.currentTime = 0;
-  remoteShootSoundActive = false;
-  remoteShootTargetVolume = 0;
-  remoteShootSoundUntil = 0;
+  remoteAttackVoices.length = 0;
 };
 
-const registerRemoteShootSound = (origin, characterId = '') => {
+const registerRemoteShootSound = async (origin, characterId = '') => {
   const volume = getRemoteShootVolume(origin);
   if (volume <= 0.02) {
     return;
   }
 
+  let src = defaultAttackSoundUrl;
   if (characterId) {
-    configureRemoteAttackSound(characterId);
+    src = await resolveCharacterAttackSoundUrl(characterId);
   }
 
-  remoteShootTargetVolume = Math.max(remoteShootTargetVolume, volume);
-  remoteShootSoundUntil = performance.now() + remoteShootHoldMs;
-  startRemoteShootSound();
+  const voice = new Audio(src || defaultAttackSoundUrl);
+  voice.preload = 'auto';
+  voice.loop = false;
+  voice.volume = volume * settings.masterVolume * settings.sfxVolume;
+
+  if (remoteAttackVoices.length >= maxRemoteAttackVoices) {
+    const oldVoice = remoteAttackVoices.shift();
+    if (oldVoice) {
+      oldVoice.pause();
+      oldVoice.currentTime = 0;
+    }
+  }
+  remoteAttackVoices.push(voice);
+
+  const cleanup = () => {
+    const idx = remoteAttackVoices.indexOf(voice);
+    if (idx >= 0) {
+      remoteAttackVoices.splice(idx, 1);
+    }
+  };
+  voice.addEventListener('ended', cleanup, { once: true });
+  voice.addEventListener('pause', cleanup, { once: true });
+
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {
+      cleanup();
+    });
+  }
 };
 
-const updateRemoteShootSound = (delta) => {
-  if (!remoteShootSoundActive) {
-    return;
-  }
-
-  const now = performance.now();
-  if (now > remoteShootSoundUntil || !state.joinedRoom || !isMatchRunning()) {
-    stopRemoteShootSound();
-    return;
-  }
-
-  const volLerp = Math.min(1, delta * 10);
-  remoteShootSound.volume += (remoteShootTargetVolume - remoteShootSound.volume) * volLerp;
-  remoteShootTargetVolume = Math.max(0.02, remoteShootTargetVolume - delta * 0.18);
-};
+const updateRemoteShootSound = () => {};
 
 const raycaster = new THREE.Raycaster();
 const centerAim = new THREE.Vector2(0, 0);
@@ -1624,6 +1910,10 @@ let isLocked = false;
 let yaw = 0;
 let pitch = 0;
 const speed = 9;
+const moveAcceleration = 24;
+const moveDeceleration = 18;
+const airControlFactor = 0.45;
+const strafeOnlySpeedFactor = 0.92;
 const playerGroundY = 1.7;
 const jumpInitialVelocity = 6.8;
 const jumpGravity = 18;
@@ -1637,6 +1927,8 @@ const hammerGravity = 19;
 const hammerAbsurdDistance = 260;
 const recoilVertical = 0.018;
 const recoilHorizontal = 0.008;
+const maxShotSpread = 1.2;
+const spreadDecayPerSecond = 2.25;
 const reloadTime = 1.2;
 const respawnDurationSeconds = 10;
 const maxHealth = 100;
@@ -1655,11 +1947,15 @@ const manaPickupAmount = 20;
 const maxShieldPickups = 30;
 const shieldPickupRespawnMs = 60_000;
 const shieldPickupAmount = 25;
-const hitDamage = 18;
+const hitDamage = Math.ceil(maxHealth / 3);
 const headshotRadius = 0.42;
 const bodyshotRadius = 0.75;
 const headCenterOffsetY = 0.18;
 const bodyCenterOffsetY = -0.45;
+const remoteHealthBarYOffset = 2.45;
+const remoteHealthBarWidth = 0.9;
+const remoteHealthBarHeight = 0.09;
+const remoteHealthBarMaxVisibleDistance = 320;
 let kills = 0;
 let health = maxHealth;
 let shield = startShield;
@@ -1679,15 +1975,50 @@ let matchWinnerEndsAt = 0;
 let matchWinnerSecondsLeft = 0;
 let bleedIntensity = 0;
 let bleedHitFlash = 0;
+let recoilKick = 0;
+let shotSpread = 0;
+let crosshairHitUntil = 0;
+let crosshairHeadshotUntil = 0;
+let crosshairKillUntil = 0;
+let damageIndicatorUntil = 0;
+let damageIndicatorAngle = 0;
 
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
 const move = new THREE.Vector3();
+const moveVelocity = new THREE.Vector3();
 const dir = new THREE.Vector3();
 const clock = new THREE.Clock();
 const remoteFacingYawOffset = Math.PI;
 const DEBUG_WEAPON_ATTACH = false;
+const remoteInterpolationMs = 110;
+const remoteExtrapolationMs = 80;
+const remoteHardCatchupDistance = 2.5;
+const remoteMediumCatchupDistance = 1.2;
+const remoteSnapDistance = 6.5;
+let serverTimeOffsetMs = 0;
+let hasServerTimeSync = false;
+
+const getEstimatedServerNowMs = () => {
+  return Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
+};
+
+const updateServerTimeOffset = (serverTs) => {
+  const ts = Number(serverTs);
+  if (!Number.isFinite(ts)) {
+    return;
+  }
+  const sample = ts - Date.now();
+  if (!hasServerTimeSync) {
+    serverTimeOffsetMs = sample;
+    hasServerTimeSync = true;
+    return;
+  }
+  const delta = sample - serverTimeOffsetMs;
+  const boundedDelta = Math.max(-30, Math.min(30, delta));
+  serverTimeOffsetMs += boundedDelta * 0.35;
+};
 
 const ammoPickupGeometry = new THREE.CapsuleGeometry(0.2, 0.18, 4, 8);
 const ammoPickupMaterial = new THREE.MeshStandardMaterial({
@@ -1728,6 +2059,348 @@ const hashStringToSeed = (value) => {
   return (hash >>> 0) || 1;
 };
 
+const createMapProfile = (seed) => {
+  const rnd = createSeededRng((Number(seed) ^ 0x5f356495) >>> 0);
+  return {
+    axisX: mapAxisXBase * (0.94 + rnd() * 0.1),
+    axisZ: mapAxisZBase * (0.94 + rnd() * 0.1),
+    amp1: 0.1 + rnd() * 0.09,
+    amp2: 0.07 + rnd() * 0.07,
+    amp3: 0.05 + rnd() * 0.06,
+    freq1: 2 + Math.floor(rnd() * 3),
+    freq2: 3 + Math.floor(rnd() * 3),
+    freq3: 5 + Math.floor(rnd() * 4),
+    phase1: rnd() * Math.PI * 2,
+    phase2: rnd() * Math.PI * 2,
+    phase3: rnd() * Math.PI * 2,
+    terrainPhase: rnd() * Math.PI * 2,
+    terrainPhaseB: rnd() * Math.PI * 2,
+    terrainPhaseC: rnd() * Math.PI * 2,
+  };
+};
+
+const getMapBoundaryRadius = (profile, theta) => {
+  if (!profile) {
+    return 1;
+  }
+  const waveA = Math.sin((theta * profile.freq1) + profile.phase1) * profile.amp1;
+  const waveB = Math.sin((theta * profile.freq2) + profile.phase2) * profile.amp2;
+  const waveC = Math.cos((theta * profile.freq3) + profile.phase3) * profile.amp3;
+  return Math.max(mapBoundaryMinRadius, Math.min(mapBoundaryMaxRadius, 1 + waveA + waveB + waveC));
+};
+
+const getBoundaryPointAt = (profile, theta, extra = 0) => {
+  const radius = getMapBoundaryRadius(profile, theta) + extra;
+  return {
+    x: Math.cos(theta) * profile.axisX * radius,
+    z: Math.sin(theta) * profile.axisZ * radius,
+  };
+};
+
+const getMapTheta = (profile, x, z) => {
+  return Math.atan2(z / Math.max(1, profile.axisZ), x / Math.max(1, profile.axisX));
+};
+
+const isInsideMapBounds = (x, z, padding = 0) => {
+  if (!currentMapProfile) {
+    return true;
+  }
+  const theta = getMapTheta(currentMapProfile, x, z);
+  const boundary = getMapBoundaryRadius(currentMapProfile, theta);
+  const norm = Math.sqrt(
+    (x * x) / (currentMapProfile.axisX * currentMapProfile.axisX)
+    + (z * z) / (currentMapProfile.axisZ * currentMapProfile.axisZ),
+  );
+  const normalizedPadding = padding / Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
+  return norm <= (boundary - normalizedPadding);
+};
+
+const clampPointToMapBounds = (x, z, padding = 0) => {
+  if (!currentMapProfile) {
+    return { x, z };
+  }
+  const theta = getMapTheta(currentMapProfile, x, z);
+  const boundary = getMapBoundaryRadius(currentMapProfile, theta);
+  const norm = Math.sqrt(
+    (x * x) / (currentMapProfile.axisX * currentMapProfile.axisX)
+    + (z * z) / (currentMapProfile.axisZ * currentMapProfile.axisZ),
+  );
+  const normalizedPadding = padding / Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
+  const maxNorm = Math.max(0.12, boundary - normalizedPadding);
+  if (norm <= maxNorm) {
+    return { x, z };
+  }
+  const safeNorm = Math.max(0.0001, norm);
+  const ratio = maxNorm / safeNorm;
+  return { x: x * ratio, z: z * ratio };
+};
+
+const getTerrainSurfaceYAt = (x, z) => {
+  if (!currentMapProfile) {
+    return 0;
+  }
+  const theta = getMapTheta(currentMapProfile, x, z);
+  const boundary = getMapBoundaryRadius(currentMapProfile, theta);
+  const norm = Math.sqrt(
+    (x * x) / (currentMapProfile.axisX * currentMapProfile.axisX)
+    + (z * z) / (currentMapProfile.axisZ * currentMapProfile.axisZ),
+  );
+  const edgeFactor = Math.max(0, Math.min(1, (norm - (boundary * 0.72)) / (boundary * 0.34)));
+  const wave = (
+    Math.sin((x * 0.042) + currentMapProfile.terrainPhase) * 1.45
+    + Math.cos((z * 0.038) + currentMapProfile.terrainPhaseB) * 1.2
+    + Math.sin(((x + z) * 0.025) + currentMapProfile.terrainPhaseC) * 1.05
+    + Math.cos(((x - z) * 0.018) + (currentMapProfile.terrainPhaseB * 0.8)) * 0.85
+  ) * 0.58;
+  const edgeDrop = Math.pow(edgeFactor, 2.1) * 8.4;
+  return terrainBaseY + wave - edgeDrop;
+};
+
+const registerShootableMesh = (mesh) => {
+  if (!mesh) {
+    return;
+  }
+  scene.add(mesh);
+  shootables.push(mesh);
+  const box = new THREE.Box3().setFromObject(mesh);
+  if (Number.isFinite(box.min.x) && Number.isFinite(box.max.x) && Number.isFinite(box.min.z) && Number.isFinite(box.max.z)) {
+    pillarBounds.push({
+      minX: box.min.x,
+      maxX: box.max.x,
+      minZ: box.min.z,
+      maxZ: box.max.z,
+    });
+  }
+};
+
+const clearKoketriaDecor = () => {
+  for (let i = koketriaDecor.length - 1; i >= 0; i -= 1) {
+    const obj = koketriaDecor[i];
+    if (!obj) {
+      continue;
+    }
+    scene.remove(obj);
+    obj.traverse((node) => {
+      if (!node.isMesh) {
+        return;
+      }
+      if (node.geometry) {
+        node.geometry.dispose();
+      }
+      if (node.material) {
+        const mats = Array.isArray(node.material) ? node.material : [node.material];
+        mats.forEach((mat) => mat.dispose());
+      }
+    });
+  }
+  koketriaDecor.length = 0;
+  reactiveNatureMaterials.length = 0;
+};
+
+const registerReactiveMaterial = (material, baseEmissive = 0.08) => {
+  if (!material) {
+    return;
+  }
+  reactiveNatureMaterials.push({
+    material,
+    base: baseEmissive,
+    phase: Math.random() * Math.PI * 2,
+  });
+  material.emissiveIntensity = baseEmissive;
+};
+
+const placeDecorAt = (obj, x, z) => {
+  if (!obj) {
+    return false;
+  }
+  if (!isInsideMapBounds(x, z, 6)) {
+    return false;
+  }
+  for (let i = 0; i < pillarBounds.length; i += 1) {
+    const pillar = pillarBounds[i];
+    if (x > pillar.minX && x < pillar.maxX && z > pillar.minZ && z < pillar.maxZ) {
+      return false;
+    }
+  }
+  obj.position.x = x;
+  obj.position.z = z;
+  scene.add(obj);
+  koketriaDecor.push(obj);
+  return true;
+};
+
+const spawnMushroomHouse = (x, z, rnd) => {
+  const mushroom = new THREE.Group();
+  const stemH = 3.2 + rnd() * 3.8;
+  const stemW = 1.1 + rnd() * 1.4;
+  const stemMat = new THREE.MeshStandardMaterial({
+    color: 0xcab48f,
+    roughness: 0.88,
+    metalness: 0.02,
+    emissive: 0x2e2218,
+    emissiveIntensity: 0.05,
+  });
+  const capMat = new THREE.MeshStandardMaterial({
+    color: rnd() > 0.5 ? 0x925d8a : 0x8c6645,
+    roughness: 0.72,
+    metalness: 0.04,
+    emissive: 0x3a2230,
+    emissiveIntensity: 0.07,
+  });
+  const windowMat = new THREE.MeshStandardMaterial({
+    color: 0xffebb2,
+    emissive: 0xf3cb7a,
+    emissiveIntensity: rnd() > 0.56 ? 0.62 : 0.28,
+    roughness: 0.2,
+    metalness: 0.05,
+  });
+
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(stemW * 0.75, stemW, stemH, 12), stemMat);
+  stem.position.y = stemH / 2;
+  mushroom.add(stem);
+
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(stemW * 1.95, 20, 16, 0, Math.PI * 2, 0, Math.PI / 1.8), capMat);
+  cap.position.y = stemH + (stemW * 0.8);
+  cap.scale.set(1.2, 0.84, 1.2);
+  mushroom.add(cap);
+
+  const door = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.36, 1.05, 12), new THREE.MeshStandardMaterial({
+    color: 0x5f4532,
+    roughness: 0.85,
+    metalness: 0.05,
+  }));
+  door.position.set(0, 0.52, stemW * 0.75);
+  mushroom.add(door);
+
+  const windows = 2 + Math.floor(rnd() * 2);
+  for (let i = 0; i < windows; i += 1) {
+    const ang = (i / windows) * Math.PI * 2 + (rnd() * 0.4);
+    const win = new THREE.Mesh(new THREE.SphereGeometry(0.23, 10, 10), windowMat.clone());
+    win.position.set(Math.cos(ang) * stemW * 0.68, 1.4 + rnd() * 1.3, Math.sin(ang) * stemW * 0.68);
+    registerReactiveMaterial(win.material, 0.2 + rnd() * 0.25);
+    mushroom.add(win);
+  }
+
+  if (rnd() > 0.72) {
+    mushroom.position.y += 0.5 + rnd() * 0.7;
+  }
+  return placeDecorAt(mushroom, x, z);
+};
+
+const spawnLivingTree = (x, z, rnd) => {
+  const tree = new THREE.Group();
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x5e4b3a,
+    roughness: 0.92,
+    metalness: 0.02,
+    emissive: 0x2a2018,
+    emissiveIntensity: 0.05,
+  });
+  const leafMat = new THREE.MeshStandardMaterial({
+    color: 0x6ea16d,
+    roughness: 0.78,
+    metalness: 0.04,
+    emissive: 0x355f34,
+    emissiveIntensity: 0.08,
+  });
+  const trunkH = 5 + rnd() * 5;
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, trunkH, 10), trunkMat);
+  trunk.position.y = trunkH / 2;
+  trunk.rotation.z = (rnd() - 0.5) * 0.22;
+  tree.add(trunk);
+
+  const crowns = 2 + Math.floor(rnd() * 3);
+  for (let i = 0; i < crowns; i += 1) {
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(1.1 + rnd() * 1.3, 14, 14),
+      leafMat.clone(),
+    );
+    puff.position.set((rnd() - 0.5) * 1.8, trunkH - 1 + (rnd() * 2.4), (rnd() - 0.5) * 1.8);
+    registerReactiveMaterial(puff.material, 0.06 + rnd() * 0.06);
+    tree.add(puff);
+  }
+
+  if (rnd() > 0.68) {
+    const eyeMat = new THREE.MeshStandardMaterial({
+      color: 0xf2ddb1,
+      emissive: 0xb98f59,
+      emissiveIntensity: 0.22,
+      roughness: 0.48,
+      metalness: 0.05,
+    });
+    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), eyeMat);
+    const eyeR = eyeL.clone();
+    eyeL.position.set(-0.22, trunkH * 0.54, 0.62);
+    eyeR.position.set(0.22, trunkH * 0.56, 0.62);
+    tree.add(eyeL);
+    tree.add(eyeR);
+  }
+
+  return placeDecorAt(tree, x, z);
+};
+
+const spawnOrganicRock = (x, z, rnd) => {
+  const rock = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.8 + rnd() * 1.4, 1),
+    new THREE.MeshStandardMaterial({
+      color: rnd() > 0.5 ? 0x6f7686 : 0x7f7a74,
+      roughness: 0.95,
+      metalness: 0.02,
+      emissive: 0x262a35,
+      emissiveIntensity: 0.06,
+    }),
+  );
+  rock.scale.set(1 + rnd(), 0.6 + rnd() * 0.8, 1 + rnd());
+  rock.rotation.set(rnd() * 0.35, rnd() * Math.PI, rnd() * 0.35);
+  rock.position.y = 0.3;
+  return placeDecorAt(rock, x, z);
+};
+
+const spawnGlowFlower = (x, z, rnd) => {
+  const flower = new THREE.Group();
+  const stem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.07, 0.68, 8),
+    new THREE.MeshStandardMaterial({
+      color: 0x5f8f5f,
+      roughness: 0.88,
+      metalness: 0.02,
+    }),
+  );
+  stem.position.y = 0.34;
+  flower.add(stem);
+
+  const petalMat = new THREE.MeshStandardMaterial({
+    color: rnd() > 0.5 ? 0xf4a3da : 0x8ce0ff,
+    roughness: 0.4,
+    metalness: 0.08,
+    emissive: 0x6d7cb0,
+    emissiveIntensity: 0.16,
+  });
+  for (let i = 0; i < 6; i += 1) {
+    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), petalMat.clone());
+    const ang = (i / 6) * Math.PI * 2;
+    petal.position.set(Math.cos(ang) * 0.18, 0.72 + Math.sin(ang * 2) * 0.02, Math.sin(ang) * 0.18);
+    registerReactiveMaterial(petal.material, 0.13 + rnd() * 0.08);
+    flower.add(petal);
+  }
+  const center = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), new THREE.MeshStandardMaterial({
+    color: 0xffe4a8,
+    emissive: 0xfad889,
+    emissiveIntensity: 0.25,
+    roughness: 0.36,
+  }));
+  center.position.y = 0.72;
+  flower.add(center);
+  return placeDecorAt(flower, x, z);
+};
+
+const triggerNaturePulse = (origin) => {
+  naturePulse = Math.min(1, naturePulse + 0.5);
+  if (origin) {
+    naturePulseOrigin.copy(origin);
+  }
+};
+
 const rebuildMapFromSeed = (seed) => {
   const normalizedSeed = Number(seed);
   if (!Number.isFinite(normalizedSeed)) {
@@ -1746,6 +2419,20 @@ const rebuildMapFromSeed = (seed) => {
   }
   shootables.length = 0;
   pillarBounds.length = 0;
+  clearKoketriaDecor();
+
+  if (terrainMesh) {
+    scene.remove(terrainMesh);
+    terrainMesh.geometry.dispose();
+    terrainMesh.material.dispose();
+    terrainMesh = null;
+  }
+  if (edgeMistMesh) {
+    scene.remove(edgeMistMesh);
+    edgeMistMesh.geometry.dispose();
+    edgeMistMesh.material.dispose();
+    edgeMistMesh = null;
+  }
 
   for (let i = ammoPickups.length - 1; i >= 0; i -= 1) {
     scene.remove(ammoPickups[i].mesh);
@@ -1973,6 +2660,62 @@ const updateBleedEffect = (delta = 0) => {
   damageOverlay.style.setProperty('--bleed-inner', `${20 + lowHealthFactor * 24}%`);
 };
 
+const triggerHitConfirm = (headshot = false) => {
+  const now = performance.now();
+  crosshairHitUntil = now + 140;
+  if (headshot) {
+    crosshairHeadshotUntil = now + 220;
+  }
+};
+
+const triggerKillConfirm = () => {
+  crosshairKillUntil = performance.now() + 320;
+};
+
+const triggerDamageIndicator = (fromPlayerId) => {
+  if (!fromPlayerId || !state.remotePlayers.has(fromPlayerId)) {
+    return;
+  }
+  const attacker = state.remotePlayers.get(fromPlayerId);
+  if (!attacker?.group) {
+    return;
+  }
+  const dx = attacker.group.position.x - camera.position.x;
+  const dz = attacker.group.position.z - camera.position.z;
+  const worldAngle = Math.atan2(dx, -dz);
+  const relative = worldAngle - yaw;
+  damageIndicatorAngle = (relative * 180) / Math.PI;
+  damageIndicatorUntil = performance.now() + 520;
+};
+
+const updateCrosshair = () => {
+  if (!crosshair) {
+    return;
+  }
+  const now = performance.now();
+  const movingSpeed = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
+  const moveSpread = Math.min(1, movingSpeed / Math.max(0.001, speed));
+  const jumpSpread = isJumping ? 0.85 : 0;
+  const gap = 5 + (moveSpread * 7.5) + (jumpSpread * 6) + (recoilKick * 10) + (shotSpread * 6.5);
+  crosshair.style.setProperty('--crosshair-gap', `${gap.toFixed(2)}px`);
+  crosshair.classList.toggle('hit', now <= crosshairHitUntil);
+  crosshair.classList.toggle('headshot', now <= crosshairHeadshotUntil);
+  crosshair.classList.toggle('kill', now <= crosshairKillUntil);
+};
+
+const updateDamageIndicator = () => {
+  if (!damageIndicator) {
+    return;
+  }
+  const visible = performance.now() <= damageIndicatorUntil;
+  if (!visible) {
+    damageIndicator.classList.remove('visible');
+    return;
+  }
+  damageIndicator.classList.add('visible');
+  damageIndicator.style.setProperty('--damage-angle', `${damageIndicatorAngle.toFixed(1)}deg`);
+};
+
 const resetCombatStats = () => {
   health = maxHealth;
   shield = startShield;
@@ -1990,6 +2733,8 @@ const resetCombatStats = () => {
   respawnEndsAt = 0;
   hideWinnerOverlay();
   isFiring = false;
+  crosshairKillUntil = 0;
+  damageIndicatorUntil = 0;
   updateRespawnOverlay();
   updateHud();
 };
@@ -2493,10 +3238,35 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   liveEntry.isDead = false;
   liveEntry.isJumping = false;
   liveEntry.deadAt = 0;
+  const hpBar = createRemoteHealthBar();
+  liveEntry.group.add(hpBar.holder);
+  liveEntry.healthBar = hpBar;
+  updateRemoteHealthBar(liveEntry);
   setRemoteIdle(liveEntry);
 };
 
 const disposeRemotePlayer = (entry) => {
+  if (entry.healthBar) {
+    if (entry.healthBar.holder?.parent) {
+      entry.healthBar.holder.parent.remove(entry.healthBar.holder);
+    }
+    if (entry.healthBar.bg) {
+      entry.healthBar.bg.geometry.dispose();
+      entry.healthBar.bg.material.dispose();
+    }
+    if (entry.healthBar.fill) {
+      entry.healthBar.fill.geometry.dispose();
+      entry.healthBar.fill.material.dispose();
+    }
+    if (entry.healthBar.text) {
+      entry.healthBar.text.geometry.dispose();
+      entry.healthBar.text.material.dispose();
+    }
+    if (entry.healthBar.textTexture) {
+      entry.healthBar.textTexture.dispose();
+    }
+    entry.healthBar = null;
+  }
   scene.remove(entry.group);
   if (entry.body) {
     entry.body.geometry.dispose();
@@ -2514,6 +3284,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
 
   state.remotePlayers.set(id, {
     id,
+    name: 'Player',
     character: resolvedCharacter,
     group: model.group,
     avatarRoot: model.avatarRoot,
@@ -2524,14 +3295,22 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     currentAnimation: null,
     animationUntil: 0,
     isDead: false,
+    health: maxHealth,
     isJumping: false,
     deadAt: 0,
     targetPosition: new THREE.Vector3(0, 0, 0),
     targetYaw: 0,
     targetPitch: 0,
+    netSnapshots: [],
+    netInitialized: false,
+    healthBar: null,
   });
 
   const entry = state.remotePlayers.get(id);
+  const hpBar = createRemoteHealthBar();
+  entry.group.add(hpBar.holder);
+  entry.healthBar = hpBar;
+  updateRemoteHealthBar(entry);
   if (DEBUG_WEAPON_ATTACH) {
     const remoteTotem = new THREE.Mesh(
       new THREE.BoxGeometry(0.15, 0.7, 0.15),
@@ -2560,6 +3339,9 @@ const syncRemotePlayer = (player) => {
   }
 
   const entry = state.remotePlayers.get(player.id);
+  if (player.name) {
+    entry.name = String(player.name);
+  }
   const hasCharacterUpdate = typeof player.character === 'string' && player.character.length > 0;
   const resolvedCharacter = hasCharacterUpdate ? resolveCharacterForPlayer(player.character) : entry.character;
   if (resolvedCharacter !== entry.character) {
@@ -2583,7 +3365,13 @@ const syncRemotePlayer = (player) => {
   }
   const pos = player.state?.position || { x: 0, y: playerGroundY, z: 0 };
   const rot = player.state?.rotation || { yaw: 0, pitch: 0 };
+  const snapshotTs = Number.isFinite(Number(player.ts)) ? Number(player.ts) : Date.now();
+  updateServerTimeOffset(snapshotTs);
   entry.isJumping = Boolean(player.state?.jumping);
+  if (Number.isFinite(Number(player.health))) {
+    entry.health = Math.max(0, Math.min(maxHealth, Math.round(Number(player.health))));
+    updateRemoteHealthBar(entry);
+  }
   const hasAliveFlag = typeof player.alive === 'boolean';
   if (hasAliveFlag) {
     if (!player.alive && !entry.isDead) {
@@ -2591,17 +3379,41 @@ const syncRemotePlayer = (player) => {
       entry.deadAt = performance.now();
       entry.animationUntil = 0;
       setRemoteAnimation(entry, 'death');
+      updateRemoteHealthBar(entry);
     } else if (player.alive && entry.isDead) {
       entry.isDead = false;
       entry.deadAt = 0;
       entry.animationUntil = 0;
       setRemoteIdle(entry);
+      if (!Number.isFinite(Number(player.health))) {
+        entry.health = maxHealth;
+      }
+      updateRemoteHealthBar(entry);
     }
   }
 
-  entry.targetPosition.set(pos.x, pos.y - playerGroundY, pos.z);
-  entry.targetYaw = rot.yaw;
-  entry.targetPitch = rot.pitch;
+  const snapshot = {
+    ts: snapshotTs,
+    x: pos.x,
+    y: pos.y - playerGroundY,
+    z: pos.z,
+    yaw: rot.yaw,
+    pitch: rot.pitch,
+    jumping: Boolean(player.state?.jumping),
+  };
+  entry.netSnapshots.push(snapshot);
+  if (entry.netSnapshots.length > 32) {
+    entry.netSnapshots.splice(0, entry.netSnapshots.length - 32);
+  }
+
+  if (!entry.netInitialized) {
+    entry.group.position.set(snapshot.x, snapshot.y, snapshot.z);
+    entry.targetPosition.set(snapshot.x, snapshot.y, snapshot.z);
+    entry.group.rotation.y = snapshot.yaw + remoteFacingYawOffset;
+    entry.targetYaw = snapshot.yaw;
+    entry.targetPitch = snapshot.pitch;
+    entry.netInitialized = true;
+  }
 };
 
 const syncRemotePlayersFromRoom = (roomState) => {
@@ -3107,7 +3919,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'player_move') {
       const {
-        playerId, position, rotation, character, jumping,
+        playerId, position, rotation, character, jumping, ts,
       } = payload.data || {};
       if (!playerId || (state.self && playerId === state.self.id)) {
         return;
@@ -3115,6 +3927,7 @@ const connectWebSocket = () => {
 
       syncRemotePlayer({
         id: playerId,
+        ts,
         character,
         state: { position, rotation, jumping },
       });
@@ -3151,12 +3964,16 @@ const connectWebSocket = () => {
 
       if (shooterUsesHolyShots) {
         createHolyShotVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        triggerNaturePulse(origin);
       } else if (shooterUsesHammer) {
         createSacredHammerVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        triggerNaturePulse(origin);
       } else if (shooterUsesPoison) {
         createPoisonGasVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        triggerNaturePulse(origin);
       } else if (shooterUsesLunar) {
         createLunarFireVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        triggerNaturePulse(origin);
       } else {
         createTracer(origin, visualEnd, 0x59ccff);
         createImpact(visualEnd, 0x59ccff);
@@ -3179,7 +3996,13 @@ const connectWebSocket = () => {
         shield = Math.max(0, Math.min(maxShield, Math.round(nextShield)));
       }
       bleedHitFlash = Math.min(0.45, bleedHitFlash + (isHeadshot ? 0.35 : 0.2));
+      triggerDamageIndicator(payload.data?.fromPlayerId);
       updateHud();
+      return;
+    }
+
+    if (payload.type === 'hit_confirm') {
+      triggerHitConfirm(Boolean(payload.data?.headshot));
       return;
     }
 
@@ -3198,6 +4021,9 @@ const connectWebSocket = () => {
       if (!playerId) {
         return;
       }
+      if (state.self && payload.data?.killerId === state.self.id && playerId !== state.self.id) {
+        triggerKillConfirm();
+      }
 
       if (state.self && playerId === state.self.id) {
         health = 0;
@@ -3212,10 +4038,12 @@ const connectWebSocket = () => {
 
       const player = state.remotePlayers.get(playerId);
       player.isDead = true;
+      player.health = 0;
       player.isJumping = false;
       player.deadAt = performance.now();
       setRemoteAnimation(player, 'death');
       player.animationUntil = 0;
+      updateRemoteHealthBar(player);
       return;
     }
 
@@ -3246,8 +4074,12 @@ const connectWebSocket = () => {
       }
       remote.isDead = false;
       remote.deadAt = 0;
+      remote.health = Number.isFinite(Number(payload.data?.health))
+        ? Math.max(0, Math.min(maxHealth, Math.round(Number(payload.data.health))))
+        : maxHealth;
       remote.animationUntil = 0;
       setRemoteIdle(remote);
+      updateRemoteHealthBar(remote);
       return;
     }
 
@@ -3372,6 +4204,54 @@ endGameBtn.addEventListener('click', () => {
   sendWs({ type: 'end_game' });
 });
 
+optResumeBtn.addEventListener('click', () => {
+  closeOptionsMenu();
+});
+
+optMouseSensitivity.addEventListener('input', () => {
+  settings.mouseSensitivity = clampSetting(optMouseSensitivity.value, 0.4, 2.5, settings.mouseSensitivity);
+  optMouseSensitivityValue.textContent = settings.mouseSensitivity.toFixed(2);
+  saveSettings();
+});
+
+optMasterVolume.addEventListener('input', () => {
+  settings.masterVolume = clampSetting(optMasterVolume.value, 0, 1, settings.masterVolume);
+  optMasterVolumeValue.textContent = `${Math.round(settings.masterVolume * 100)}%`;
+  applyGameSettings();
+  saveSettings();
+});
+
+optMusicVolume.addEventListener('input', () => {
+  settings.musicVolume = clampSetting(optMusicVolume.value, 0, 1, settings.musicVolume);
+  optMusicVolumeValue.textContent = `${Math.round(settings.musicVolume * 100)}%`;
+  applyGameSettings();
+  saveSettings();
+});
+
+optSfxVolume.addEventListener('input', () => {
+  settings.sfxVolume = clampSetting(optSfxVolume.value, 0, 1, settings.sfxVolume);
+  optSfxVolumeValue.textContent = `${Math.round(settings.sfxVolume * 100)}%`;
+  applyGameSettings();
+  saveSettings();
+});
+
+optFov.addEventListener('input', () => {
+  settings.fov = clampSetting(optFov.value, 60, 100, settings.fov);
+  optFovValue.textContent = String(Math.round(settings.fov));
+  applyGameSettings();
+  saveSettings();
+});
+
+optShowPerf.addEventListener('change', () => {
+  settings.showPerfByDefault = Boolean(optShowPerf.checked);
+  if (!state.showPerf && settings.showPerfByDefault) {
+    state.showPerf = true;
+    requestLatencyProbe(true);
+  }
+  renderPerfPanel();
+  saveSettings();
+});
+
 const updateLook = () => {
   euler.set(pitch, yaw, 0);
   camera.quaternion.setFromEuler(euler);
@@ -3405,12 +4285,14 @@ const getRenderCamera = () => {
   return isThirdPerson ? thirdPersonCamera : camera;
 };
 
-const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance) => {
+const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, options = {}) => {
   let closestDistance = maxDistance;
   let closestPoint = null;
   const tmpCenter = new THREE.Vector3();
   const toCenter = new THREE.Vector3();
   const projectedPoint = new THREE.Vector3();
+  const headRadius = Number.isFinite(options.headRadius) ? options.headRadius : headshotRadius;
+  const bodyRadius = Number.isFinite(options.bodyRadius) ? options.bodyRadius : bodyshotRadius;
 
   const tryHitSphere = (center, radius) => {
     toCenter.copy(center).sub(origin);
@@ -3432,10 +4314,10 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance) => {
     }
 
     tmpCenter.set(entry.group.position.x, entry.group.position.y + 1.85, entry.group.position.z);
-    tryHitSphere(tmpCenter, headshotRadius);
+    tryHitSphere(tmpCenter, headRadius);
 
     tmpCenter.set(entry.group.position.x, entry.group.position.y + 1.1, entry.group.position.z);
-    tryHitSphere(tmpCenter, bodyshotRadius);
+    tryHitSphere(tmpCenter, bodyRadius);
   }
 
   if (!closestPoint) {
@@ -3446,6 +4328,103 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance) => {
     point: closestPoint,
     distance: closestDistance,
   };
+};
+
+const createRemoteHealthBar = () => {
+  const holder = new THREE.Group();
+
+  const bg = new THREE.Mesh(
+    new THREE.PlaneGeometry(remoteHealthBarWidth, remoteHealthBarHeight),
+    new THREE.MeshBasicMaterial({
+      color: 0x1b1b1b,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  bg.renderOrder = 999;
+  bg.position.set(0, remoteHealthBarYOffset, 0);
+  holder.add(bg);
+
+  const fill = new THREE.Mesh(
+    new THREE.PlaneGeometry(remoteHealthBarWidth - 0.02, remoteHealthBarHeight - 0.02),
+    new THREE.MeshBasicMaterial({
+      color: 0x56ff6d,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  fill.renderOrder = 1000;
+  fill.position.set(0, remoteHealthBarYOffset, 0.001);
+  holder.add(fill);
+
+  const textCanvas = document.createElement('canvas');
+  textCanvas.width = 256;
+  textCanvas.height = 64;
+  const textCtx = textCanvas.getContext('2d');
+  const textTexture = new THREE.CanvasTexture(textCanvas);
+  textTexture.minFilter = THREE.LinearFilter;
+  textTexture.magFilter = THREE.LinearFilter;
+  textTexture.generateMipmaps = false;
+  const text = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.05, 0.18),
+    new THREE.MeshBasicMaterial({
+      map: textTexture,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  text.renderOrder = 1001;
+  text.position.set(0, remoteHealthBarYOffset + 0.16, 0.001);
+  holder.add(text);
+
+  return {
+    holder, bg, fill, text, textCanvas, textCtx, textTexture, lastText: '',
+  };
+};
+
+const updateRemoteHealthBar = (entry) => {
+  if (!entry?.healthBar?.fill) {
+    return;
+  }
+  const safeHealth = Number.isFinite(Number(entry.health)) ? Number(entry.health) : maxHealth;
+  const normalized = Math.max(0, Math.min(1, safeHealth / maxHealth));
+  entry.healthBar.fill.scale.x = Math.max(0.001, normalized);
+  entry.healthBar.fill.position.x = ((normalized - 1) * (remoteHealthBarWidth - 0.02)) * 0.5;
+  if (normalized > 0.66) {
+    entry.healthBar.fill.material.color.set(0x56ff6d);
+  } else if (normalized > 0.33) {
+    entry.healthBar.fill.material.color.set(0xffe36a);
+  } else {
+    entry.healthBar.fill.material.color.set(0xff6767);
+  }
+  const hpText = `${String(entry.name || 'Player')} ${Math.round(safeHealth)}`;
+  if (entry.healthBar.lastText !== hpText && entry.healthBar.textCtx) {
+    const ctx = entry.healthBar.textCtx;
+    ctx.clearRect(0, 0, entry.healthBar.textCanvas.width, entry.healthBar.textCanvas.height);
+    ctx.font = 'bold 24px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.lineWidth = 6;
+    ctx.strokeText(hpText, entry.healthBar.textCanvas.width / 2, 32);
+    ctx.fillStyle = '#d8ffd8';
+    ctx.fillText(hpText, entry.healthBar.textCanvas.width / 2, 32);
+    entry.healthBar.textTexture.needsUpdate = true;
+    entry.healthBar.lastText = hpText;
+  }
+  entry.healthBar.holder.visible = !entry.isDead;
 };
 
 const sendLocalPlayerState = (force = false) => {
@@ -3471,11 +4450,6 @@ const sendLocalPlayerState = (force = false) => {
   });
 };
 
-const clampToMap = (value) => {
-  const edge = mapHalfExtent - playerCollisionRadius;
-  return Math.max(-edge, Math.min(edge, value));
-};
-
 const collidesWithPillar = (x, z) => {
   for (let i = 0; i < pillarBounds.length; i += 1) {
     const pillar = pillarBounds[i];
@@ -3495,8 +4469,9 @@ const collidesWithPillar = (x, z) => {
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
-  const clampedX = clampToMap(targetX);
-  const clampedZ = clampToMap(targetZ);
+  const edge = mapHalfExtent - playerCollisionRadius;
+  const clampedX = Math.max(-edge, Math.min(edge, targetX));
+  const clampedZ = Math.max(-edge, Math.min(edge, targetZ));
 
   let resolvedX = currentX;
   let resolvedZ = currentZ;
@@ -3529,6 +4504,9 @@ document.addEventListener('pointerlockchange', () => {
   app.classList.toggle('locked', isLocked);
   if (!isLocked) {
     isFiring = false;
+    if (state.joinedRoom && !isOptionsOpen && !isRespawning && !isMatchEnding && !isChatTyping) {
+      openOptionsMenu();
+    }
   }
 });
 
@@ -3536,8 +4514,9 @@ document.addEventListener('mousemove', (event) => {
   if (!isLocked || !canPlay()) {
     return;
   }
-  yaw -= event.movementX * 0.0021;
-  pitch -= event.movementY * 0.0021;
+  const sensitivity = 0.0021 * settings.mouseSensitivity;
+  yaw -= event.movementX * sensitivity;
+  pitch -= event.movementY * sensitivity;
   pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
   updateLook();
   sendLocalPlayerState();
@@ -3557,6 +4536,12 @@ window.addEventListener('mouseup', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'Escape' && !isChatTyping) {
+    event.preventDefault();
+    toggleOptionsMenu();
+    return;
+  }
+
   if (event.code === 'Enter') {
     event.preventDefault();
     if (!state.joinedRoom) {
@@ -3690,21 +4675,42 @@ const shoot = () => {
   updateHud();
 
   camera.getWorldDirection(dir);
-  const origin = camera.position.clone().add(dir.clone().multiplyScalar(0.55));
+  const baseDirection = dir.clone().normalize();
+  const origin = camera.position.clone().add(baseDirection.clone().multiplyScalar(0.55));
+  const movingSpeed = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
+  const moveFactor = Math.min(1, movingSpeed / Math.max(0.001, speed));
+  const isBulletWeapon = !usingMana;
+  const bulletSpread = isBulletWeapon
+    ? ((0.0018 + (moveFactor * 0.0032) + (isJumping ? 0.0055 : 0) + (shotSpread * 0.0048)) * (1 / settings.mouseSensitivity))
+    : 0;
+  const shotDirection = baseDirection.clone();
+  if (bulletSpread > 0) {
+    const rightAxis = new THREE.Vector3().crossVectors(shotDirection, camera.up).normalize();
+    const upAxis = new THREE.Vector3().crossVectors(rightAxis, shotDirection).normalize();
+    const jitterX = (Math.random() * 2 - 1) * bulletSpread;
+    const jitterY = (Math.random() * 2 - 1) * bulletSpread;
+    shotDirection
+      .add(rightAxis.multiplyScalar(jitterX))
+      .add(upAxis.multiplyScalar(jitterY))
+      .normalize();
+  }
 
-  raycaster.setFromCamera(centerAim, getRenderCamera());
+  raycaster.set(origin, shotDirection);
   raycaster.far = 220;
   const hits = raycaster.intersectObjects(shootables, false);
 
   let hitPoint = hits.length > 0
     ? hits[0].point
-    : origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(120));
+    : origin.clone().add(shotDirection.clone().multiplyScalar(120));
 
   if (usingMana || usingHammer || usingPoison) {
+    const assistHeadRadius = headshotRadius + ((usingHammer || usingPoison) ? 0.1 : 0);
+    const assistBodyRadius = bodyshotRadius + ((usingHammer || usingPoison) ? 0.22 : 0);
     const characterHit = getClosestRemoteCharacterHitPoint(
       origin,
-      raycaster.ray.direction,
+      shotDirection,
       origin.distanceTo(hitPoint),
+      { headRadius: assistHeadRadius, bodyRadius: assistBodyRadius },
     );
     if (characterHit?.point) {
       hitPoint.copy(characterHit.point);
@@ -3714,7 +4720,7 @@ const shoot = () => {
   if (usingHammer) {
     const currentDistance = origin.distanceTo(hitPoint);
     if (currentDistance > pumoriMaxThrowDistance) {
-      hitPoint = origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(pumoriMaxThrowDistance));
+      hitPoint = origin.clone().add(shotDirection.clone().multiplyScalar(pumoriMaxThrowDistance));
     }
   }
 
@@ -3722,12 +4728,16 @@ const shoot = () => {
 
   if (usingHoly) {
     createHolyShotVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    triggerNaturePulse(origin);
   } else if (usingHammer) {
     createSacredHammerVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    triggerNaturePulse(origin);
   } else if (usingPoison) {
     createPoisonGasVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    triggerNaturePulse(origin);
   } else if (usingLunar) {
     createLunarFireVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    triggerNaturePulse(origin);
   } else {
     createTracer(origin, hitPoint);
     createImpact(hitPoint);
@@ -3737,14 +4747,16 @@ const shoot = () => {
     type: 'player_shoot',
     origin: { x: origin.x, y: origin.y, z: origin.z },
     direction: {
-      x: raycaster.ray.direction.x,
-      y: raycaster.ray.direction.y,
-      z: raycaster.ray.direction.z,
+      x: shotDirection.x,
+      y: shotDirection.y,
+      z: shotDirection.z,
     },
     distance,
   });
 
   muzzleFlash.intensity = 2.3;
+  recoilKick = Math.min(1.3, recoilKick + 0.52 + (moveFactor * 0.14) + (isJumping ? 0.18 : 0));
+  shotSpread = Math.min(maxShotSpread, shotSpread + (isBulletWeapon ? (0.22 + moveFactor * 0.18 + (isJumping ? 0.24 : 0)) : 0.08));
 
   pitch += (Math.random() * 0.5 + 0.5) * recoilVertical;
   yaw += (Math.random() - 0.5) * recoilHorizontal;
@@ -3781,7 +4793,8 @@ const collectShieldPickup = (pickup, nowMs) => {
 };
 
 const updateMovement = (delta) => {
-  if (!canPlay()) {
+  if (!canPlay() || isOptionsOpen) {
+    moveVelocity.multiplyScalar(Math.max(0, 1 - (delta * 10)));
     return;
   }
 
@@ -3796,13 +4809,34 @@ const updateMovement = (delta) => {
   if (keys.KeyA) move.sub(right);
   if (keys.KeyD) move.add(right);
 
-  if (move.lengthSq() > 0) {
-    move.normalize().multiplyScalar(speed * delta);
-    const next = applyWorldCollisions(
-      camera.position.x + move.x,
-      camera.position.z + move.z,
-    );
+  const hasInput = move.lengthSq() > 0;
+  if (hasInput) {
+    move.normalize().multiplyScalar(speed);
+    const strafeOnly = (keys.KeyA || keys.KeyD) && !(keys.KeyW || keys.KeyS);
+    if (strafeOnly) {
+      move.multiplyScalar(strafeOnlySpeedFactor);
+    }
+  }
+
+  const controlFactor = isJumping ? airControlFactor : 1;
+  const response = 1 - Math.exp(-((hasInput ? moveAcceleration : moveDeceleration) * controlFactor) * delta);
+  moveVelocity.x += ((hasInput ? move.x : 0) - moveVelocity.x) * response;
+  moveVelocity.z += ((hasInput ? move.z : 0) - moveVelocity.z) * response;
+
+  if (Math.abs(moveVelocity.x) < 0.0001) moveVelocity.x = 0;
+  if (Math.abs(moveVelocity.z) < 0.0001) moveVelocity.z = 0;
+
+  if (moveVelocity.lengthSq() > 0) {
+    const desiredX = camera.position.x + (moveVelocity.x * delta);
+    const desiredZ = camera.position.z + (moveVelocity.z * delta);
+    const next = applyWorldCollisions(desiredX, desiredZ);
     const moved = Math.abs(next.x - camera.position.x) > 0.0001 || Math.abs(next.z - camera.position.z) > 0.0001;
+    if (Math.abs(next.x - desiredX) > 0.0002) {
+      moveVelocity.x = 0;
+    }
+    if (Math.abs(next.z - desiredZ) > 0.0002) {
+      moveVelocity.z = 0;
+    }
     camera.position.x = next.x;
     camera.position.z = next.z;
     camera.position.y = Math.max(playerGroundY, camera.position.y);
@@ -3942,12 +4976,108 @@ const updateSnow = (delta) => {
   snowGeo.attributes.position.needsUpdate = true;
 };
 
+const updateKoketriaNature = (delta) => {
+  const pulseDecay = currentWeather === 'night' ? 0.35 : 0.55;
+  naturePulse = Math.max(0, naturePulse - (delta * pulseDecay));
+
+  const now = performance.now() * 0.001;
+  const positions = lowSparkGeo.attributes.position.array;
+  for (let i = 0; i < lowSparkCount; i += 1) {
+    const idx = i * 3;
+    positions[idx + 1] += Math.sin((now * lowSparkVel[i]) + i) * 0.003;
+    positions[idx] += Math.cos((now * 0.7) + i) * 0.0025;
+    positions[idx + 2] += Math.sin((now * 0.5) + i) * 0.0025;
+  }
+  lowSparkGeo.attributes.position.needsUpdate = true;
+
+  const pulseBoost = naturePulse * 0.95;
+  for (let i = 0; i < reactiveNatureMaterials.length; i += 1) {
+    const entry = reactiveNatureMaterials[i];
+    const jitter = (Math.sin((now * 1.6) + entry.phase) + 1) * 0.035;
+    entry.material.emissiveIntensity = entry.base + jitter + pulseBoost;
+    if (entry.material.color && pulseBoost > 0.08) {
+      entry.material.color.offsetHSL(Math.sin(now + entry.phase) * 0.0003, 0.0004, 0.0003);
+    }
+  }
+
+  if (edgeMistMesh?.material) {
+    edgeMistMesh.material.opacity = 0.14 + (Math.sin(now * 0.7) * 0.025) + (naturePulse * 0.08);
+  }
+};
+
 const updateRemotePlayers = (delta) => {
-  const factor = Math.min(1, delta * 9);
+  const baseFactor = Math.min(1, delta * 9);
   const now = performance.now();
+  const renderTs = getEstimatedServerNowMs() - remoteInterpolationMs;
 
   for (const entry of state.remotePlayers.values()) {
-    entry.group.position.lerp(entry.targetPosition, factor);
+    const snapshots = entry.netSnapshots || [];
+    if (snapshots.length > 0) {
+      const pruneBefore = renderTs - 1000;
+      while (snapshots.length > 2 && snapshots[0].ts < pruneBefore) {
+        snapshots.shift();
+      }
+
+      let targetState = snapshots[snapshots.length - 1];
+      for (let i = 1; i < snapshots.length; i += 1) {
+        const prev = snapshots[i - 1];
+        const next = snapshots[i];
+        if (renderTs < prev.ts || renderTs > next.ts) {
+          continue;
+        }
+        const span = Math.max(1, next.ts - prev.ts);
+        const t = Math.max(0, Math.min(1, (renderTs - prev.ts) / span));
+        targetState = {
+          x: prev.x + ((next.x - prev.x) * t),
+          y: prev.y + ((next.y - prev.y) * t),
+          z: prev.z + ((next.z - prev.z) * t),
+          yaw: prev.yaw + (((next.yaw - prev.yaw + Math.PI * 3) % (Math.PI * 2) - Math.PI) * t),
+          pitch: prev.pitch + ((next.pitch - prev.pitch) * t),
+          jumping: prev.jumping || next.jumping,
+          ts: renderTs,
+        };
+        break;
+      }
+
+      if (snapshots.length >= 2 && renderTs > snapshots[snapshots.length - 1].ts) {
+        const last = snapshots[snapshots.length - 1];
+        const prev = snapshots[snapshots.length - 2];
+        const lateByMs = renderTs - last.ts;
+        if (lateByMs <= remoteExtrapolationMs) {
+          const dt = Math.max(1, last.ts - prev.ts);
+          const ratio = lateByMs / dt;
+          targetState = {
+            x: last.x + ((last.x - prev.x) * ratio),
+            y: last.y + ((last.y - prev.y) * ratio),
+            z: last.z + ((last.z - prev.z) * ratio),
+            yaw: last.yaw,
+            pitch: last.pitch,
+            jumping: last.jumping,
+            ts: renderTs,
+          };
+        } else {
+          targetState = last;
+        }
+      }
+
+      entry.targetPosition.set(targetState.x, targetState.y, targetState.z);
+      entry.targetYaw = targetState.yaw;
+      entry.targetPitch = targetState.pitch;
+      entry.isJumping = Boolean(targetState.jumping);
+    }
+
+    const positionError = entry.group.position.distanceTo(entry.targetPosition);
+    let factor = baseFactor;
+    if (positionError > remoteHardCatchupDistance) {
+      factor = Math.max(factor, Math.min(1, delta * 20));
+    } else if (positionError > remoteMediumCatchupDistance) {
+      factor = Math.max(factor, Math.min(1, delta * 13));
+    }
+    if (positionError > remoteSnapDistance) {
+      entry.group.position.copy(entry.targetPosition);
+    } else {
+      entry.group.position.lerp(entry.targetPosition, factor);
+    }
     entry.group.rotation.y = lerpAngle(
       entry.group.rotation.y,
       entry.targetYaw + remoteFacingYawOffset,
@@ -3958,6 +5088,14 @@ const updateRemotePlayers = (delta) => {
 
     if (entry.head) {
       entry.head.rotation.x = lerpAngle(entry.head.rotation.x, entry.targetPitch, factor);
+    }
+    if (entry.healthBar?.holder) {
+      entry.healthBar.holder.quaternion.copy(getRenderCamera().quaternion);
+      const distance = entry.group.position.distanceTo(getRenderCamera().position);
+      const visibleByDistance = distance <= remoteHealthBarMaxVisibleDistance;
+      const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
+      entry.healthBar.holder.scale.setScalar(scale);
+      entry.healthBar.holder.visible = !entry.isDead && visibleByDistance;
     }
 
     if (entry.mixer) {
@@ -3996,6 +5134,8 @@ const updateRemotePlayers = (delta) => {
 
 const updateEffects = (delta) => {
   muzzleFlash.intensity = Math.max(0, muzzleFlash.intensity - 20 * delta);
+  recoilKick = Math.max(0, recoilKick - (delta * 4.8));
+  shotSpread = Math.max(0, shotSpread - (delta * spreadDecayPerSecond));
 
   for (let i = activeTracers.length - 1; i >= 0; i -= 1) {
     const tracer = activeTracers[i];
@@ -4420,6 +5560,10 @@ const updateShooting = (delta) => {
   }
 
   cooldown -= delta;
+  if (isOptionsOpen) {
+    isFiring = false;
+    return;
+  }
   if (isLocked && isFiring && cooldown <= 0 && !isReloading) {
     shoot();
     cooldown = getCurrentAttackIntervalSeconds();
@@ -4485,6 +5629,7 @@ const animate = () => {
   updateShieldPickups(delta);
   updateRain(delta);
   updateSnow(delta);
+  updateKoketriaNature(delta);
   updateRemotePlayers(delta);
   updateHolyProjectiles(delta);
   updateHammerProjectiles(delta);
@@ -4494,6 +5639,8 @@ const animate = () => {
   updateRespawnCountdown();
   updateWinnerCountdown();
   updateEffects(delta);
+  updateCrosshair();
+  updateDamageIndicator();
   updateRemoteShootSound(delta);
   updateBleedEffect(delta);
   if (previewState.mixer) {
@@ -4520,6 +5667,9 @@ window.addEventListener('resize', () => {
   }
 });
 
+loadSettings();
+syncOptionsUi();
+applyGameSettings();
 setInRoom(false);
 applyWeather('night');
 setupCharacterPreview();
@@ -4529,4 +5679,4 @@ renderRooms();
 updateLook();
 animate();
 connectWebSocket();
-loadCatalogs();
+bootLobbyLoader();
