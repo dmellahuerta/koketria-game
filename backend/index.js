@@ -15,6 +15,7 @@ const envNumber = (name, fallback) => {
 const rooms = new Map();
 const clients = new Map();
 const weatherTypes = ['rainy', 'sunny', 'night', 'snow'];
+const battleThemes = ['battle1', 'battle2', 'battle3'];
 const maxRooms = 1;
 const maxPlayersPerRoom = 5;
 const serverRoomId = 'main';
@@ -86,6 +87,21 @@ const pickWeatherDifferentFrom = (currentWeather) => {
   return candidates[index];
 };
 
+const pickBattleTheme = () => {
+  const index = Math.floor(Math.random() * battleThemes.length);
+  return battleThemes[index];
+};
+
+const pickBattleThemeDifferentFrom = (currentTheme) => {
+  const current = String(currentTheme || '').trim();
+  if (!current || battleThemes.length < 2 || !battleThemes.includes(current)) {
+    return pickBattleTheme();
+  }
+  const candidates = battleThemes.filter((theme) => theme !== current);
+  const index = Math.floor(Math.random() * candidates.length);
+  return candidates[index];
+};
+
 const ensureServerRoom = () => {
   const existing = rooms.get(serverRoomId);
   if (existing) {
@@ -98,6 +114,7 @@ const ensureServerRoom = () => {
     hostId: null,
     status: 'in_game',
     weather: pickWeather(),
+    battleTheme: pickBattleTheme(),
     mapSeed: Math.floor(Math.random() * 0x7fffffff),
     isServerManaged: true,
     players: new Set(),
@@ -774,6 +791,7 @@ const startRoundResetCountdown = (room, winnerId) => {
       status: room.status,
       hostId: room.hostId,
       weather: room.weather,
+      battleTheme: room.battleTheme,
     }),
   });
 
@@ -798,6 +816,7 @@ const startRoundResetCountdown = (room, winnerId) => {
     resetRoomStats(room);
     resetRoomCombat(room);
     room.weather = pickWeatherDifferentFrom(room.weather);
+    room.battleTheme = pickBattleThemeDifferentFrom(room.battleTheme);
     room.status = 'in_game';
 
     broadcastToRoom(room, {
@@ -807,6 +826,7 @@ const startRoundResetCountdown = (room, winnerId) => {
         status: room.status,
         hostId: room.hostId,
         weather: room.weather,
+        battleTheme: room.battleTheme,
       }),
     });
 
@@ -857,6 +877,7 @@ const getRoomSummary = (room) => {
     hostId: room.hostId,
     status: room.status,
     weather: room.weather,
+    battleTheme: room.battleTheme,
     mapSeed: ensureRoomMapSeed(room),
   };
 };
@@ -969,6 +990,7 @@ const leaveCurrentRoom = (client) => {
       room.hostId = null;
       room.status = 'in_game';
       room.weather = pickWeatherDifferentFrom(room.weather);
+      room.battleTheme = pickBattleThemeDifferentFrom(room.battleTheme);
       broadcastRoomState(room);
     }
     broadcastRoomList();
@@ -993,6 +1015,7 @@ const joinRoom = (client, room) => {
 
   if (wasEmpty) {
     room.weather = pickWeatherDifferentFrom(room.weather);
+    room.battleTheme = pickBattleThemeDifferentFrom(room.battleTheme);
   }
 
   room.players.add(client.id);
@@ -1252,6 +1275,7 @@ const start = async () => {
               status: room.status,
               hostId: room.hostId,
               weather: room.weather,
+              battleTheme: room.battleTheme,
             }),
           });
 

@@ -283,6 +283,7 @@ const settings = {
   fov: 75,
   showPerfByDefault: false,
 };
+const battleThemeIds = ['battle1', 'battle2', 'battle3'];
 
 const clearMovementKeys = () => {
   keys.KeyW = false;
@@ -411,11 +412,7 @@ const shuffleArray = (values) => {
 
 const setInRoom = (value) => {
   app.classList.toggle('in-room', value);
-  if (value) {
-    stopLobbyMusic();
-  } else {
-    startLobbyMusic();
-  }
+  refreshBackgroundMusic();
   if (!value && document.pointerLockElement) {
     document.exitPointerLock();
   }
@@ -1535,14 +1532,26 @@ const bootLobbyLoader = async () => {
   configureLocalAttackSound(activeCharacter);
 
   const charList = [...availableCharacters];
-  const totalTasks = 2 + (charList.length * 2) + 4;
+  const totalTasks = 1
+    + 1
+    + (charList.length * 2)
+    + 1
+    + battleThemeIds.length
+    + 1
+    + 3
+    + 1;
   let done = 0;
   const tick = (label) => {
     done += 1;
     updateBootLoader(done, totalTasks, label);
   };
 
-  updateBootLoader(0, totalTasks, 'Preparando catalogo...');
+  updateBootLoader(0, totalTasks, 'Cargando tema pre-lobby...');
+  await preloadAudioSource(preLobbyTrackPath, 10000);
+  tick('Tema pre-lobby cargado');
+  refreshBackgroundMusic();
+
+  updateBootLoader(done, totalTasks, 'Preparando catalogo...');
   setupCharacterPreview();
   tick('Catalogo listo');
 
@@ -1562,12 +1571,20 @@ const bootLobbyLoader = async () => {
 
   await preloadAudioSource(defaultAttackSoundUrl, 6000);
   tick('Audio base cargado');
+  for (let i = 0; i < battleThemeIds.length; i += 1) {
+    const themeId = battleThemeIds[i];
+    // eslint-disable-next-line no-await-in-loop
+    await preloadAudioSource(getBattleThemeTrackPath(themeId), 10000);
+    tick(`Tema batalla: ${themeId}`);
+  }
   await preloadAudioSource(lobbyTrackPath, 10000);
   tick('Audio lobby cargado');
   await loadPickupModelTemplate('mana');
   tick('Item mana cargado');
   await loadPickupModelTemplate('defensa');
   tick('Item defensa cargado');
+  await loadPickupModelTemplate('vida');
+  tick('Item vida cargado');
 
   await ensureLocalAvatar();
   mountPreviewModel();
@@ -1582,7 +1599,7 @@ const bootLobbyLoader = async () => {
   if (lobbySection) {
     lobbySection.classList.remove('hidden');
   }
-  startLobbyMusic();
+  refreshBackgroundMusic();
 };
 
 const loadCatalogs = async () => {
@@ -1699,13 +1716,33 @@ shootSound.volume = 0.24;
 let shootSoundActive = false;
 const localAttackVoices = [];
 const maxLocalAttackVoices = 8;
+const preLobbyTrackPath = '/lobby/1.mp3';
 const lobbyTrackPath = '/lobby/1.mp3';
+const battleThemeTrackById = {
+  battle1: '/themes/battle1.mp3',
+  battle2: '/themes/battle2.mp3',
+  battle3: '/themes/battle3.mp3',
+};
+const getBattleThemeTrackPath = (themeId) => {
+  return battleThemeTrackById[themeId] || battleThemeTrackById.battle1;
+};
+const preLobbyMusic = new Audio(preLobbyTrackPath);
+preLobbyMusic.preload = 'auto';
+preLobbyMusic.loop = true;
+preLobbyMusic.volume = 0.28;
 const lobbyMusic = new Audio(lobbyTrackPath);
 lobbyMusic.preload = 'auto';
 lobbyMusic.loop = true;
 lobbyMusic.volume = 0.34;
-let lobbyMusicUnlocked = false;
+const battleMusic = new Audio(getBattleThemeTrackPath('battle1'));
+battleMusic.preload = 'auto';
+battleMusic.loop = true;
+battleMusic.volume = 0.38;
+let audioUnlocked = false;
+let preLobbyMusicActive = false;
 let lobbyMusicActive = false;
+let battleMusicActive = false;
+let activeBattleThemeId = 'battle1';
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
 const attackSoundExtensions = ['.ogg', '.mp3', '.wav', '.m4a', ''];
 const attackSoundUrlCache = new Map();
@@ -1715,10 +1752,141 @@ const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
 
+const applyLoopAudioSource = (audio, src, attrName) => {
+  const current = audio.getAttribute(attrName) || '';
+  if (current === src) {
+    return;
+  }
+  audio.pause();
+  audio.currentTime = 0;
+  audio.src = src;
+  audio.setAttribute(attrName, src);
+  audio.load();
+};
+
+const shouldPlayPreLobbyMusic = () => {
+  return !state.joinedRoom && bootLoader && !bootLoader.classList.contains('hidden');
+};
+
+const shouldPlayLobbyMusic = () => {
+  return !state.joinedRoom
+    && lobbySection
+    && !lobbySection.classList.contains('hidden')
+    && (!bootLoader || bootLoader.classList.contains('hidden'));
+};
+
+const shouldPlayBattleMusic = () => {
+  return Boolean(state.joinedRoom && state.joinedRoom.room?.status === 'in_game');
+};
+
+const stopPreLobbyMusic = () => {
+  if (!preLobbyMusicActive && preLobbyMusic.paused) {
+    return;
+  }
+  preLobbyMusic.pause();
+  preLobbyMusic.currentTime = 0;
+  preLobbyMusicActive = false;
+};
+
+const stopLobbyMusic = () => {
+  if (!lobbyMusicActive && lobbyMusic.paused) {
+    return;
+  }
+  lobbyMusic.pause();
+  lobbyMusic.currentTime = 0;
+  lobbyMusicActive = false;
+};
+
+const stopBattleMusic = () => {
+  if (!battleMusicActive && battleMusic.paused) {
+    return;
+  }
+  battleMusic.pause();
+  battleMusic.currentTime = 0;
+  battleMusicActive = false;
+};
+
+const startPreLobbyMusic = () => {
+  if (!audioUnlocked || preLobbyMusicActive || !shouldPlayPreLobbyMusic()) {
+    return;
+  }
+  preLobbyMusicActive = true;
+  const maybePromise = preLobbyMusic.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {
+      preLobbyMusicActive = false;
+    });
+  }
+};
+
+const startLobbyMusic = () => {
+  if (!audioUnlocked || lobbyMusicActive || !shouldPlayLobbyMusic()) {
+    return;
+  }
+  lobbyMusicActive = true;
+  const maybePromise = lobbyMusic.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {
+      lobbyMusicActive = false;
+    });
+  }
+};
+
+const startBattleMusic = () => {
+  if (!audioUnlocked || battleMusicActive || !shouldPlayBattleMusic()) {
+    return;
+  }
+  battleMusicActive = true;
+  const maybePromise = battleMusic.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {
+      battleMusicActive = false;
+    });
+  }
+};
+
+const refreshBackgroundMusic = () => {
+  if (shouldPlayBattleMusic()) {
+    stopPreLobbyMusic();
+    stopLobbyMusic();
+    startBattleMusic();
+    return;
+  }
+  if (shouldPlayPreLobbyMusic()) {
+    stopBattleMusic();
+    stopLobbyMusic();
+    startPreLobbyMusic();
+    return;
+  }
+  if (shouldPlayLobbyMusic()) {
+    stopBattleMusic();
+    stopPreLobbyMusic();
+    startLobbyMusic();
+    return;
+  }
+  stopBattleMusic();
+  stopPreLobbyMusic();
+  stopLobbyMusic();
+};
+
+const setBattleTheme = (themeId) => {
+  const normalized = String(themeId || '').trim();
+  const nextId = battleThemeTrackById[normalized] ? normalized : 'battle1';
+  if (nextId === activeBattleThemeId) {
+    return;
+  }
+  activeBattleThemeId = nextId;
+  applyLoopAudioSource(battleMusic, getBattleThemeTrackPath(activeBattleThemeId), 'data-bgm-src');
+  battleMusicActive = false;
+  refreshBackgroundMusic();
+};
+
 const applyGameSettings = () => {
   const effectiveMaster = Math.max(0, Math.min(1, settings.masterVolume));
   shootSound.volume = 0.24 * effectiveMaster * settings.sfxVolume;
+  preLobbyMusic.volume = 0.28 * effectiveMaster * settings.musicVolume;
   lobbyMusic.volume = 0.34 * effectiveMaster * settings.musicVolume;
+  battleMusic.volume = 0.38 * effectiveMaster * settings.musicVolume;
   camera.fov = settings.fov;
   camera.updateProjectionMatrix();
   thirdPersonCamera.fov = settings.fov;
@@ -1861,46 +2029,17 @@ const configureLocalAttackSound = async (characterId) => {
   applyAudioSource(shootSound, src);
 };
 
-const shouldPlayLobbyMusic = () => {
-  return !state.joinedRoom && lobbySection && !lobbySection.classList.contains('hidden');
-};
-
-const startLobbyMusic = () => {
-  if (!lobbyMusicUnlocked || lobbyMusicActive || !shouldPlayLobbyMusic()) {
+const unlockBackgroundMusic = () => {
+  if (audioUnlocked) {
     return;
   }
-
-  lobbyMusicActive = true;
-  const maybePromise = lobbyMusic.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {
-      lobbyMusicActive = false;
-    });
-  }
+  audioUnlocked = true;
+  refreshBackgroundMusic();
 };
 
-const stopLobbyMusic = () => {
-  if (!lobbyMusicActive && lobbyMusic.paused) {
-    return;
-  }
-
-  lobbyMusic.pause();
-  lobbyMusic.currentTime = 0;
-  lobbyMusicActive = false;
-};
-
-const unlockLobbyMusic = () => {
-  if (lobbyMusicUnlocked) {
-    return;
-  }
-
-  lobbyMusicUnlocked = true;
-  startLobbyMusic();
-};
-
-window.addEventListener('pointerdown', unlockLobbyMusic, { once: true });
-window.addEventListener('keydown', unlockLobbyMusic, { once: true });
-window.addEventListener('touchstart', unlockLobbyMusic, { once: true, passive: true });
+window.addEventListener('pointerdown', unlockBackgroundMusic, { once: true });
+window.addEventListener('keydown', unlockBackgroundMusic, { once: true });
+window.addEventListener('touchstart', unlockBackgroundMusic, { once: true, passive: true });
 
 const startShootSound = () => {
   const currentSrc = shootSound.getAttribute('data-attack-src') || shootSound.src || defaultAttackSoundUrl;
@@ -3992,6 +4131,7 @@ const applyRoomState = (roomState, options = {}) => {
   rebuildMapFromSeed(roomSeed);
   syncRemotePlayersFromRoom(roomState);
   applyWeather(roomState.room?.weather);
+  setBattleTheme(roomState.room?.battleTheme);
 
   if (options.applyOwnState || wasOutsideRoom) {
     applyOwnStateFromRoom(roomState);
@@ -4078,9 +4218,11 @@ const connectWebSocket = () => {
       setInRoom(false);
       stopRemoteShootSound();
       applyWeather('night');
+      setBattleTheme('battle1');
       resetCombatStats();
       hideWinnerOverlay();
       updateHud();
+      refreshBackgroundMusic();
       return;
     }
 
@@ -4357,6 +4499,10 @@ const connectWebSocket = () => {
           state.joinedRoom.room.weather = payload.data.weather;
           applyWeather(payload.data.weather);
         }
+        if (payload.data.battleTheme) {
+          state.joinedRoom.room.battleTheme = payload.data.battleTheme;
+          setBattleTheme(payload.data.battleTheme);
+        }
         if (payload.data.status !== 'in_game' && isRespawning) {
           isRespawning = false;
           respawnEndsAt = 0;
@@ -4367,6 +4513,7 @@ const connectWebSocket = () => {
           hideWinnerOverlay();
         }
         updateHud();
+        refreshBackgroundMusic();
       }
       return;
     }
@@ -4397,9 +4544,11 @@ const connectWebSocket = () => {
     setInRoom(false);
     stopRemoteShootSound();
     applyWeather('night');
+    setBattleTheme('battle1');
     resetCombatStats();
     hideWinnerOverlay();
     updateHud();
+    refreshBackgroundMusic();
     setTimeout(connectWebSocket, 1200);
   });
 
