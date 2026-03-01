@@ -1324,7 +1324,6 @@ const localAvatar = {
   loadingKey: '',
   funnyUntil: 0,
   team: null,
-  teamMarker: null,
   teamOutline: null,
 };
 
@@ -4029,9 +4028,6 @@ const disposeLocalAvatar = () => {
   if (localAvatar.teamOutline) {
     disposeTeamMarker(localAvatar.teamOutline);
   }
-  if (localAvatar.teamMarker) {
-    disposeTeamMarker(localAvatar.teamMarker);
-  }
   if (localAvatar.group) {
     scene.remove(localAvatar.group);
   }
@@ -4040,7 +4036,6 @@ const disposeLocalAvatar = () => {
   localAvatar.actions = null;
   localAvatar.currentAnimation = '';
   localAvatar.funnyUntil = 0;
-  localAvatar.teamMarker = null;
   localAvatar.teamOutline = null;
 };
 
@@ -4065,7 +4060,6 @@ const ensureLocalAvatar = async () => {
   localAvatar.currentAnimation = '';
   localAvatar.shootUntil = 0;
   localAvatar.funnyUntil = 0;
-  ensureLocalTeamMarker();
   ensureLocalTeamOutline();
   setLocalAvatarAnimation('idle');
 };
@@ -4073,9 +4067,6 @@ const ensureLocalAvatar = async () => {
 const updateLocalAvatar = (delta) => {
   if (!localAvatar.group) {
     return;
-  }
-  if (localAvatar.teamMarker) {
-    localAvatar.teamMarker.visible = shouldShowTeamMarkers() && !isRespawning;
   }
   if (localAvatar.teamOutline) {
     localAvatar.teamOutline.visible = shouldShowTeamMarkers() && !isRespawning;
@@ -4305,7 +4296,6 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   liveEntry.isDead = false;
   liveEntry.isJumping = false;
   liveEntry.deadAt = 0;
-  ensureRemoteTeamMarker(liveEntry);
   ensureRemoteTeamOutline(liveEntry);
   const hpBar = createRemoteHealthBar();
   liveEntry.group.add(hpBar.holder);
@@ -4318,10 +4308,6 @@ const disposeRemotePlayer = (entry) => {
   if (entry.teamOutline) {
     disposeTeamMarker(entry.teamOutline);
     entry.teamOutline = null;
-  }
-  if (entry.teamMarker) {
-    disposeTeamMarker(entry.teamMarker);
-    entry.teamMarker = null;
   }
   if (entry.healthBar) {
     if (entry.healthBar.holder?.parent) {
@@ -4385,7 +4371,6 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     lastAnimationAt: 0,
     healthBar: null,
     team: null,
-    teamMarker: null,
     teamOutline: null,
   });
 
@@ -4405,7 +4390,6 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
   if (!entry.character) {
     entry.character = availableCharacters[0] || activeCharacter || 'silentman';
   }
-  ensureRemoteTeamMarker(entry);
   ensureRemoteTeamOutline(entry);
   upgradeRemotePlayerToCharacter(entry);
 };
@@ -4428,7 +4412,6 @@ const syncRemotePlayer = (player) => {
     entry.name = String(player.name);
   }
   entry.team = normalizePlayerTeam(player.team);
-  ensureRemoteTeamMarker(entry);
   ensureRemoteTeamOutline(entry);
   const hasCharacterUpdate = typeof player.character === 'string' && player.character.length > 0;
   const resolvedCharacter = hasCharacterUpdate ? resolveCharacterForPlayer(player.character) : entry.character;
@@ -5012,7 +4995,6 @@ const applyOwnStateFromRoom = (roomState) => {
     return;
   }
   localAvatar.team = normalizePlayerTeam(selfPlayer.team);
-  ensureLocalTeamMarker();
   ensureLocalTeamOutline();
 
   const pos = selfPlayer.state?.position;
@@ -5071,7 +5053,6 @@ const syncLocalTeamFromRoom = (roomState) => {
     return;
   }
   localAvatar.team = normalizePlayerTeam(selfPlayer.team);
-  ensureLocalTeamMarker();
   ensureLocalTeamOutline();
 };
 
@@ -5175,7 +5156,6 @@ const connectWebSocket = () => {
       resetCombatStats();
       hideWinnerOverlay();
       localAvatar.team = null;
-      ensureLocalTeamMarker();
       ensureLocalTeamOutline();
       updateHud();
       syncLobbyScreens();
@@ -5662,7 +5642,6 @@ const connectWebSocket = () => {
     resetCombatStats();
     hideWinnerOverlay();
     localAvatar.team = null;
-    ensureLocalTeamMarker();
     ensureLocalTeamOutline();
     updateHud();
     syncLobbyScreens();
@@ -5947,27 +5926,6 @@ const disposeTeamMarker = (marker) => {
   }
 };
 
-const createTeamMarker = (team) => {
-  const normalizedTeam = normalizePlayerTeam(team);
-  const color = normalizedTeam === 'red' ? 0xff5151 : 0x4f87ff;
-  const marker = new THREE.Mesh(
-    new THREE.RingGeometry(0.44, 0.56, 36),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    }),
-  );
-  marker.rotation.x = -Math.PI / 2;
-  marker.position.set(0, 0.03, 0);
-  marker.renderOrder = 80;
-  marker.userData.team = normalizedTeam;
-  return marker;
-};
-
 const createTeamOutline = (team) => {
   const normalizedTeam = normalizePlayerTeam(team);
   const color = normalizedTeam === 'red' ? 0xff7f7f : 0x7fa8ff;
@@ -5988,26 +5946,6 @@ const createTeamOutline = (team) => {
   return outline;
 };
 
-const ensureLocalTeamMarker = () => {
-  const team = normalizePlayerTeam(localAvatar.team);
-  if (!localAvatar.group || !team) {
-    if (localAvatar.teamMarker) {
-      disposeTeamMarker(localAvatar.teamMarker);
-      localAvatar.teamMarker = null;
-    }
-    return;
-  }
-  if (!localAvatar.teamMarker || localAvatar.teamMarker.userData.team !== team) {
-    if (localAvatar.teamMarker) {
-      disposeTeamMarker(localAvatar.teamMarker);
-    }
-    localAvatar.teamMarker = createTeamMarker(team);
-    localAvatar.group.add(localAvatar.teamMarker);
-  } else if (localAvatar.teamMarker.parent !== localAvatar.group) {
-    localAvatar.group.add(localAvatar.teamMarker);
-  }
-};
-
 const ensureLocalTeamOutline = () => {
   const team = normalizePlayerTeam(localAvatar.team);
   if (!localAvatar.group || !team) {
@@ -6025,29 +5963,6 @@ const ensureLocalTeamOutline = () => {
     localAvatar.group.add(localAvatar.teamOutline);
   } else if (localAvatar.teamOutline.parent !== localAvatar.group) {
     localAvatar.group.add(localAvatar.teamOutline);
-  }
-};
-
-const ensureRemoteTeamMarker = (entry) => {
-  if (!entry?.group) {
-    return;
-  }
-  const team = normalizePlayerTeam(entry.team);
-  if (!team) {
-    if (entry.teamMarker) {
-      disposeTeamMarker(entry.teamMarker);
-      entry.teamMarker = null;
-    }
-    return;
-  }
-  if (!entry.teamMarker || entry.teamMarker.userData.team !== team) {
-    if (entry.teamMarker) {
-      disposeTeamMarker(entry.teamMarker);
-    }
-    entry.teamMarker = createTeamMarker(team);
-    entry.group.add(entry.teamMarker);
-  } else if (entry.teamMarker.parent !== entry.group) {
-    entry.group.add(entry.teamMarker);
   }
 };
 
@@ -7014,9 +6929,6 @@ const updateRemotePlayers = (delta) => {
       const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
       entry.healthBar.holder.scale.setScalar(scale);
       entry.healthBar.holder.visible = !entry.isDead && visibleByDistance;
-    }
-    if (entry.teamMarker) {
-      entry.teamMarker.visible = shouldShowTeamMarkers() && !entry.isDead;
     }
     if (entry.teamOutline) {
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
