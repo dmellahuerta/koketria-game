@@ -14,6 +14,7 @@ const envNumber = (name, fallback) => {
 
 const rooms = new Map();
 const clients = new Map();
+const clientsById = new Map();
 const weatherTypes = ['rainy', 'sunny', 'night', 'snow'];
 const battleThemes = ['battle1', 'battle2', 'battle3'];
 const maxRooms = 1;
@@ -1566,13 +1567,7 @@ const send = (ws, payload) => {
 };
 
 const getClientById = (id) => {
-  for (const client of clients.values()) {
-    if (client.id === id) {
-      return client;
-    }
-  }
-
-  return null;
+  return clientsById.get(id) || null;
 };
 
 const getRoomSummary = (room) => {
@@ -1854,6 +1849,7 @@ const start = async () => {
 
       pushClientStateSnapshot(client, Date.now());
       clients.set(ws, client);
+      clientsById.set(client.id, client);
 
       send(ws, {
         type: 'connected',
@@ -2461,6 +2457,7 @@ const start = async () => {
 
         leaveCurrentRoom(current);
         clients.delete(ws);
+        clientsById.delete(current.id);
       });
     });
 

@@ -2202,6 +2202,7 @@ const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
 const activeLunarProjectiles = [];
 const activePumoriOrbitSpecials = [];
+const maxSilentSpecialVisualRays = 24;
 const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
 const maxActiveTracers = 420;
@@ -4625,7 +4626,8 @@ const connectWebSocket = () => {
         setRemoteAnimation(shooterEntry, 'shoot');
         shooterEntry.animationUntil = performance.now() + 420;
       }
-      for (let i = 0; i < rays.length; i += 1) {
+      const step = Math.max(1, Math.ceil(rays.length / maxSilentSpecialVisualRays));
+      for (let i = 0; i < rays.length; i += step) {
         const ray = rays[i] || {};
         const direction = ray.direction || {};
         const distance = Number(ray.distance || 0);
@@ -6557,8 +6559,18 @@ const updatePumoriOrbitSpecials = (delta) => {
       clearPumoriOrbitSpecialByOwner(special.ownerId);
       continue;
     }
-
-    special.hammers = special.hammers.filter((entry) => !entry.disposed);
+    // Compact disposed entries in place to avoid per-frame array allocations.
+    if (special.hammers.length > 0) {
+      let write = 0;
+      for (let read = 0; read < special.hammers.length; read += 1) {
+        const entry = special.hammers[read];
+        if (!entry?.disposed) {
+          special.hammers[write] = entry;
+          write += 1;
+        }
+      }
+      special.hammers.length = write;
+    }
 
     while (special.nextSpawnAt <= now && special.nextSpawnAt < special.endAt) {
       if (special.hammers.length < special.maxActiveHammers) {
