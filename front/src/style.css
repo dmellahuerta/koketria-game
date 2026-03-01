@@ -104,26 +104,13 @@ canvas {
 
 #lobby .lobby-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
 
 #lobby .lobby-main {
   min-width: 0;
-}
-
-#lobby .lobby-controls {
-  border: 1px solid rgba(112, 255, 112, 0.35);
-  border-radius: 10px;
-  background: rgba(0, 26, 0, 0.62);
-  padding: 10px 12px;
-}
-
-#lobby .lobby-controls p {
-  margin: 4px 0;
-  font-size: 0.8rem;
-  line-height: 1.35;
 }
 
 #lobby h1,
@@ -139,10 +126,6 @@ canvas {
 #lobby h2 {
   font-size: 0.95rem;
   margin-top: 12px;
-}
-
-#lobby .lobby-controls h2 {
-  margin-top: 0;
 }
 
 #lobby label {
@@ -188,10 +171,6 @@ canvas {
 @media (max-width: 880px) {
   #lobby {
     width: min(96vw, 640px);
-  }
-
-  #lobby .lobby-layout {
-    grid-template-columns: 1fr;
   }
 }
 

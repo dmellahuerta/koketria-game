@@ -39,24 +39,6 @@ app.innerHTML = `
         <div id="roomList" class="room-list"></div>
         <p id="lobbyError" class="error hidden"></p>
       </div>
-
-      <aside class="lobby-controls">
-        <h2>Controles</h2>
-        <p><strong>Movimiento:</strong> W A S D</p>
-        <p><strong>Saltar:</strong> Space</p>
-        <p><strong>Disparar:</strong> Mouse izquierdo</p>
-        <p><strong>Recargar:</strong> R</p>
-        <p><strong>Animación Funny:</strong> F</p>
-        <p><strong>Cambiar cámara:</strong> C</p>
-        <p><strong>Info partida:</strong> I</p>
-        <p><strong>Marcador:</strong> Tab</p>
-        <p><strong>FPS + Latencia:</strong> P</p>
-        <p><strong>Capturar mouse:</strong> Click en juego</p>
-        <p><strong>Liberar mouse:</strong> ESC</p>
-        <h2>Habilidades</h2>
-        <p><strong>silentman:</strong> magia sagrada en espiral</p>
-        <p><strong>pumori:</strong> martillo sagrado en parábola</p>
-      </aside>
     </div>
   </section>
 
@@ -77,13 +59,19 @@ app.innerHTML = `
     </div>
 
     <div id="matchInfo">
-      <h2>MATRIX SIMULATION</h2>
+      <h2>Panel (I)</h2>
+      <p><strong>Movimiento:</strong> W A S D</p>
+      <p><strong>Saltar:</strong> Space</p>
       <p>Click para capturar el mouse</p>
-      <p>Moverse: W A S D</p>
       <p>Disparar: Mouse izquierdo</p>
       <p>Recargar: R</p>
-      <p>Info: I</p>
+      <p>Animación Funny: F</p>
+      <p>Cambiar cámara: C</p>
+      <p>Panel: I</p>
+      <p>Marcador: Tab</p>
+      <p>FPS + Latencia: P</p>
       <p>Salir: ESC</p>
+      <p><strong>Habilidades:</strong> silentman, pumori, neoorphen, pezuñalunar</p>
       <p id="healthStat">Vida: 100</p>
       <p id="shieldStat">Escudo: 0</p>
       <p id="ammoStat">Balas: 30 / 90</p>
