@@ -2,6 +2,10 @@
 
 Guía para levantar frontend y backend con un solo comando usando `docker/docker-compose.yml`.
 
+Estructura actual del proyecto:
+- `game1/front`
+- `game1/backend`
+
 ## Prerrequisitos
 
 - Docker instalado
@@ -54,7 +58,7 @@ El servicio `backend` está configurado para ejecutar:
 node index.js
 ```
 
-Asegurate de tener `backend/index.js`. Si tu entrypoint es otro (por ejemplo `src/server.js`), cambiá el `command` del servicio `backend` en `docker/docker-compose.yml`.
+Asegurate de tener `game1/backend/index.js`. Si tu entrypoint es otro (por ejemplo `src/server.js`), cambiá el `command` del servicio `backend` en `docker/docker-compose.yml`.
 
 ## Variables del frontend
 

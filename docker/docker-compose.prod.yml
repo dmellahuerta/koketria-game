@@ -17,7 +17,7 @@ services:
 
   backend:
     build:
-      context: ../backend
+      context: ../game1/backend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     environment:
@@ -30,7 +30,7 @@ services:
 
   front:
     build:
-      context: ../front
+      context: ../game1/front
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     depends_on:

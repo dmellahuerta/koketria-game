@@ -1,3 +1,5 @@
 .DS_Store
 front/node_modules
 backend/node_modules
+game1/front/node_modules
+game1/backend/node_modules
