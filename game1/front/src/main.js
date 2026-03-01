@@ -4092,6 +4092,7 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
   const hammers = [];
   const totalHammers = 8;
   const spawnStepMs = 380;
+  const maxOrbitRadius = 22;
   for (let i = 0; i < totalHammers; i += 1) {
     const hammer = createHammerMesh(0.82, 0.95);
     hammer.position.copy(center);
@@ -4101,7 +4102,7 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
       mesh: hammer,
       spawnAt: now + (i * spawnStepMs),
       baseAngle: (i / totalHammers) * Math.PI * 2,
-      maxRadius: 1.9 + (i * 0.7),
+      maxRadius: ((i + 1) / totalHammers) * maxOrbitRadius,
     });
   }
 
