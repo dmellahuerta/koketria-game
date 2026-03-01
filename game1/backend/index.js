@@ -56,6 +56,15 @@ const silentConeProjectileCount = 15;
 const silentConeMaxDistance = 90;
 const silentConeHalfAngleHorizontalDeg = 42;
 const silentConeHalfAngleVerticalDeg = 18;
+const neoorphenMeteorCooldownMs = 30_000;
+const neoorphenMeteorDurationMs = 10_000;
+const neoorphenMeteorWaveIntervalMs = 180;
+const neoorphenMeteorProjectilesPerWave = 12;
+const neoorphenMeteorRadius = lunarRainRadius;
+const neoorphenMeteorStrikeDamage = hitDamage;
+const neoorphenMeteorStrikeAoeRadius = lunarRainStrikeAoeRadius;
+const neoorphenMeteorSkyMinY = 56;
+const neoorphenMeteorSkyMaxY = 88;
 const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
@@ -190,6 +199,7 @@ const resetRoomCombat = (room) => {
       lastLunarRainAt: 0,
       lastPumoriOrbitAt: 0,
       lastSilentConeAt: 0,
+      lastNeoorphenMeteorAt: 0,
     });
   });
 };
@@ -209,6 +219,7 @@ const getCombatState = (room, playerId) => {
       lastLunarRainAt: 0,
       lastPumoriOrbitAt: 0,
       lastSilentConeAt: 0,
+      lastNeoorphenMeteorAt: 0,
     });
   }
   return room.combat.get(playerId);
@@ -437,6 +448,10 @@ const isPumoriCharacter = (characterId) => {
 const isSilentmanCharacter = (characterId) => {
   const id = normalizeCharacterId(characterId);
   return id === 'silentman' || id === 'silenmant';
+};
+
+const isNeoorphenCharacter = (characterId) => {
+  return normalizeCharacterId(characterId) === 'neoorphen';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -861,9 +876,23 @@ const getSilentConeCooldownRemainingMs = (combat, nowMs = Date.now()) => {
   return Math.max(0, (last + silentConeCooldownMs) - nowMs);
 };
 
+const getNeoorphenMeteorCooldownRemainingMs = (combat, nowMs = Date.now()) => {
+  if (!combat) {
+    return 0;
+  }
+  const last = Number(combat.lastNeoorphenMeteorAt || 0);
+  if (!Number.isFinite(last) || last <= 0) {
+    return 0;
+  }
+  return Math.max(0, (last + neoorphenMeteorCooldownMs) - nowMs);
+};
+
 const getSpecialCooldownRemainingMs = (combat, characterId, nowMs = Date.now()) => {
   if (isSilentmanCharacter(characterId)) {
     return getSilentConeCooldownRemainingMs(combat, nowMs);
+  }
+  if (isNeoorphenCharacter(characterId)) {
+    return getNeoorphenMeteorCooldownRemainingMs(combat, nowMs);
   }
   if (isPezunalunarCharacter(characterId)) {
     return getLunarRainCooldownRemainingMs(combat, nowMs);
@@ -1312,6 +1341,139 @@ const triggerPumoriSpecial = (room, caster) => {
   }, pumoriOrbitDurationMs);
 };
 
+const applyNeoorphenMeteorStrikeDamage = (room, casterId, impactPoint) => {
+  const aoeRadiusSq = neoorphenMeteorStrikeAoeRadius * neoorphenMeteorStrikeAoeRadius;
+  let roomStateChanged = false;
+
+  for (const victimId of room.players) {
+    if (victimId === casterId) {
+      continue;
+    }
+    const victimClient = getClientById(victimId);
+    if (!victimClient?.state?.position) {
+      continue;
+    }
+    const victimCombat = getCombatState(room, victimId);
+    if (!victimCombat.alive) {
+      continue;
+    }
+
+    const dx = Number(victimClient.state.position.x) - impactPoint.x;
+    const dz = Number(victimClient.state.position.z) - impactPoint.z;
+    if ((dx * dx) + (dz * dz) > aoeRadiusSq) {
+      continue;
+    }
+
+    if (victimCombat.shield > 0) {
+      const reducedDamage = Math.ceil(neoorphenMeteorStrikeDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(neoorphenMeteorStrikeDamage * shieldDamageCostFactor);
+      victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
+      victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
+    } else {
+      victimCombat.health = Math.max(0, victimCombat.health - neoorphenMeteorStrikeDamage);
+    }
+
+    send(victimClient.ws, {
+      type: 'player_damage',
+      ...json(true, {
+        fromPlayerId: casterId,
+        health: victimCombat.health,
+        shield: victimCombat.shield,
+        headshot: false,
+      }),
+    });
+    roomStateChanged = true;
+
+    if (victimCombat.health <= 0) {
+      processPlayerDeath(room, victimId, casterId);
+    }
+  }
+
+  if (roomStateChanged) {
+    broadcastRoomState(room);
+  }
+};
+
+const triggerNeoorphenMeteorSpecial = (room, caster) => {
+  if (!room || !caster || room.status !== 'in_game') {
+    return;
+  }
+  const nowMs = Date.now();
+  const casterCombat = getCombatState(room, caster.id);
+  if (!casterCombat.alive || !isNeoorphenCharacter(caster.character)) {
+    return;
+  }
+
+  const cooldownRemaining = getNeoorphenMeteorCooldownRemainingMs(casterCombat, nowMs);
+  if (cooldownRemaining > 0) {
+    send(caster.ws, {
+      type: 'player_resources',
+      ...json(true, {
+        mana: Math.round(casterCombat.mana),
+        lunarRainCooldownMs: cooldownRemaining,
+      }),
+    });
+    return;
+  }
+
+  casterCombat.lastNeoorphenMeteorAt = nowMs;
+  send(caster.ws, {
+    type: 'player_resources',
+    ...json(true, {
+      mana: Math.round(casterCombat.mana),
+      lunarRainCooldownMs: neoorphenMeteorCooldownMs,
+    }),
+  });
+
+  const intervalId = setInterval(() => {
+    if (room.status !== 'in_game' || !room.players.has(caster.id)) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+    const casterClient = getClientById(caster.id);
+    const currentCasterCombat = getCombatState(room, caster.id);
+    if (!casterClient || !currentCasterCombat.alive) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+
+    const center = {
+      x: Number(casterClient.state?.position?.x || 0),
+      y: Number(casterClient.state?.position?.y || 1.7),
+      z: Number(casterClient.state?.position?.z || 0),
+    };
+    const strikes = [];
+    for (let i = 0; i < neoorphenMeteorProjectilesPerWave; i += 1) {
+      const impact = pickLunarRainImpactPoint(room, center, neoorphenMeteorRadius);
+      const start = {
+        x: impact.x + ((Math.random() - 0.5) * 7.2),
+        y: neoorphenMeteorSkyMinY + (Math.random() * (neoorphenMeteorSkyMaxY - neoorphenMeteorSkyMinY)),
+        z: impact.z + ((Math.random() - 0.5) * 7.2),
+      };
+      strikes.push({ start, impact });
+      applyNeoorphenMeteorStrikeDamage(room, caster.id, impact);
+    }
+
+    broadcastToRoom(room, {
+      type: 'special_neoorphen_meteor_wave',
+      ...json(true, {
+        playerId: caster.id,
+        character: caster.character || null,
+        strikes,
+        ts: Date.now(),
+      }),
+    });
+  }, neoorphenMeteorWaveIntervalMs);
+
+  room.specialTimers?.add(intervalId);
+  setTimeout(() => {
+    clearInterval(intervalId);
+    room.specialTimers?.delete(intervalId);
+  }, neoorphenMeteorDurationMs);
+};
+
 const startRoundResetCountdown = (room, winnerId) => {
   if (!room || room.roundResetTimer) {
     return;
@@ -1575,6 +1737,7 @@ const joinRoom = (client, room) => {
     lastLunarRainAt: 0,
     lastPumoriOrbitAt: 0,
     lastSilentConeAt: 0,
+    lastNeoorphenMeteorAt: 0,
   });
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
@@ -2085,6 +2248,18 @@ const start = async () => {
             return;
           }
           triggerSilentmanConeSpecial(room, current);
+          return;
+        }
+
+        if (message.type === 'player_special_neoorphen_meteor') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.status !== 'in_game') {
+            return;
+          }
+          triggerNeoorphenMeteorSpecial(room, current);
           return;
         }
 

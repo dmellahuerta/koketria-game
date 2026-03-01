@@ -2871,6 +2871,7 @@ const isPezunalunarCharacter = (characterId) => {
 
 const hasCharacterSpecial = (characterId) => {
   return isSilentmanCharacter(characterId)
+    || isNeoorphenCharacter(characterId)
     || isPezunalunarCharacter(characterId)
     || isPumoriCharacter(characterId);
 };
@@ -3183,6 +3184,10 @@ const triggerCharacterSpecial = () => {
   }
   if (isSilentmanCharacter(activeCharacter)) {
     sendWs({ type: 'player_special_silent_cone' });
+    return true;
+  }
+  if (isNeoorphenCharacter(activeCharacter)) {
+    sendWs({ type: 'player_special_neoorphen_meteor' });
     return true;
   }
   if (isPumoriCharacter(activeCharacter)) {
@@ -4637,6 +4642,49 @@ const connectWebSocket = () => {
       triggerNaturePulse(origin);
       if (ownerId !== state.self?.id) {
         registerRemoteShootSound(origin, shooterCharacter);
+      }
+      return;
+    }
+
+    if (payload.type === 'special_neoorphen_meteor_wave') {
+      const data = payload.data || {};
+      const ownerId = String(data.playerId || '');
+      const strikes = Array.isArray(data.strikes) ? data.strikes : [];
+      let firstImpact = null;
+      for (let i = 0; i < strikes.length; i += 1) {
+        const strike = strikes[i] || {};
+        const start = strike.start || {};
+        const impact = strike.impact || {};
+        if (
+          !Number.isFinite(Number(start.x))
+          || !Number.isFinite(Number(start.y))
+          || !Number.isFinite(Number(start.z))
+          || !Number.isFinite(Number(impact.x))
+          || !Number.isFinite(Number(impact.y))
+          || !Number.isFinite(Number(impact.z))
+        ) {
+          continue;
+        }
+        const startVec = new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z));
+        const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
+        if (!firstImpact) {
+          firstImpact = impactVec.clone();
+        }
+        createPoisonGasVisual(startVec, impactVec, { source: 'local', ownerId });
+        createTracer(startVec, impactVec, 0x66ff73, { radiusScale: 1.6, life: 0.52, opacity: 0.98 });
+        const cloudA = createImpact(impactVec, 0x58ff66);
+        const cloudB = createImpact(impactVec, 0x9dff7a);
+        if (cloudA) {
+          cloudA.scale.setScalar(2.6);
+          cloudA.userData.life = 0.48;
+        }
+        if (cloudB) {
+          cloudB.scale.setScalar(2.1);
+          cloudB.userData.life = 0.42;
+        }
+      }
+      if (firstImpact) {
+        triggerNaturePulse(firstImpact);
       }
       return;
     }
