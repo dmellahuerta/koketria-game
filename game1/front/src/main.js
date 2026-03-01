@@ -1765,7 +1765,7 @@ const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
-const lunarSpecialCooldownMs = 60_000;
+const lunarSpecialCooldownMs = 30_000;
 let lunarRainCooldownEndsAt = 0;
 let lastLunarCooldownShown = null;
 
