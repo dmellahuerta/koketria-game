@@ -2018,6 +2018,7 @@ const remoteSnapDistance = 9.5;
 const remoteAnimMoveSpeedOn = 0.55;
 const remoteAnimMoveSpeedOff = 0.32;
 const remoteAnimSwitchCooldownMs = 140;
+const remoteMovingSignalHoldMs = 220;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 
@@ -3323,6 +3324,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     netSnapshots: [],
     netInitialized: false,
     smoothedMoveSpeed: 0,
+    movingUntil: 0,
     lastAnimationAt: 0,
     healthBar: null,
   });
@@ -3386,8 +3388,12 @@ const syncRemotePlayer = (player) => {
   }
   const pos = player.state?.position || { x: 0, y: playerGroundY, z: 0 };
   const rot = player.state?.rotation || { yaw: 0, pitch: 0 };
+  const moving = Boolean(player.state?.moving);
   const snapshotTs = Number.isFinite(Number(player.ts)) ? Number(player.ts) : Date.now();
   entry.isJumping = Boolean(player.state?.jumping);
+  if (moving) {
+    entry.movingUntil = Math.max(Number(entry.movingUntil || 0), performance.now() + remoteMovingSignalHoldMs);
+  }
   if (Number.isFinite(Number(player.health))) {
     entry.health = Math.max(0, Math.min(maxHealth, Math.round(Number(player.health))));
     updateRemoteHealthBar(entry);
@@ -3420,6 +3426,7 @@ const syncRemotePlayer = (player) => {
     yaw: rot.yaw,
     pitch: rot.pitch,
     jumping: Boolean(player.state?.jumping),
+    moving,
   };
   entry.netSnapshots.push(snapshot);
   if (entry.netSnapshots.length > 32) {
@@ -3940,7 +3947,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'player_move') {
       const {
-        playerId, position, rotation, character, jumping, ts,
+        playerId, position, rotation, character, jumping, moving, ts,
       } = payload.data || {};
       if (!playerId || (state.self && playerId === state.self.id)) {
         return;
@@ -3950,7 +3957,7 @@ const connectWebSocket = () => {
         id: playerId,
         ts,
         character,
-        state: { position, rotation, jumping },
+        state: { position, rotation, jumping, moving },
       });
 
       return;
@@ -4459,6 +4466,8 @@ const sendLocalPlayerState = (force = false) => {
   }
 
   state.lastStateSentAt = now;
+  const moving = (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD)
+    || moveVelocity.lengthSq() > 0.5;
   sendWs({
     type: 'player_move',
     position: {
@@ -4468,6 +4477,7 @@ const sendLocalPlayerState = (force = false) => {
     },
     rotation: { yaw, pitch },
     jumping: isJumping,
+    moving,
   });
 };
 
@@ -5055,6 +5065,7 @@ const updateRemotePlayers = (delta) => {
           yaw: prev.yaw + (((next.yaw - prev.yaw + Math.PI * 3) % (Math.PI * 2) - Math.PI) * t),
           pitch: prev.pitch + ((next.pitch - prev.pitch) * t),
           jumping: prev.jumping || next.jumping,
+          moving: prev.moving || next.moving,
           ts: renderTs,
         };
         break;
@@ -5074,6 +5085,7 @@ const updateRemotePlayers = (delta) => {
             yaw: last.yaw,
             pitch: last.pitch,
             jumping: last.jumping,
+            moving: last.moving,
             ts: renderTs,
           };
         } else {
@@ -5085,6 +5097,9 @@ const updateRemotePlayers = (delta) => {
       entry.targetYaw = targetState.yaw;
       entry.targetPitch = targetState.pitch;
       entry.isJumping = Boolean(targetState.jumping);
+      if (targetState.moving) {
+        entry.movingUntil = Math.max(Number(entry.movingUntil || 0), now + remoteMovingSignalHoldMs);
+      }
     }
 
     const positionError = entry.group.position.distanceTo(entry.targetPosition);
@@ -5116,6 +5131,8 @@ const updateRemotePlayers = (delta) => {
     const movingNow = entry.currentAnimation === 'move'
       ? entry.smoothedMoveSpeed > remoteAnimMoveSpeedOff
       : entry.smoothedMoveSpeed > remoteAnimMoveSpeedOn;
+    const movingBySignal = now < Number(entry.movingUntil || 0);
+    const shouldMoveAnim = movingBySignal || movingNow;
     const isAirborne = entry.isJumping || entry.targetPosition.y > 0.08 || entry.group.position.y > 0.08;
     const canSwitchAnim = (now - Number(entry.lastAnimationAt || 0)) >= remoteAnimSwitchCooldownMs;
 
@@ -5142,7 +5159,7 @@ const updateRemotePlayers = (delta) => {
       if (isAirborne) {
         setRemoteAnimation(entry, 'jump');
         entry.lastAnimationAt = now;
-      } else if (movingNow) {
+      } else if (shouldMoveAnim) {
         setRemoteAnimation(entry, 'move');
         entry.lastAnimationAt = now;
       } else {
@@ -5158,7 +5175,7 @@ const updateRemotePlayers = (delta) => {
           setRemoteAnimation(entry, 'jump');
           entry.lastAnimationAt = now;
         }
-      } else if (movingNow) {
+      } else if (shouldMoveAnim) {
         if (entry.currentAnimation !== 'move' && canSwitchAnim) {
           setRemoteAnimation(entry, 'move');
           entry.lastAnimationAt = now;

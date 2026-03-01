@@ -692,6 +692,7 @@ const serializePlayer = (client) => {
       position: { ...client.state.position },
       rotation: { ...client.state.rotation },
       jumping: Boolean(client.state.jumping),
+      moving: Boolean(client.state.moving),
     },
   };
 };
@@ -914,6 +915,7 @@ const start = async () => {
           position: { x: Math.random() * 10 - 5, y: 1.7, z: Math.random() * 10 - 5 },
           rotation: { yaw: 0, pitch: 0 },
           jumping: false,
+          moving: false,
         },
         stateHistory: [],
         ws,
@@ -1080,6 +1082,7 @@ const start = async () => {
           const position = message.position || {};
           const rotation = message.rotation || {};
           const jumping = Boolean(message.jumping);
+          const moving = Boolean(message.moving);
 
           if (
             !validNumber(position.x)
@@ -1101,6 +1104,7 @@ const start = async () => {
             pitch: clamp(rotation.pitch, -Math.PI / 2, Math.PI / 2),
           };
           current.state.jumping = jumping;
+          current.state.moving = moving;
           pushClientStateSnapshot(current, Date.now());
 
           broadcastToRoom(room, {
@@ -1111,6 +1115,7 @@ const start = async () => {
               position: current.state.position,
               rotation: current.state.rotation,
               jumping: current.state.jumping,
+              moving: current.state.moving,
               ts: Date.now(),
             }),
           }, current.id);
