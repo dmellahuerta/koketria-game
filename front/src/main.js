@@ -1728,7 +1728,7 @@ const getBattleThemeTrackPath = (themeId) => {
 };
 const preLobbyMusic = new Audio(preLobbyTrackPath);
 preLobbyMusic.preload = 'auto';
-preLobbyMusic.loop = true;
+preLobbyMusic.loop = false;
 preLobbyMusic.volume = 0.28;
 const lobbyMusic = new Audio(lobbyTrackPath);
 lobbyMusic.preload = 'auto';
@@ -1742,6 +1742,7 @@ let audioUnlocked = false;
 let preLobbyMusicActive = false;
 let lobbyMusicActive = false;
 let battleMusicActive = false;
+let waitForPreLobbyToEndForLobby = false;
 let activeBattleThemeId = 'battle1';
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
 const attackSoundExtensions = ['.ogg', '.mp3', '.wav', '.m4a', ''];
@@ -1786,6 +1787,7 @@ const stopPreLobbyMusic = () => {
   preLobbyMusic.pause();
   preLobbyMusic.currentTime = 0;
   preLobbyMusicActive = false;
+  waitForPreLobbyToEndForLobby = false;
 };
 
 const stopLobbyMusic = () => {
@@ -1847,12 +1849,14 @@ const startBattleMusic = () => {
 
 const refreshBackgroundMusic = () => {
   if (shouldPlayBattleMusic()) {
+    waitForPreLobbyToEndForLobby = false;
     stopPreLobbyMusic();
     stopLobbyMusic();
     startBattleMusic();
     return;
   }
   if (shouldPlayPreLobbyMusic()) {
+    waitForPreLobbyToEndForLobby = false;
     stopBattleMusic();
     stopLobbyMusic();
     startPreLobbyMusic();
@@ -1860,10 +1864,17 @@ const refreshBackgroundMusic = () => {
   }
   if (shouldPlayLobbyMusic()) {
     stopBattleMusic();
+    if (preLobbyMusicActive && !preLobbyMusic.ended) {
+      waitForPreLobbyToEndForLobby = true;
+      stopLobbyMusic();
+      return;
+    }
+    waitForPreLobbyToEndForLobby = false;
     stopPreLobbyMusic();
     startLobbyMusic();
     return;
   }
+  waitForPreLobbyToEndForLobby = false;
   stopBattleMusic();
   stopPreLobbyMusic();
   stopLobbyMusic();
@@ -2040,6 +2051,13 @@ const unlockBackgroundMusic = () => {
 window.addEventListener('pointerdown', unlockBackgroundMusic, { once: true });
 window.addEventListener('keydown', unlockBackgroundMusic, { once: true });
 window.addEventListener('touchstart', unlockBackgroundMusic, { once: true, passive: true });
+preLobbyMusic.addEventListener('ended', () => {
+  preLobbyMusicActive = false;
+  if (waitForPreLobbyToEndForLobby) {
+    waitForPreLobbyToEndForLobby = false;
+    refreshBackgroundMusic();
+  }
+});
 
 const startShootSound = () => {
   const currentSrc = shootSound.getAttribute('data-attack-src') || shootSound.src || defaultAttackSoundUrl;
