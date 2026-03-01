@@ -2220,6 +2220,7 @@ const leaveCurrentRoom = (client) => {
     return;
   }
 
+  const leavingTeam = getPlayerTeam(room, client.id);
   room.players.delete(client.id);
   room.teams?.delete(client.id);
   room.stats.delete(client.id);
@@ -2268,6 +2269,23 @@ const leaveCurrentRoom = (client) => {
       if (blueCount <= 0 && redCount > 0) {
         startVersusRoomDeletionCountdown(room, 'red');
         return;
+      }
+      if (room.players.size > 0 && redCount <= 0 && blueCount <= 0) {
+        let inferredWinnerTeam = null;
+        if (leavingTeam === 'red') {
+          inferredWinnerTeam = 'blue';
+        } else if (leavingTeam === 'blue') {
+          inferredWinnerTeam = 'red';
+        }
+        if (!inferredWinnerTeam) {
+          const remainingId = room.players.values().next().value;
+          const remainingTeam = getPlayerTeam(room, remainingId);
+          inferredWinnerTeam = remainingTeam || null;
+        }
+        if (inferredWinnerTeam) {
+          startVersusRoomDeletionCountdown(room, inferredWinnerTeam);
+          return;
+        }
       }
     }
   }
