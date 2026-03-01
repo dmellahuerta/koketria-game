@@ -35,6 +35,8 @@ const bulletAttackIntervalMs = 125;
 const maxMana = 100;
 const manaCostPerShot = Math.ceil(maxMana / 3);
 const manaRegenPerSecond = 12;
+const healthPickupRegenAmount = maxHealth / 3;
+const healthRegenPerSecond = 18;
 const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
@@ -137,6 +139,8 @@ const resetRoomCombat = (room) => {
       shield: startShield,
       alive: true,
       mana: maxMana,
+      pendingHealthRegen: 0,
+      lastHealthRegenAt: now,
       lastManaRegenAt: now,
       lastShotAt: 0,
     });
@@ -151,6 +155,8 @@ const getCombatState = (room, playerId) => {
       shield: startShield,
       alive: true,
       mana: maxMana,
+      pendingHealthRegen: 0,
+      lastHealthRegenAt: now,
       lastManaRegenAt: now,
       lastShotAt: 0,
     });
@@ -164,6 +170,7 @@ const updateRoomCombatRegen = (room, nowMs = Date.now()) => {
   }
   room.players.forEach((playerId) => {
     const combat = getCombatState(room, playerId);
+    updateCombatHealthRegen(combat, nowMs);
     updateCombatMana(combat, nowMs);
   });
 };
@@ -599,6 +606,35 @@ const updateCombatMana = (combat, nowMs) => {
   combat.mana = Math.min(maxMana, (Number(combat.mana || maxMana) + (manaRegenPerSecond * deltaSec)));
 };
 
+const updateCombatHealthRegen = (combat, nowMs) => {
+  if (!combat) {
+    return;
+  }
+  const last = Number(combat.lastHealthRegenAt || nowMs);
+  const deltaSec = Math.max(0, (nowMs - last) / 1000);
+  combat.lastHealthRegenAt = nowMs;
+
+  const pending = Math.max(0, Number(combat.pendingHealthRegen || 0));
+  if (!combat.alive || pending <= 0 || deltaSec <= 0) {
+    combat.pendingHealthRegen = pending;
+    return;
+  }
+
+  const missing = Math.max(0, maxHealth - Number(combat.health || 0));
+  if (missing <= 0) {
+    combat.pendingHealthRegen = 0;
+    return;
+  }
+
+  const step = Math.min(pending, missing, healthRegenPerSecond * deltaSec);
+  if (step <= 0) {
+    return;
+  }
+
+  combat.health = Math.min(maxHealth, Number(combat.health || 0) + step);
+  combat.pendingHealthRegen = Math.max(0, pending - step);
+};
+
 const intersectRaySphere = (origin, directionNorm, maxDistance, center, radius) => {
   const m = vectorSub(origin, center);
   const b = vectorDot(m, directionNorm);
@@ -858,6 +894,7 @@ const getRoomState = (room) => {
         health: Math.round(combat.health),
         shield: Math.round(combat.shield),
         mana: Math.round(combat.mana),
+        pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
         alive: Boolean(combat.alive),
       });
     }
@@ -968,6 +1005,8 @@ const joinRoom = (client, room) => {
     shield: startShield,
     alive: true,
     mana: maxMana,
+    pendingHealthRegen: 0,
+    lastHealthRegenAt: now,
     lastManaRegenAt: now,
     lastShotAt: 0,
   });
@@ -1477,6 +1516,53 @@ const start = async () => {
           return;
         }
 
+        if (message.type === 'player_pickup_health') {
+          if (!current.roomId) {
+            return;
+          }
+
+          const room = rooms.get(current.roomId);
+          if (!room || room.status !== 'in_game') {
+            return;
+          }
+
+          const combat = getCombatState(room, current.id);
+          if (!combat.alive) {
+            return;
+          }
+
+          const nowMs = Date.now();
+          updateCombatHealthRegen(combat, nowMs);
+          updateCombatMana(combat, nowMs);
+
+          const maxRecoverable = Math.max(0, maxHealth - (Number(combat.health || 0) + Number(combat.pendingHealthRegen || 0)));
+          if (maxRecoverable <= 0.0001) {
+            send(ws, {
+              type: 'player_resources',
+              ...json(true, {
+                health: Number(combat.health || 0),
+                pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
+                mana: Math.round(combat.mana),
+              }),
+            });
+            return;
+          }
+
+          const queued = Math.min(healthPickupRegenAmount, maxRecoverable);
+          combat.pendingHealthRegen = Number(combat.pendingHealthRegen || 0) + queued;
+          combat.lastHealthRegenAt = nowMs;
+
+          send(ws, {
+            type: 'player_resources',
+            ...json(true, {
+              health: Number(combat.health || 0),
+              pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
+              mana: Math.round(combat.mana),
+            }),
+          });
+          return;
+        }
+
         if (message.type === 'chat_message') {
           if (!current.roomId) {
             return;
@@ -1530,6 +1616,8 @@ const start = async () => {
           combat.shield = startShield;
           combat.alive = true;
           combat.mana = maxMana;
+          combat.pendingHealthRegen = 0;
+          combat.lastHealthRegenAt = Date.now();
           combat.lastManaRegenAt = Date.now();
           combat.lastShotAt = 0;
           const spawn = pickSpawnPosition(room, `${current.id}-respawn`, current.id);

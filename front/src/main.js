@@ -954,6 +954,7 @@ const loadModelByCandidates = (urls) => {
 const pickupModelSpecs = {
   mana: { url: '/items/mana.glb', targetHeight: 0.62 },
   defensa: { url: '/items/defensa.glb', targetHeight: 0.7 },
+  vida: { url: '/items/vida.glb', targetHeight: 0.68 },
 };
 const pickupModelTemplateCache = new Map();
 const pickupModelPromiseCache = new Map();
@@ -2074,6 +2075,10 @@ const manaPickupAmount = 20;
 const maxShieldPickups = 30;
 const shieldPickupRespawnMs = 60_000;
 const shieldPickupAmount = 25;
+const maxHealthPickups = 20;
+const healthPickupRespawnMs = 60_000;
+const healthPickupRegenAmount = maxHealth / 3;
+const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
 const headshotRadius = 0.5;
 const bodyshotRadius = 0.92;
@@ -2090,6 +2095,7 @@ let ammoInMag = maxAmmoInMag;
 let ammoReserve = maxAmmoTotal - maxAmmoInMag;
 let mana = maxMana;
 let manaHudValue = Math.round(maxMana);
+let pendingHealthRegen = 0;
 let isReloading = false;
 let reloadCooldown = 0;
 let isJumping = false;
@@ -2167,6 +2173,7 @@ const shieldPickupMaterial = new THREE.MeshStandardMaterial({
   metalness: 0.3,
 });
 const shieldPickups = [];
+const healthPickups = [];
 
 const createSeededRng = (seed) => {
   let t = Number(seed) >>> 0;
@@ -2573,6 +2580,11 @@ const rebuildMapFromSeed = (seed) => {
   }
   shieldPickups.length = 0;
 
+  for (let i = healthPickups.length - 1; i >= 0; i -= 1) {
+    scene.remove(healthPickups[i].mesh);
+  }
+  healthPickups.length = 0;
+
   const pillarRnd = createSeededRng(normalizedSeed ^ 0x9E3779B9);
   for (let i = 0; i < 220; i += 1) {
     const w = 1 + pillarRnd() * 3;
@@ -2624,6 +2636,31 @@ const rebuildMapFromSeed = (seed) => {
       mesh,
       baseY,
       phase: shieldRnd() * Math.PI * 2,
+      active: true,
+      respawnAt: 0,
+    });
+  }
+
+  const healthRnd = createSeededRng(normalizedSeed ^ 0x27D4EB2F);
+  for (let i = 0; i < maxHealthPickups; i += 1) {
+    const mesh = createPickupVisualGroup('vida', () => {
+      return new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 0), new THREE.MeshStandardMaterial({
+        color: 0x90ff9f,
+        emissive: 0x2d8f42,
+        emissiveIntensity: 0.8,
+        roughness: 0.32,
+        metalness: 0.25,
+      }));
+    });
+    const x = (healthRnd() - 0.5) * 180;
+    const z = (healthRnd() - 0.5) * 180;
+    const baseY = 0.55;
+    mesh.position.set(x, baseY, z);
+    scene.add(mesh);
+    healthPickups.push({
+      mesh,
+      baseY,
+      phase: healthRnd() * Math.PI * 2,
       active: true,
       respawnAt: 0,
     });
@@ -2683,13 +2720,15 @@ const updateHud = () => {
   const currentAmmoLikeValue = usingMana ? Math.round(mana) : ammoInMag;
   const reserveAmmoLikeValue = usingMana ? maxMana : ammoReserve;
   const ammoLabel = usingMana ? 'Mana' : 'Balas';
+  const shownHealth = Math.round(health);
+  const shownShield = Math.round(shield);
 
-  healthStat.textContent = `Vida: ${health}`;
-  shieldStat.textContent = `Escudo: ${shield}`;
+  healthStat.textContent = `Vida: ${shownHealth}`;
+  shieldStat.textContent = `Escudo: ${shownShield}`;
   ammoStat.textContent = `${ammoLabel}: ${currentAmmoLikeValue} / ${reserveAmmoLikeValue}${!usingMana && isReloading ? ' (recargando...)' : ''}`;
   stats.textContent = `Kills: ${kills}`;
-  healthSideLabel.textContent = `${health}`;
-  shieldSideLabel.textContent = `${shield}`;
+  healthSideLabel.textContent = `${shownHealth}`;
+  shieldSideLabel.textContent = `${shownShield}`;
   ammoSideLabel.textContent = `${currentAmmoLikeValue} / ${reserveAmmoLikeValue}`;
   healthBarFill.style.width = `${Math.max(0, Math.min(100, (health / maxHealth) * 100))}%`;
   shieldBarFill.style.width = `${Math.max(0, Math.min(100, (shield / maxShield) * 100))}%`;
@@ -2856,6 +2895,7 @@ const resetCombatStats = () => {
   ammoReserve = maxAmmoTotal - maxAmmoInMag;
   mana = maxMana;
   manaHudValue = Math.round(maxMana);
+  pendingHealthRegen = 0;
   isReloading = false;
   reloadCooldown = 0;
   isJumping = false;
@@ -2893,6 +2933,7 @@ const respawnPlayer = () => {
   ammoReserve = maxAmmoTotal - maxAmmoInMag;
   mana = maxMana;
   manaHudValue = Math.round(maxMana);
+  pendingHealthRegen = 0;
   isReloading = false;
   reloadCooldown = 0;
   isJumping = false;
@@ -3918,7 +3959,7 @@ const applyOwnStateFromRoom = (roomState) => {
 
   kills = Number.isFinite(selfPlayer.kills) ? selfPlayer.kills : 0;
   if (Number.isFinite(selfPlayer.health)) {
-    health = Math.max(0, Math.min(maxHealth, Math.round(selfPlayer.health)));
+    health = Math.max(0, Math.min(maxHealth, Number(selfPlayer.health)));
   }
   if (Number.isFinite(selfPlayer.shield)) {
     shield = Math.max(0, Math.min(maxShield, Math.round(selfPlayer.shield)));
@@ -3927,6 +3968,10 @@ const applyOwnStateFromRoom = (roomState) => {
     mana = Math.max(0, Math.min(maxMana, Math.round(selfPlayer.mana)));
     manaHudValue = Math.round(mana);
   }
+  if (Number.isFinite(Number(selfPlayer.pendingHealthRegen))) {
+    pendingHealthRegen = Math.max(0, Number(selfPlayer.pendingHealthRegen));
+  }
+  clampPendingHealthRegenToMissing();
   if (selfPlayer.alive === false && !isRespawning && isMatchRunning()) {
     startRespawnCountdown();
   }
@@ -4138,11 +4183,12 @@ const connectWebSocket = () => {
       const nextShield = Number(payload.data?.shield);
       const isHeadshot = Boolean(payload.data?.headshot);
       if (Number.isFinite(nextHealth)) {
-        health = Math.max(0, Math.min(maxHealth, Math.round(nextHealth)));
+        health = Math.max(0, Math.min(maxHealth, nextHealth));
       }
       if (Number.isFinite(nextShield)) {
         shield = Math.max(0, Math.min(maxShield, Math.round(nextShield)));
       }
+      clampPendingHealthRegenToMissing();
       bleedHitFlash = Math.min(0.45, bleedHitFlash + (isHeadshot ? 0.35 : 0.2));
       triggerDamageIndicator(payload.data?.fromPlayerId);
       updateHud();
@@ -4156,9 +4202,23 @@ const connectWebSocket = () => {
 
     if (payload.type === 'player_resources') {
       const nextMana = Number(payload.data?.mana);
+      const nextHealth = Number(payload.data?.health);
+      const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
+      let changed = false;
       if (Number.isFinite(nextMana)) {
         mana = Math.max(0, Math.min(maxMana, Math.round(nextMana)));
         manaHudValue = Math.round(mana);
+        changed = true;
+      }
+      if (Number.isFinite(nextHealth)) {
+        health = Math.max(0, Math.min(maxHealth, nextHealth));
+        changed = true;
+      }
+      if (Number.isFinite(nextPendingHealthRegen)) {
+        pendingHealthRegen = Math.max(0, nextPendingHealthRegen);
+      }
+      clampPendingHealthRegenToMissing();
+      if (changed) {
         updateHud();
       }
       return;
@@ -4175,6 +4235,7 @@ const connectWebSocket = () => {
 
       if (state.self && playerId === state.self.id) {
         health = 0;
+        pendingHealthRegen = 0;
         updateHud();
         startRespawnCountdown();
         return;
@@ -4212,12 +4273,13 @@ const connectWebSocket = () => {
           camera.position.set(Number(respawnPos.x), Number(respawnPos.y), Number(respawnPos.z));
           constrainPlayerToWorld();
         }
-        health = Number.isFinite(payload.data?.health) ? Math.round(payload.data.health) : maxHealth;
+        health = Number.isFinite(payload.data?.health) ? Number(payload.data.health) : maxHealth;
         shield = Number.isFinite(payload.data?.shield) ? Math.round(payload.data.shield) : startShield;
         if (Number.isFinite(payload.data?.mana)) {
           mana = Math.round(payload.data.mana);
           manaHudValue = Math.round(mana);
         }
+        pendingHealthRegen = 0;
         isRespawning = false;
         respawnEndsAt = 0;
         respawnSecondsLeft = respawnDurationSeconds;
@@ -5001,6 +5063,50 @@ const collectShieldPickup = (pickup, nowMs) => {
   updateHud();
 };
 
+const collectHealthPickup = (pickup, nowMs) => {
+  pickup.active = false;
+  pickup.respawnAt = nowMs + healthPickupRespawnMs;
+  pickup.mesh.visible = false;
+
+  const maxRecoverable = Math.max(0, maxHealth - (health + pendingHealthRegen));
+  const amountToQueue = Math.min(maxRecoverable, healthPickupRegenAmount);
+  if (amountToQueue <= 0) {
+    return;
+  }
+
+  pendingHealthRegen += amountToQueue;
+  sendWs({ type: 'player_pickup_health' });
+};
+
+const updateHealthRegen = (delta) => {
+  if (!canPlay() || isRespawning || health <= 0 || pendingHealthRegen <= 0) {
+    return;
+  }
+
+  const canHeal = Math.max(0, maxHealth - health);
+  if (canHeal <= 0.0001) {
+    pendingHealthRegen = 0;
+    return;
+  }
+
+  const healStep = Math.min(canHeal, pendingHealthRegen, healthRegenPerSecond * delta);
+  if (healStep <= 0.0001) {
+    return;
+  }
+
+  const prevShownHealth = Math.round(health);
+  health += healStep;
+  pendingHealthRegen = Math.max(0, pendingHealthRegen - healStep);
+  if (Math.round(health) !== prevShownHealth) {
+    updateHud();
+  }
+};
+
+const clampPendingHealthRegenToMissing = () => {
+  const maxRecoverable = Math.max(0, maxHealth - health);
+  pendingHealthRegen = Math.max(0, Math.min(pendingHealthRegen, maxRecoverable));
+};
+
 const spawnPickupSpark = (pickup, color) => {
   if (!pickup?.mesh || !pickup.active || !pickup.mesh.visible) {
     return;
@@ -5214,6 +5320,49 @@ const updateShieldPickups = (delta) => {
     const horizontalDistanceSq = dx * dx + dz * dz;
     if (horizontalDistanceSq <= 1.1 * 1.1) {
       collectShieldPickup(pickup, nowMs);
+    }
+  }
+};
+
+const updateHealthPickups = (delta) => {
+  const nowMs = performance.now();
+  const nowSeconds = nowMs / 1000;
+
+  for (let i = 0; i < healthPickups.length; i += 1) {
+    const pickup = healthPickups[i];
+
+    if (!pickup.active) {
+      if (nowMs >= pickup.respawnAt) {
+        pickup.active = true;
+        pickup.mesh.visible = true;
+      } else {
+        continue;
+      }
+    }
+
+    pickup.mesh.rotation.y += delta * 1.9;
+    pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2.2 + pickup.phase) * 0.11;
+    if (Math.random() < delta * 2.8) {
+      spawnPickupSpark(pickup, 0xa5ffb0);
+      if (Math.random() < 0.7) {
+        spawnPickupSpark(pickup, 0xa5ffb0);
+      }
+    }
+
+    if (!canPlay() || isRespawning) {
+      continue;
+    }
+
+    const maxRecoverable = Math.max(0, maxHealth - (health + pendingHealthRegen));
+    if (maxRecoverable <= 0.0001) {
+      continue;
+    }
+
+    const dx = camera.position.x - pickup.mesh.position.x;
+    const dz = camera.position.z - pickup.mesh.position.z;
+    const horizontalDistanceSq = dx * dx + dz * dz;
+    if (horizontalDistanceSq <= 1.1 * 1.1) {
+      collectHealthPickup(pickup, nowMs);
     }
   }
 };
@@ -5944,10 +6093,12 @@ const animate = () => {
   updatePerfMetrics();
   updateMovement(delta);
   updateJump(delta);
+  updateHealthRegen(delta);
   updateLocalAvatar(delta);
   updateThirdPersonCamera();
   updateAmmoPickups(delta);
   updateShieldPickups(delta);
+  updateHealthPickups(delta);
   updateRain(delta);
   updateSnow(delta);
   updateKoketriaNature(delta);
