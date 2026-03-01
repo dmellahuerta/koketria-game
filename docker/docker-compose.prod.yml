@@ -8,7 +8,8 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     environment:
-      - DOMAIN=${DOMAIN:-koketria.misterrii.com}
+      - WEB_DOMAIN=${WEB_DOMAIN:-misterrii.com}
+      - GAME_DOMAIN=${GAME_DOMAIN:-koketria.misterrii.com}
       - ACME_EMAIL=${ACME_EMAIL:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

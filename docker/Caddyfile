@@ -1,4 +1,9 @@
-{$DOMAIN} {
+{$WEB_DOMAIN} {
   encode zstd gzip
   reverse_proxy web:80
+}
+
+{$GAME_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy front:80
 }

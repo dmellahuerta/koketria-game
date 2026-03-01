@@ -108,20 +108,21 @@ El stack productivo usa:
 - `backend` (Fastify + WebSocket)
 - `caddy` (terminación TLS con Let's Encrypt)
 
-Para `koketria.misterrii.com`, asegurate antes:
-- DNS `A` del dominio apuntando al Elastic IP de la EC2.
+Para `misterrii.com` (web) y `koketria.misterrii.com` (juego), asegurate antes:
+- DNS `A` de ambos dominios apuntando al Elastic IP de la EC2.
 - Security Group con puertos `80` y `443` abiertos.
 
 Para levantar producción con HTTPS:
 
 ```bash
-DOMAIN=koketria.misterrii.com ACME_EMAIL=tu-correo@dominio.com \
+WEB_DOMAIN=misterrii.com GAME_DOMAIN=koketria.misterrii.com ACME_EMAIL=tu-correo@dominio.com \
 docker compose -f docker/docker-compose.prod.yml up -d --build
 ```
 
 Servicios:
 
-- Web (HTTPS): `https://koketria.misterrii.com`
+- Web (HTTPS): `https://misterrii.com`
+- Juego (HTTPS): `https://koketria.misterrii.com`
 - Backend interno: `backend:3000` (no expuesto directo)
 
 Cache de navegador en producción:
@@ -136,7 +137,8 @@ Si cambias un asset público con el mismo nombre, para invalidar más rápido:
 
 Variables útiles (opcional):
 
-- `DOMAIN` (default `koketria.misterrii.com`): dominio para certificado TLS.
+- `WEB_DOMAIN` (default `misterrii.com`): dominio de la web estática.
+- `GAME_DOMAIN` (default `koketria.misterrii.com`): dominio del juego.
 - `ACME_EMAIL` (opcional): email para Let's Encrypt.
 - `HTTP_PORT` (default `80`): puerto HTTP público.
 - `HTTPS_PORT` (default `443`): puerto HTTPS público.
@@ -146,7 +148,7 @@ Variables útiles (opcional):
 Ejemplo:
 
 ```bash
-DOMAIN=koketria.misterrii.com ACME_EMAIL=tu-correo@dominio.com \
+WEB_DOMAIN=misterrii.com GAME_DOMAIN=koketria.misterrii.com ACME_EMAIL=tu-correo@dominio.com \
 LAG_COMP_MS=160 MAX_AIM_DELTA_DEG=95 \
 docker compose -f docker/docker-compose.prod.yml up -d --build
 ```
