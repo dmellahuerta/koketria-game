@@ -4386,6 +4386,9 @@ const applyOwnStateFromRoom = (roomState) => {
 
 const applyRoomState = (roomState, options = {}) => {
   const wasOutsideRoom = !state.joinedRoom;
+  if (wasOutsideRoom) {
+    resetCombatStats();
+  }
   state.joinedRoom = roomState;
   const roomSeed = Number.isFinite(roomState.room?.mapSeed)
     ? roomState.room.mapSeed
@@ -4397,10 +4400,6 @@ const applyRoomState = (roomState, options = {}) => {
 
   if (options.applyOwnState || wasOutsideRoom) {
     applyOwnStateFromRoom(roomState);
-  }
-
-  if (wasOutsideRoom) {
-    resetCombatStats();
   }
 
   setInRoom(true);

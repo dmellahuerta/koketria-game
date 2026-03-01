@@ -180,14 +180,15 @@ const resetRoomStats = (room) => {
   });
 };
 
-const resetCombatSpecialCooldowns = (combat) => {
+const resetCombatSpecialCooldowns = (combat, startOnCooldown = true, nowMs = Date.now()) => {
   if (!combat) {
     return;
   }
-  combat.lastLunarRainAt = 0;
-  combat.lastPumoriOrbitAt = 0;
-  combat.lastSilentConeAt = 0;
-  combat.lastNeoorphenMeteorAt = 0;
+  const stamp = startOnCooldown ? nowMs : 0;
+  combat.lastLunarRainAt = stamp;
+  combat.lastPumoriOrbitAt = stamp;
+  combat.lastSilentConeAt = stamp;
+  combat.lastNeoorphenMeteorAt = stamp;
 };
 
 const resetRoomCombat = (room) => {
@@ -210,6 +211,7 @@ const resetRoomCombat = (room) => {
       lastSilentConeAt: 0,
       lastNeoorphenMeteorAt: 0,
     });
+    resetCombatSpecialCooldowns(room.combat.get(playerId), true, now);
   });
 };
 
@@ -230,6 +232,7 @@ const getCombatState = (room, playerId) => {
       lastSilentConeAt: 0,
       lastNeoorphenMeteorAt: 0,
     });
+    resetCombatSpecialCooldowns(room.combat.get(playerId), true, now);
   }
   return room.combat.get(playerId);
 };
@@ -1735,7 +1738,7 @@ const joinRoom = (client, room) => {
     lastSilentConeAt: 0,
     lastNeoorphenMeteorAt: 0,
   });
-  resetCombatSpecialCooldowns(room.combat.get(client.id));
+  resetCombatSpecialCooldowns(room.combat.get(client.id), true, now);
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
     x: spawn.x,
