@@ -2177,8 +2177,24 @@ const getRoomState = (room) => {
   };
 };
 
+const shouldExposeRoomInList = (room) => {
+  if (!room) {
+    return false;
+  }
+  if (!room.isServerManaged && room.mode === 'versusmatch' && room.status === 'cooldown') {
+    return false;
+  }
+  return true;
+};
+
+const getPublicRoomList = () => {
+  return Array.from(rooms.values())
+    .filter(shouldExposeRoomInList)
+    .map(getRoomSummary);
+};
+
 const broadcastRoomList = () => {
-  const data = Array.from(rooms.values()).map(getRoomSummary);
+  const data = getPublicRoomList();
 
   for (const socket of clients.keys()) {
     send(socket, {
@@ -2469,7 +2485,7 @@ const start = async () => {
         type: 'connected',
         ...json(true, {
           player: serializePlayer(client),
-          rooms: Array.from(rooms.values()).map(getRoomSummary),
+          rooms: getPublicRoomList(),
         }),
       });
 
@@ -2494,7 +2510,7 @@ const start = async () => {
         if (message.type === 'list_rooms') {
           send(ws, {
             type: 'rooms_list',
-            ...json(true, Array.from(rooms.values()).map(getRoomSummary)),
+            ...json(true, getPublicRoomList()),
           });
           return;
         }

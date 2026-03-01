@@ -5079,7 +5079,8 @@ const applyRoomState = (roomState, options = {}) => {
     applyOwnStateFromRoom(roomState);
   }
 
-  setInRoom(roomState.room.status === 'in_game');
+  const keepMatchSceneVisible = roomState.room.status === 'in_game' || roomState.room.status === 'cooldown';
+  setInRoom(keepMatchSceneVisible);
   syncLobbyScreens();
   if (roomState.room.status !== 'cooldown') {
     hideWinnerOverlay();
@@ -5603,7 +5604,8 @@ const connectWebSocket = () => {
         if (payload.data.status !== 'cooldown') {
           hideWinnerOverlay();
         }
-        setInRoom(payload.data.status === 'in_game');
+        const keepMatchSceneVisible = payload.data.status === 'in_game' || payload.data.status === 'cooldown';
+        setInRoom(keepMatchSceneVisible);
         syncLobbyScreens();
         updateVersusLobbyUi();
         updateHud();
