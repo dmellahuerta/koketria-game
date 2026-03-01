@@ -58,6 +58,12 @@ app.innerHTML = `
       <div class="bar-track"><div id="shieldBarFill" class="bar-fill shield"></div></div>
     </div>
 
+    <div id="abilityHud" class="ability-hud hidden">
+      <p class="ability-title">Especial R</p>
+      <p id="abilityCooldownText" class="ability-value">-</p>
+      <div class="ability-track"><div id="abilityCooldownFill" class="ability-fill"></div></div>
+    </div>
+
     <div id="matchInfo">
       <h2>Panel (I)</h2>
       <p><strong>Movimiento:</strong> W A S D</p>
@@ -211,6 +217,9 @@ const specialStat = document.querySelector('#specialStat');
 const healthSideLabel = document.querySelector('#healthSideLabel');
 const shieldSideLabel = document.querySelector('#shieldSideLabel');
 const ammoSideLabel = document.querySelector('#ammoSideLabel');
+const abilityHud = document.querySelector('#abilityHud');
+const abilityCooldownText = document.querySelector('#abilityCooldownText');
+const abilityCooldownFill = document.querySelector('#abilityCooldownFill');
 const healthBarFill = document.querySelector('#healthBarFill');
 const shieldBarFill = document.querySelector('#shieldBarFill');
 const ammoBarFill = document.querySelector('#ammoBarFill');
@@ -2894,10 +2903,14 @@ const renderSpecialStat = (force = false) => {
   if (!specialStat) {
     return;
   }
+  const inRoom = Boolean(state.joinedRoom);
   if (!isPezunalunarCharacter(activeCharacter)) {
     if (force || lastLunarCooldownShown !== -1) {
       specialStat.textContent = 'Especial R: -';
       lastLunarCooldownShown = -1;
+    }
+    if (abilityHud) {
+      abilityHud.classList.add('hidden');
     }
     return;
   }
@@ -2911,6 +2924,21 @@ const renderSpecialStat = (force = false) => {
   specialStat.textContent = secondsLeft > 0
     ? `Especial R: ${secondsLeft}s`
     : 'Especial R: LISTO';
+
+  if (abilityHud) {
+    if (inRoom) {
+      abilityHud.classList.remove('hidden');
+    } else {
+      abilityHud.classList.add('hidden');
+    }
+  }
+  if (abilityCooldownText) {
+    abilityCooldownText.textContent = secondsLeft > 0 ? `${secondsLeft}s` : 'LISTO';
+  }
+  if (abilityCooldownFill) {
+    const ratio = Math.max(0, Math.min(1, remainingMs / lunarSpecialCooldownMs));
+    abilityCooldownFill.style.width = `${Math.round((1 - ratio) * 100)}%`;
+  }
 };
 
 rebuildMapFromSeed(1);
