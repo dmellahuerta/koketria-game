@@ -50,6 +50,8 @@ const mapAxisZBase = 96;
 const mapBoundaryMinRadius = 0.74;
 const mapBoundaryMaxRadius = 1.24;
 const playerCollisionRadius = 0.55;
+const spawnMinDistanceToPlayers = 4.5;
+const spawnFallbackDistanceToPlayers = 2.5;
 
 const json = (ok, data, error) => {
   return { ok, data, error };
@@ -469,37 +471,76 @@ const isValidSpawnPoint = (room, profile, x, z) => {
     && !collidesWithMapBox(room, x, z, playerCollisionRadius);
 };
 
-const pickSpawnPosition = (room, salt = '') => {
+const isFarFromAlivePlayers = (room, x, z, minDistance, ignorePlayerId = '') => {
+  if (!room || !Number.isFinite(minDistance) || minDistance <= 0) {
+    return true;
+  }
+  const ignoreId = String(ignorePlayerId || '');
+  const minDistanceSq = minDistance * minDistance;
+  for (const playerId of room.players) {
+    if (ignoreId && playerId === ignoreId) {
+      continue;
+    }
+    const combat = getCombatState(room, playerId);
+    if (!combat?.alive) {
+      continue;
+    }
+    const client = getClientById(playerId);
+    if (!client?.state?.position) {
+      continue;
+    }
+    const dx = Number(client.state.position.x) - x;
+    const dz = Number(client.state.position.z) - z;
+    if ((dx * dx) + (dz * dz) < minDistanceSq) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const pickSpawnPosition = (room, salt = '', ignorePlayerId = '') => {
   const profile = getRoomMapProfile(room);
   const seed = ensureRoomMapSeed(room);
   const nowSalt = Date.now() & 0xffff;
   const rnd = createSeededRng((seed ^ hashStringToSeed(salt) ^ nowSalt) >>> 0);
+  const minDistancePhases = [spawnMinDistanceToPlayers, spawnFallbackDistanceToPlayers, 0];
 
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const theta = rnd() * Math.PI * 2;
-    const maxRadiusNorm = 0.78;
-    const minRadiusNorm = 0.06;
-    const radiusNorm = minRadiusNorm + (rnd() * (maxRadiusNorm - minRadiusNorm));
-    const boundaryPoint = getBoundaryPointAt(profile, theta, 0);
-    const x = boundaryPoint.x * radiusNorm;
-    const z = boundaryPoint.z * radiusNorm;
-    if (isValidSpawnPoint(room, profile, x, z)) {
-      return { x, y: 1.7, z };
-    }
-  }
-
-  if (isValidSpawnPoint(room, profile, 0, 0)) {
-    return { x: 0, y: 1.7, z: 0 };
-  }
-
-  for (let radius = 1; radius <= 18; radius += 1) {
-    const samples = 28;
-    for (let i = 0; i < samples; i += 1) {
-      const theta = (i / samples) * Math.PI * 2;
-      const x = Math.cos(theta) * radius;
-      const z = Math.sin(theta) * radius;
-      if (isValidSpawnPoint(room, profile, x, z)) {
+  for (let phase = 0; phase < minDistancePhases.length; phase += 1) {
+    const minDistance = minDistancePhases[phase];
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const theta = rnd() * Math.PI * 2;
+      const maxRadiusNorm = 0.78;
+      const minRadiusNorm = 0.06;
+      const radiusNorm = minRadiusNorm + (rnd() * (maxRadiusNorm - minRadiusNorm));
+      const boundaryPoint = getBoundaryPointAt(profile, theta, 0);
+      const x = boundaryPoint.x * radiusNorm;
+      const z = boundaryPoint.z * radiusNorm;
+      if (
+        isValidSpawnPoint(room, profile, x, z)
+        && isFarFromAlivePlayers(room, x, z, minDistance, ignorePlayerId)
+      ) {
         return { x, y: 1.7, z };
+      }
+    }
+    if (
+      isValidSpawnPoint(room, profile, 0, 0)
+      && isFarFromAlivePlayers(room, 0, 0, minDistance, ignorePlayerId)
+    ) {
+      return { x: 0, y: 1.7, z: 0 };
+    }
+
+    for (let radius = 1; radius <= 18; radius += 1) {
+      const samples = 28;
+      for (let i = 0; i < samples; i += 1) {
+        const theta = (i / samples) * Math.PI * 2;
+        const x = Math.cos(theta) * radius;
+        const z = Math.sin(theta) * radius;
+        if (
+          isValidSpawnPoint(room, profile, x, z)
+          && isFarFromAlivePlayers(room, x, z, minDistance, ignorePlayerId)
+        ) {
+          return { x, y: 1.7, z };
+        }
       }
     }
   }
@@ -905,7 +946,7 @@ const joinRoom = (client, room) => {
     lastManaRegenAt: now,
     lastShotAt: 0,
   });
-  const spawn = pickSpawnPosition(room, client.id);
+  const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
     x: spawn.x,
     y: spawn.y,
@@ -1467,7 +1508,7 @@ const start = async () => {
           combat.mana = maxMana;
           combat.lastManaRegenAt = Date.now();
           combat.lastShotAt = 0;
-          const spawn = pickSpawnPosition(room, `${current.id}-respawn`);
+          const spawn = pickSpawnPosition(room, `${current.id}-respawn`, current.id);
           current.state.position = {
             x: spawn.x,
             y: spawn.y,
