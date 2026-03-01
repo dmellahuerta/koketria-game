@@ -174,6 +174,8 @@ app.innerHTML = `
   </div>
 
   <div id="crosshair" aria-hidden="true"></div>
+  <div id="teamAimIndicator" class="hidden">-</div>
+  <canvas id="teamMiniMap" class="hidden" width="180" height="180"></canvas>
 
   <div id="chatFeed" class="chat-feed">
     <div id="chatLog" class="chat-log"></div>
@@ -297,6 +299,8 @@ const chatLog = document.querySelector('#chatLog');
 const chatInputWrap = document.querySelector('#chatInputWrap');
 const chatInput = document.querySelector('#chatInput');
 const crosshair = document.querySelector('#crosshair');
+const teamAimIndicator = document.querySelector('#teamAimIndicator');
+const teamMiniMap = document.querySelector('#teamMiniMap');
 const optionsScreen = document.querySelector('#optionsScreen');
 const optMouseSensitivity = document.querySelector('#optMouseSensitivity');
 const optMouseSensitivityValue = document.querySelector('#optMouseSensitivityValue');
@@ -731,6 +735,44 @@ const shouldShowTeamMarkers = () => {
       && isVersusRoom(state.joinedRoom.room)
       && state.joinedRoom.room.status === 'in_game',
   );
+};
+
+const getTeamPalette = (team) => {
+  const normalized = normalizePlayerTeam(team);
+  if (normalized === 'red') {
+    return {
+      tracer: 0xff6b6b,
+      impactA: 0xff9c9c,
+      impactB: 0xff6b6b,
+      label: 'Aliado',
+    };
+  }
+  if (normalized === 'blue') {
+    return {
+      tracer: 0x66a4ff,
+      impactA: 0xa8c8ff,
+      impactB: 0x66a4ff,
+      label: 'Enemigo',
+    };
+  }
+  return {
+    tracer: 0xa2ffae,
+    impactA: 0xbff3ff,
+    impactB: 0x7dff92,
+    label: '-',
+  };
+};
+
+const getTeamByPlayerId = (playerId) => {
+  const id = String(playerId || '');
+  if (!id) {
+    return null;
+  }
+  if (state.self && id === state.self.id) {
+    return normalizePlayerTeam(localAvatar.team);
+  }
+  const entry = state.remotePlayers.get(id);
+  return normalizePlayerTeam(entry?.team);
 };
 
 const getVersusScoreTarget = (room) => {
@@ -1283,6 +1325,7 @@ const localAvatar = {
   funnyUntil: 0,
   team: null,
   teamMarker: null,
+  teamOutline: null,
 };
 
 const getCharacterAssetKey = (characterId) => {
@@ -2733,6 +2776,7 @@ let crosshairHeadshotUntil = 0;
 let crosshairKillUntil = 0;
 let damageIndicatorUntil = 0;
 let damageIndicatorAngle = 0;
+let miniMapLastRenderAt = 0;
 
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const forward = new THREE.Vector3();
@@ -3586,6 +3630,109 @@ const updateDamageIndicator = () => {
   damageIndicator.style.setProperty('--damage-angle', `${damageIndicatorAngle.toFixed(1)}deg`);
 };
 
+const updateTeamAimIndicator = () => {
+  if (!teamAimIndicator) {
+    return;
+  }
+  if (!shouldShowTeamMarkers() || !isLocked || isRespawning) {
+    teamAimIndicator.classList.add('hidden');
+    return;
+  }
+
+  camera.getWorldDirection(dir);
+  const origin = camera.position;
+  const direction = dir.clone().normalize();
+  let best = null;
+  for (const entry of state.remotePlayers.values()) {
+    if (!entry?.group || entry.isDead) {
+      continue;
+    }
+    const toTarget = new THREE.Vector3().subVectors(entry.group.position, origin);
+    const proj = toTarget.dot(direction);
+    if (proj <= 0 || proj > 140) {
+      continue;
+    }
+    const closestPoint = origin.clone().add(direction.clone().multiplyScalar(proj));
+    const distToLineSq = closestPoint.distanceToSquared(entry.group.position);
+    if (distToLineSq > (1.45 * 1.45)) {
+      continue;
+    }
+    if (!best || proj < best.proj) {
+      best = { proj, team: normalizePlayerTeam(entry.team) };
+    }
+  }
+
+  if (!best || !best.team || !normalizePlayerTeam(localAvatar.team)) {
+    teamAimIndicator.classList.add('hidden');
+    return;
+  }
+  const isFriendly = best.team === normalizePlayerTeam(localAvatar.team);
+  teamAimIndicator.textContent = isFriendly ? 'ALIADO' : 'ENEMIGO';
+  teamAimIndicator.classList.toggle('friendly', isFriendly);
+  teamAimIndicator.classList.toggle('enemy', !isFriendly);
+  teamAimIndicator.classList.remove('hidden');
+};
+
+const updateMiniMap = () => {
+  if (!teamMiniMap) {
+    return;
+  }
+  if (!state.joinedRoom || !shouldShowTeamMarkers()) {
+    teamMiniMap.classList.add('hidden');
+    return;
+  }
+  const now = performance.now();
+  if (now - miniMapLastRenderAt < 100) {
+    return;
+  }
+  miniMapLastRenderAt = now;
+  teamMiniMap.classList.remove('hidden');
+  const ctx = teamMiniMap.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+  const w = teamMiniMap.width;
+  const h = teamMiniMap.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(4, 12, 18, 0.86)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(130, 210, 255, 0.45)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(w / 2, h / 2, (Math.min(w, h) * 0.46), 0, Math.PI * 2);
+  ctx.stroke();
+
+  const mapRadius = Math.max(60, mapHalfExtent);
+  const toMap = (x, z) => {
+    const nx = Math.max(-1, Math.min(1, x / mapRadius));
+    const nz = Math.max(-1, Math.min(1, z / mapRadius));
+    return {
+      x: (w / 2) + (nx * (w * 0.42)),
+      y: (h / 2) + (nz * (h * 0.42)),
+    };
+  };
+
+  const drawDot = (x, z, color, size) => {
+    const p = toMap(x, z);
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  for (const entry of state.remotePlayers.values()) {
+    if (!entry?.group) {
+      continue;
+    }
+    const team = normalizePlayerTeam(entry.team);
+    const color = team === 'red' ? '#ff7f7f' : team === 'blue' ? '#7fa8ff' : '#bfffbf';
+    drawDot(entry.group.position.x, entry.group.position.z, color, 3.3);
+  }
+  const myTeam = normalizePlayerTeam(localAvatar.team);
+  const myColor = myTeam === 'red' ? '#ff3f3f' : myTeam === 'blue' ? '#4f7fff' : '#c9ffc9';
+  drawDot(camera.position.x, camera.position.z, myColor, 4.2);
+};
+
 const resetCombatStats = () => {
   clearAllPumoriOrbitSpecials();
   health = maxHealth;
@@ -3879,6 +4026,9 @@ const buildAnimatedRemoteModel = (resource) => {
 };
 
 const disposeLocalAvatar = () => {
+  if (localAvatar.teamOutline) {
+    disposeTeamMarker(localAvatar.teamOutline);
+  }
   if (localAvatar.teamMarker) {
     disposeTeamMarker(localAvatar.teamMarker);
   }
@@ -3891,6 +4041,7 @@ const disposeLocalAvatar = () => {
   localAvatar.currentAnimation = '';
   localAvatar.funnyUntil = 0;
   localAvatar.teamMarker = null;
+  localAvatar.teamOutline = null;
 };
 
 const ensureLocalAvatar = async () => {
@@ -3915,6 +4066,7 @@ const ensureLocalAvatar = async () => {
   localAvatar.shootUntil = 0;
   localAvatar.funnyUntil = 0;
   ensureLocalTeamMarker();
+  ensureLocalTeamOutline();
   setLocalAvatarAnimation('idle');
 };
 
@@ -3924,6 +4076,9 @@ const updateLocalAvatar = (delta) => {
   }
   if (localAvatar.teamMarker) {
     localAvatar.teamMarker.visible = shouldShowTeamMarkers() && !isRespawning;
+  }
+  if (localAvatar.teamOutline) {
+    localAvatar.teamOutline.visible = shouldShowTeamMarkers() && !isRespawning;
   }
 
   const visible = Boolean(state.joinedRoom && isThirdPerson && !isRespawning);
@@ -4151,6 +4306,7 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   liveEntry.isJumping = false;
   liveEntry.deadAt = 0;
   ensureRemoteTeamMarker(liveEntry);
+  ensureRemoteTeamOutline(liveEntry);
   const hpBar = createRemoteHealthBar();
   liveEntry.group.add(hpBar.holder);
   liveEntry.healthBar = hpBar;
@@ -4159,6 +4315,10 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
 };
 
 const disposeRemotePlayer = (entry) => {
+  if (entry.teamOutline) {
+    disposeTeamMarker(entry.teamOutline);
+    entry.teamOutline = null;
+  }
   if (entry.teamMarker) {
     disposeTeamMarker(entry.teamMarker);
     entry.teamMarker = null;
@@ -4226,6 +4386,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     healthBar: null,
     team: null,
     teamMarker: null,
+    teamOutline: null,
   });
 
   const entry = state.remotePlayers.get(id);
@@ -4245,6 +4406,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     entry.character = availableCharacters[0] || activeCharacter || 'silentman';
   }
   ensureRemoteTeamMarker(entry);
+  ensureRemoteTeamOutline(entry);
   upgradeRemotePlayerToCharacter(entry);
 };
 
@@ -4267,6 +4429,7 @@ const syncRemotePlayer = (player) => {
   }
   entry.team = normalizePlayerTeam(player.team);
   ensureRemoteTeamMarker(entry);
+  ensureRemoteTeamOutline(entry);
   const hasCharacterUpdate = typeof player.character === 'string' && player.character.length > 0;
   const resolvedCharacter = hasCharacterUpdate ? resolveCharacterForPlayer(player.character) : entry.character;
   if (resolvedCharacter !== entry.character) {
@@ -4423,10 +4586,11 @@ const createHolyShotVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
+  const palette = getTeamPalette(options.team);
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.22, 14, 14),
     new THREE.MeshBasicMaterial({
-      color: 0x9af0ff,
+      color: palette.impactA,
       transparent: true,
       opacity: 0.96,
       blending: THREE.AdditiveBlending,
@@ -4455,15 +4619,21 @@ const createHolyShotVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    colors: {
+      a: palette.impactA,
+      b: palette.impactB,
+      tracer: palette.tracer,
+    },
   });
 };
 
-const createHammerMesh = (scale = 1, opacity = 1) => {
+const createHammerMesh = (scale = 1, opacity = 1, team = null) => {
+  const palette = getTeamPalette(team);
   const hammer = new THREE.Group();
   const head = new THREE.Mesh(
     new THREE.BoxGeometry(0.46 * scale, 0.26 * scale, 0.22 * scale),
     new THREE.MeshBasicMaterial({
-      color: 0xfff2c6,
+      color: palette.impactA,
       transparent: true,
       opacity: Math.max(0.1, Math.min(1, 0.98 * opacity)),
       blending: THREE.AdditiveBlending,
@@ -4473,7 +4643,7 @@ const createHammerMesh = (scale = 1, opacity = 1) => {
   const handle = new THREE.Mesh(
     new THREE.CylinderGeometry(0.05 * scale, 0.05 * scale, 0.7 * scale, 10),
     new THREE.MeshBasicMaterial({
-      color: 0x9af0ff,
+      color: palette.tracer,
       transparent: true,
       opacity: Math.max(0.1, Math.min(1, 0.95 * opacity)),
       blending: THREE.AdditiveBlending,
@@ -4502,7 +4672,8 @@ const createSacredHammerVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const hammer = createHammerMesh(1, 1);
+  const palette = getTeamPalette(options.team);
+  const hammer = createHammerMesh(1, 1, options.team);
   hammer.position.copy(start);
   scene.add(hammer);
 
@@ -4520,6 +4691,11 @@ const createSacredHammerVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    colors: {
+      a: palette.impactA,
+      b: palette.impactB,
+      tracer: palette.tracer,
+    },
   });
 };
 
@@ -4592,9 +4768,11 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
   const now = performance.now();
   const hammers = [];
   const duration = Math.max(500, Number(durationMs) || 10_000);
+  const ownerTeam = getTeamByPlayerId(ownerId);
 
   activePumoriOrbitSpecials.push({
     ownerId,
+    team: ownerTeam,
     hammers,
     createdAt: now,
     endAt: now + duration,
@@ -4657,10 +4835,11 @@ const createPoisonGasVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
+  const palette = getTeamPalette(options.team);
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.3, 16, 16),
     new THREE.MeshBasicMaterial({
-      color: 0x5bff66,
+      color: palette.tracer,
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
@@ -4689,6 +4868,11 @@ const createPoisonGasVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    colors: {
+      a: palette.impactA,
+      b: palette.impactB,
+      tracer: palette.tracer,
+    },
   });
 };
 
@@ -4708,10 +4892,11 @@ const createLunarFireVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
+  const palette = getTeamPalette(options.team);
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(0.22, 16, 16),
     new THREE.MeshBasicMaterial({
-      color: 0xe8f7ff,
+      color: palette.impactA,
       transparent: true,
       opacity: 0.96,
       blending: THREE.AdditiveBlending,
@@ -4740,6 +4925,11 @@ const createLunarFireVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    colors: {
+      a: palette.impactA,
+      b: palette.impactB,
+      tracer: palette.tracer,
+    },
   });
 };
 
@@ -4823,6 +5013,7 @@ const applyOwnStateFromRoom = (roomState) => {
   }
   localAvatar.team = normalizePlayerTeam(selfPlayer.team);
   ensureLocalTeamMarker();
+  ensureLocalTeamOutline();
 
   const pos = selfPlayer.state?.position;
   const rot = selfPlayer.state?.rotation;
@@ -4881,6 +5072,7 @@ const syncLocalTeamFromRoom = (roomState) => {
   }
   localAvatar.team = normalizePlayerTeam(selfPlayer.team);
   ensureLocalTeamMarker();
+  ensureLocalTeamOutline();
 };
 
 const applyRoomState = (roomState, options = {}) => {
@@ -4984,6 +5176,7 @@ const connectWebSocket = () => {
       hideWinnerOverlay();
       localAvatar.team = null;
       ensureLocalTeamMarker();
+      ensureLocalTeamOutline();
       updateHud();
       syncLobbyScreens();
       updateVersusLobbyUi();
@@ -5044,6 +5237,8 @@ const connectWebSocket = () => {
 
       const shooterEntry = shot.playerId ? state.remotePlayers.get(shot.playerId) : null;
       const shooterCharacter = shot.character || shooterEntry?.character || '';
+      const shooterTeam = normalizePlayerTeam(shooterEntry?.team || getTeamByPlayerId(shot.playerId));
+      const shooterPalette = getTeamPalette(shooterTeam);
       const shooterUsesHolyShots = isSilentmanCharacter(shooterCharacter);
       const shooterUsesHammer = isPumoriCharacter(shooterCharacter);
       const shooterUsesPoison = isNeoorphenCharacter(shooterCharacter);
@@ -5064,20 +5259,20 @@ const connectWebSocket = () => {
       const visualEnd = end.clone();
 
       if (shooterUsesHolyShots) {
-        createHolyShotVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        createHolyShotVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId, team: shooterTeam });
         triggerNaturePulse(origin);
       } else if (shooterUsesHammer) {
-        createSacredHammerVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        createSacredHammerVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId, team: shooterTeam });
         triggerNaturePulse(origin);
       } else if (shooterUsesPoison) {
-        createPoisonGasVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        createPoisonGasVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId, team: shooterTeam });
         triggerNaturePulse(origin);
       } else if (shooterUsesLunar) {
-        createLunarFireVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId });
+        createLunarFireVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId, team: shooterTeam });
         triggerNaturePulse(origin);
       } else {
-        createTracer(origin, visualEnd, 0x59ccff);
-        createImpact(visualEnd, 0x59ccff);
+        createTracer(origin, visualEnd, shooterPalette.tracer);
+        createImpact(visualEnd, shooterPalette.impactB);
       }
       registerRemoteShootSound(origin, shooterCharacter);
       return;
@@ -5086,6 +5281,8 @@ const connectWebSocket = () => {
     if (payload.type === 'special_lunar_rain_wave') {
       const data = payload.data || {};
       const ownerId = String(data.playerId || '');
+      const ownerTeam = getTeamByPlayerId(ownerId);
+      const ownerPalette = getTeamPalette(ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
       for (let i = 0; i < strikes.length; i += 1) {
         const strike = strikes[i] || {};
@@ -5103,8 +5300,8 @@ const connectWebSocket = () => {
         }
         const startVec = new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z));
         const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
-        createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId });
-        createImpact(impactVec, Math.random() > 0.5 ? 0xbce9ff : 0x84cfff);
+        createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam });
+        createImpact(impactVec, Math.random() > 0.5 ? ownerPalette.impactA : ownerPalette.impactB);
       }
       return;
     }
@@ -5124,6 +5321,7 @@ const connectWebSocket = () => {
       }
       const origin = new THREE.Vector3(Number(originData.x), Number(originData.y), Number(originData.z));
       const shooterEntry = state.remotePlayers.get(ownerId);
+      const ownerTeam = getTeamByPlayerId(ownerId);
       const shooterCharacter = data.character || shooterEntry?.character || 'silentman';
       if (ownerId !== state.self?.id && shooterEntry && !shooterEntry.isDead) {
         setRemoteAnimation(shooterEntry, 'shoot');
@@ -5145,7 +5343,7 @@ const connectWebSocket = () => {
         }
         const dir = new THREE.Vector3(Number(direction.x), Number(direction.y), Number(direction.z)).normalize();
         const end = origin.clone().add(dir.multiplyScalar(distance));
-        createHolyShotVisual(origin.clone(), end, { source: 'local', ownerId });
+        createHolyShotVisual(origin.clone(), end, { source: 'local', ownerId, team: ownerTeam });
       }
       triggerNaturePulse(origin);
       if (ownerId !== state.self?.id) {
@@ -5157,6 +5355,8 @@ const connectWebSocket = () => {
     if (payload.type === 'special_neoorphen_meteor_wave') {
       const data = payload.data || {};
       const ownerId = String(data.playerId || '');
+      const ownerTeam = getTeamByPlayerId(ownerId);
+      const ownerPalette = getTeamPalette(ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
       let firstImpact = null;
       for (let i = 0; i < strikes.length; i += 1) {
@@ -5178,10 +5378,10 @@ const connectWebSocket = () => {
         if (!firstImpact) {
           firstImpact = impactVec.clone();
         }
-        createPoisonGasVisual(startVec, impactVec, { source: 'local', ownerId });
-        createTracer(startVec, impactVec, 0x66ff73, { radiusScale: 1.6, life: 0.52, opacity: 0.98 });
-        const cloudA = createImpact(impactVec, 0x58ff66);
-        const cloudB = createImpact(impactVec, 0x9dff7a);
+        createPoisonGasVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam });
+        createTracer(startVec, impactVec, ownerPalette.tracer, { radiusScale: 1.6, life: 0.52, opacity: 0.98 });
+        const cloudA = createImpact(impactVec, ownerPalette.tracer);
+        const cloudB = createImpact(impactVec, ownerPalette.impactB);
         if (cloudA) {
           cloudA.scale.setScalar(2.6);
           cloudA.userData.life = 0.48;
@@ -5463,6 +5663,7 @@ const connectWebSocket = () => {
     hideWinnerOverlay();
     localAvatar.team = null;
     ensureLocalTeamMarker();
+    ensureLocalTeamOutline();
     updateHud();
     syncLobbyScreens();
     updateVersusLobbyUi();
@@ -5767,6 +5968,26 @@ const createTeamMarker = (team) => {
   return marker;
 };
 
+const createTeamOutline = (team) => {
+  const normalizedTeam = normalizePlayerTeam(team);
+  const color = normalizedTeam === 'red' ? 0xff7f7f : 0x7fa8ff;
+  const outline = new THREE.Mesh(
+    new THREE.SphereGeometry(0.62, 18, 14),
+    new THREE.MeshBasicMaterial({
+      color,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  outline.position.set(0, 1.18, 0);
+  outline.userData.team = normalizedTeam;
+  outline.renderOrder = 70;
+  return outline;
+};
+
 const ensureLocalTeamMarker = () => {
   const team = normalizePlayerTeam(localAvatar.team);
   if (!localAvatar.group || !team) {
@@ -5784,6 +6005,26 @@ const ensureLocalTeamMarker = () => {
     localAvatar.group.add(localAvatar.teamMarker);
   } else if (localAvatar.teamMarker.parent !== localAvatar.group) {
     localAvatar.group.add(localAvatar.teamMarker);
+  }
+};
+
+const ensureLocalTeamOutline = () => {
+  const team = normalizePlayerTeam(localAvatar.team);
+  if (!localAvatar.group || !team) {
+    if (localAvatar.teamOutline) {
+      disposeTeamMarker(localAvatar.teamOutline);
+      localAvatar.teamOutline = null;
+    }
+    return;
+  }
+  if (!localAvatar.teamOutline || localAvatar.teamOutline.userData.team !== team) {
+    if (localAvatar.teamOutline) {
+      disposeTeamMarker(localAvatar.teamOutline);
+    }
+    localAvatar.teamOutline = createTeamOutline(team);
+    localAvatar.group.add(localAvatar.teamOutline);
+  } else if (localAvatar.teamOutline.parent !== localAvatar.group) {
+    localAvatar.group.add(localAvatar.teamOutline);
   }
 };
 
@@ -5810,6 +6051,29 @@ const ensureRemoteTeamMarker = (entry) => {
   }
 };
 
+const ensureRemoteTeamOutline = (entry) => {
+  if (!entry?.group) {
+    return;
+  }
+  const team = normalizePlayerTeam(entry.team);
+  if (!team) {
+    if (entry.teamOutline) {
+      disposeTeamMarker(entry.teamOutline);
+      entry.teamOutline = null;
+    }
+    return;
+  }
+  if (!entry.teamOutline || entry.teamOutline.userData.team !== team) {
+    if (entry.teamOutline) {
+      disposeTeamMarker(entry.teamOutline);
+    }
+    entry.teamOutline = createTeamOutline(team);
+    entry.group.add(entry.teamOutline);
+  } else if (entry.teamOutline.parent !== entry.group) {
+    entry.group.add(entry.teamOutline);
+  }
+};
+
 const updateRemoteHealthBar = (entry) => {
   if (!entry?.healthBar?.fill) {
     return;
@@ -5825,8 +6089,10 @@ const updateRemoteHealthBar = (entry) => {
   } else {
     entry.healthBar.fill.material.color.set(0xff6767);
   }
+  const team = normalizePlayerTeam(entry.team);
   const hpText = `${String(entry.name || 'Player')} ${Math.round(safeHealth)}`;
-  if (entry.healthBar.lastText !== hpText && entry.healthBar.textCtx) {
+  const hpTextKey = `${team || 'none'}:${hpText}`;
+  if (entry.healthBar.lastText !== hpTextKey && entry.healthBar.textCtx) {
     const ctx = entry.healthBar.textCtx;
     ctx.clearRect(0, 0, entry.healthBar.textCanvas.width, entry.healthBar.textCanvas.height);
     ctx.font = 'bold 24px Courier New, monospace';
@@ -5835,10 +6101,16 @@ const updateRemoteHealthBar = (entry) => {
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.lineWidth = 6;
     ctx.strokeText(hpText, entry.healthBar.textCanvas.width / 2, 32);
-    ctx.fillStyle = '#d8ffd8';
+    if (team === 'red') {
+      ctx.fillStyle = '#ffb6b6';
+    } else if (team === 'blue') {
+      ctx.fillStyle = '#b9d2ff';
+    } else {
+      ctx.fillStyle = '#d8ffd8';
+    }
     ctx.fillText(hpText, entry.healthBar.textCanvas.width / 2, 32);
     entry.healthBar.textTexture.needsUpdate = true;
-    entry.healthBar.lastText = hpText;
+    entry.healthBar.lastText = hpTextKey;
   }
   entry.healthBar.holder.visible = !entry.isDead;
 };
@@ -6113,6 +6385,8 @@ const shoot = () => {
   const usingPoison = isNeoorphenCharacter(activeCharacter);
   const usingLunar = isPezunalunarCharacter(activeCharacter);
   const usingMana = usingHoly || usingHammer || usingPoison || usingLunar;
+  const myTeam = normalizePlayerTeam(localAvatar.team);
+  const myPalette = getTeamPalette(myTeam);
   if (usingMana && mana < manaCostPerShot) {
     return;
   }
@@ -6183,20 +6457,20 @@ const shoot = () => {
   const distance = origin.distanceTo(hitPoint);
 
   if (usingHoly) {
-    createHolyShotVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    createHolyShotVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id, team: myTeam });
     triggerNaturePulse(origin);
   } else if (usingHammer) {
-    createSacredHammerVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    createSacredHammerVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id, team: myTeam });
     triggerNaturePulse(origin);
   } else if (usingPoison) {
-    createPoisonGasVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    createPoisonGasVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id, team: myTeam });
     triggerNaturePulse(origin);
   } else if (usingLunar) {
-    createLunarFireVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id });
+    createLunarFireVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id, team: myTeam });
     triggerNaturePulse(origin);
   } else {
-    createTracer(origin, hitPoint);
-    createImpact(hitPoint);
+    createTracer(origin, hitPoint, myPalette.tracer);
+    createImpact(hitPoint, myPalette.impactB);
   }
 
   sendWs({
@@ -6744,6 +7018,10 @@ const updateRemotePlayers = (delta) => {
     if (entry.teamMarker) {
       entry.teamMarker.visible = shouldShowTeamMarkers() && !entry.isDead;
     }
+    if (entry.teamOutline) {
+      const distance = entry.group.position.distanceTo(getRenderCamera().position);
+      entry.teamOutline.visible = shouldShowTeamMarkers() && !entry.isDead && distance <= 55;
+    }
 
     if (entry.mixer) {
       entry.mixer.update(delta);
@@ -6846,7 +7124,7 @@ const updateHolyProjectiles = (delta) => {
     const trailInterval = projectile.source === 'remote' ? 0.028 : 0.012;
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
-      const spark = createImpact(pos, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
+      const spark = createImpact(pos, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (spark) {
         spark.scale.setScalar(1.35 + Math.random() * 0.95);
         spark.userData.life = 0.3 + Math.random() * 0.18;
@@ -6877,12 +7155,12 @@ const updateHolyProjectiles = (delta) => {
       if (impactPoint && projectile.source === 'remote') {
         applyIncomingProjectileHit({ point: impactCenter, headshot: impactHeadshot }, projectile.ownerId);
       }
-      const headGlow = createImpact(impactCenter, 0xfff7d1);
+      const headGlow = createImpact(impactCenter, projectile.colors.a);
       if (headGlow) {
         headGlow.scale.setScalar(2.3);
         headGlow.userData.life = 0.42;
       }
-      const coreBlast = createImpact(impactCenter, 0xbff3ff);
+      const coreBlast = createImpact(impactCenter, projectile.colors.b);
       if (coreBlast) {
         coreBlast.scale.setScalar(1.7);
         coreBlast.userData.life = 0.36;
@@ -6891,13 +7169,13 @@ const updateHolyProjectiles = (delta) => {
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.05)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-1.05)),
-        0xfff2c6,
+        projectile.colors.a,
         { radiusScale: 2.2, life: 0.34, opacity: 1 },
       );
       createTracer(
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(0.7)),
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(-0.7)),
-        0x9af0ff,
+        projectile.colors.tracer,
         { radiusScale: 1.9, life: 0.34, opacity: 1 },
       );
     }
@@ -6923,7 +7201,7 @@ const updateHammerProjectiles = (delta) => {
     const trailInterval = projectile.source === 'remote' ? 0.032 : 0.018;
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
-      const spark = createImpact(projectile.pos, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
+      const spark = createImpact(projectile.pos, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (spark) {
         spark.scale.setScalar(1 + Math.random() * 0.9);
         spark.userData.life = 0.22 + Math.random() * 0.16;
@@ -6984,8 +7262,8 @@ const updateHammerProjectiles = (delta) => {
         if (projectile.source === 'remote') {
           applyIncomingProjectileHit({ point: impactCenter, headshot: impactHeadshot }, projectile.ownerId);
         }
-        const blastA = createImpact(impactCenter, 0xfff2c6);
-        const blastB = createImpact(impactCenter, 0x9af0ff);
+        const blastA = createImpact(impactCenter, projectile.colors.a);
+        const blastB = createImpact(impactCenter, projectile.colors.b);
         if (blastA) {
           blastA.scale.setScalar(2.5);
           blastA.userData.life = 0.42;
@@ -6998,13 +7276,13 @@ const updateHammerProjectiles = (delta) => {
         createTracer(
           impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.15)),
           impactCenter.clone().add(projectile.up.clone().multiplyScalar(-1.15)),
-          0xfff2c6,
+          projectile.colors.a,
           { radiusScale: 2.3, life: 0.34, opacity: 1 },
         );
         createTracer(
           impactCenter.clone().add(projectile.right.clone().multiplyScalar(0.8)),
           impactCenter.clone().add(projectile.right.clone().multiplyScalar(-0.8)),
-          0x9af0ff,
+          projectile.colors.tracer,
           { radiusScale: 2, life: 0.34, opacity: 1 },
         );
       }
@@ -7035,8 +7313,8 @@ const updatePoisonProjectiles = (delta) => {
     const trailInterval = projectile.source === 'remote' ? 0.016 : 0.007;
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
-      const colorA = Math.random() > 0.5 ? 0x66ff73 : 0x9dff7a;
-      const colorB = Math.random() > 0.5 ? 0x5dff6c : 0x8fff79;
+      const colorA = Math.random() > 0.5 ? projectile.colors.tracer : projectile.colors.a;
+      const colorB = Math.random() > 0.5 ? projectile.colors.tracer : projectile.colors.b;
       const puffA = createImpact(pos, colorA);
       const puffB = createImpact(pos.clone().add(projectile.right.clone().multiplyScalar((Math.random() - 0.5) * 0.12)), colorB);
       if (puffA) {
@@ -7074,12 +7352,12 @@ const updatePoisonProjectiles = (delta) => {
         applyIncomingProjectileHit({ point: impactCenter, headshot: impactHeadshot }, projectile.ownerId);
       }
 
-      const cloudA = createImpact(impactCenter, 0x58ff66);
+      const cloudA = createImpact(impactCenter, projectile.colors.tracer);
       if (cloudA) {
         cloudA.scale.setScalar(2.45);
         cloudA.userData.life = 0.45;
       }
-      const cloudB = createImpact(impactCenter, 0xa8ff8c);
+      const cloudB = createImpact(impactCenter, projectile.colors.b);
       if (cloudB) {
         cloudB.scale.setScalar(1.9);
         cloudB.userData.life = 0.38;
@@ -7087,13 +7365,13 @@ const updatePoisonProjectiles = (delta) => {
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(0.95)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-0.95)),
-        0x75ff64,
+        projectile.colors.tracer,
         { radiusScale: 2, life: 0.28, opacity: 1 },
       );
       createTracer(
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(0.75)),
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(-0.75)),
-        0xb8ff95,
+        projectile.colors.a,
         { radiusScale: 1.75, life: 0.28, opacity: 0.95 },
       );
     }
@@ -7124,10 +7402,10 @@ const updateLunarProjectiles = (delta) => {
       projectile.trailTimer = 0;
       const tailLen = 2.9 + Math.random() * 1.4;
       const tailEnd = pos.clone().add(projectile.dir.clone().multiplyScalar(-tailLen));
-      const tailColor = Math.random() > 0.5 ? 0x9ad8ff : 0x7ec9ff;
+      const tailColor = Math.random() > 0.5 ? projectile.colors.a : projectile.colors.tracer;
       createTracer(pos, tailEnd, tailColor, { radiusScale: 1.8, life: 0.36, opacity: 0.92 });
 
-      const ember = createImpact(tailEnd, Math.random() > 0.5 ? 0xbce9ff : 0x84cfff);
+      const ember = createImpact(tailEnd, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (ember) {
         ember.scale.setScalar(0.7 + Math.random() * 0.3);
         ember.userData.life = 0.22 + Math.random() * 0.08;
@@ -7159,8 +7437,8 @@ const updateLunarProjectiles = (delta) => {
         applyIncomingProjectileHit({ point: impactCenter, headshot: impactHeadshot }, projectile.ownerId);
       }
 
-      const blastCore = createImpact(impactCenter, 0xeef9ff);
-      const blastAura = createImpact(impactCenter, 0x8ed1ff);
+      const blastCore = createImpact(impactCenter, projectile.colors.a);
+      const blastAura = createImpact(impactCenter, projectile.colors.b);
       if (blastCore) {
         blastCore.scale.setScalar(2.2);
         blastCore.userData.life = 0.4;
@@ -7172,13 +7450,13 @@ const updateLunarProjectiles = (delta) => {
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.35)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-1.35)),
-        0xdff6ff,
+        projectile.colors.a,
         { radiusScale: 2.35, life: 0.36, opacity: 1 },
       );
       createTracer(
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(1.05)),
         impactCenter.clone().add(projectile.right.clone().multiplyScalar(-1.05)),
-        0x8acfff,
+        projectile.colors.tracer,
         { radiusScale: 2.15, life: 0.36, opacity: 0.98 },
       );
     }
@@ -7214,7 +7492,7 @@ const updatePumoriOrbitSpecials = (delta) => {
 
     while (special.nextSpawnAt <= now && special.nextSpawnAt < special.endAt) {
       if (special.hammers.length < special.maxActiveHammers) {
-        const hammer = createHammerMesh(0.82, 0.95);
+        const hammer = createHammerMesh(0.82, 0.95, special.team);
         hammer.position.copy(center);
         hammer.visible = true;
         scene.add(hammer);
@@ -7449,6 +7727,8 @@ const animate = () => {
   updateEffects(delta);
   updateCrosshair();
   updateDamageIndicator();
+  updateTeamAimIndicator();
+  updateMiniMap();
   renderSpecialStat(false);
   updateRemoteShootSound(delta);
   updateBleedEffect(delta);

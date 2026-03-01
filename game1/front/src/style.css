@@ -659,6 +659,47 @@ button:disabled {
   z-index: 12;
 }
 
+#teamAimIndicator {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 28px);
+  transform: translateX(-50%);
+  z-index: 21;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: rgba(0, 0, 0, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+#teamAimIndicator.friendly {
+  color: #9ec1ff;
+  border-color: rgba(125, 170, 255, 0.65);
+}
+
+#teamAimIndicator.enemy {
+  color: #ff9f9f;
+  border-color: rgba(255, 123, 123, 0.65);
+}
+
+#teamMiniMap {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 180px;
+  height: 180px;
+  z-index: 14;
+  border-radius: 10px;
+  border: 1px solid rgba(142, 211, 255, 0.45);
+  background: rgba(3, 10, 16, 0.8);
+  box-shadow: 0 0 16px rgba(96, 180, 255, 0.25);
+  pointer-events: none;
+}
+
 .chat-feed {
   position: fixed;
   top: 10px;
