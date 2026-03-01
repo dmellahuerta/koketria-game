@@ -4095,30 +4095,18 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
 
   const now = performance.now();
   const hammers = [];
-  const totalHammers = 8;
-  const spawnStepMs = 380;
-  const maxOrbitRadius = 22;
-  for (let i = 0; i < totalHammers; i += 1) {
-    const hammer = createHammerMesh(0.82, 0.95);
-    hammer.position.copy(center);
-    hammer.visible = false;
-    scene.add(hammer);
-    hammers.push({
-      mesh: hammer,
-      spawnAt: now + (i * spawnStepMs),
-      baseAngle: (i / totalHammers) * Math.PI * 2,
-      maxRadius: ((i + 1) / totalHammers) * maxOrbitRadius,
-      prevPos: center.clone(),
-      disposed: false,
-    });
-  }
+  const duration = Math.max(500, Number(durationMs) || 10_000);
 
   activePumoriOrbitSpecials.push({
     ownerId,
     hammers,
     createdAt: now,
-    endAt: now + Math.max(500, Number(durationMs) || 10_000),
-    totalHammers,
+    endAt: now + duration,
+    spawnIntervalMs: 220,
+    nextSpawnAt: now,
+    spawnCount: 0,
+    maxOrbitRadius: 22,
+    maxActiveHammers: 28,
     phase: Math.random() * Math.PI * 2,
   });
 };
@@ -6464,10 +6452,34 @@ const updatePumoriOrbitSpecials = (delta) => {
       continue;
     }
 
+    special.hammers = special.hammers.filter((entry) => !entry.disposed);
+
+    while (special.nextSpawnAt <= now && special.nextSpawnAt < special.endAt) {
+      if (special.hammers.length < special.maxActiveHammers) {
+        const hammer = createHammerMesh(0.82, 0.95);
+        hammer.position.copy(center);
+        hammer.visible = true;
+        scene.add(hammer);
+        const spawnProgress = Math.max(
+          0,
+          Math.min(1, (special.nextSpawnAt - special.createdAt) / Math.max(1, special.endAt - special.createdAt)),
+        );
+        special.hammers.push({
+          mesh: hammer,
+          spawnAt: special.nextSpawnAt,
+          baseAngle: (Math.random() * Math.PI * 2) + ((special.spawnCount % 4) * (Math.PI * 0.5)),
+          maxRadius: Math.max(2.2, special.maxOrbitRadius * (0.22 + (spawnProgress * 0.78))),
+          prevPos: center.clone(),
+          disposed: false,
+        });
+      }
+      special.spawnCount += 1;
+      special.nextSpawnAt += special.spawnIntervalMs;
+    }
+
     const t = (now - special.createdAt) / 1000;
     const lifeRatio = Math.max(0, Math.min(1, (now - special.createdAt) / Math.max(1, special.endAt - special.createdAt)));
     const lift = 1.15 + (Math.sin(t * 5.5) * 0.12);
-    const count = Math.max(1, special.totalHammers || special.hammers.length);
     const ownerIsSelf = Boolean(state.self && special.ownerId === state.self.id);
     for (let j = 0; j < special.hammers.length; j += 1) {
       const hammerEntry = special.hammers[j];
@@ -6475,15 +6487,11 @@ const updatePumoriOrbitSpecials = (delta) => {
       if (!hammer || hammerEntry.disposed) {
         continue;
       }
-      if (now < hammerEntry.spawnAt) {
-        hammer.visible = false;
-        continue;
-      }
       hammer.visible = true;
 
       const appearedRatio = Math.max(0, Math.min(1, (now - hammerEntry.spawnAt) / 1200));
       const expandingRadius = hammerEntry.maxRadius * (0.25 + (0.75 * lifeRatio * appearedRatio));
-      const angle = special.phase + (t * 5.4) + hammerEntry.baseAngle;
+      const angle = special.phase + (t * 5.4) + hammerEntry.baseAngle + (j * 0.11);
       const radius = expandingRadius + Math.sin((t * 3.4) + j) * 0.12;
       hammerEntry.prevPos.copy(hammer.position);
       hammer.position.set(
