@@ -831,8 +831,12 @@ const syncLobbyScreens = () => {
   if (versusLobby) {
     versusLobby.classList.toggle('hidden', !showVersusLobby);
   }
-  if (showVersusLobby && lobbySection) {
-    lobbySection.classList.add('hidden');
+  if (lobbySection) {
+    if (showVersusLobby) {
+      lobbySection.classList.add('hidden');
+    } else {
+      lobbySection.classList.remove('hidden');
+    }
   }
 };
 
