@@ -1766,6 +1766,7 @@ const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
 const lunarSpecialCooldownMs = 30_000;
+const silentSpecialCooldownMs = 15_000;
 let lunarRainCooldownEndsAt = 0;
 let lastLunarCooldownShown = null;
 
@@ -2944,7 +2945,10 @@ const renderSpecialStat = (force = false) => {
     abilityCooldownText.textContent = secondsLeft > 0 ? `${secondsLeft}s` : 'LISTO';
   }
   if (abilityCooldownFill) {
-    const ratio = Math.max(0, Math.min(1, remainingMs / lunarSpecialCooldownMs));
+    const cooldownTotalMs = isSilentmanCharacter(activeCharacter)
+      ? silentSpecialCooldownMs
+      : lunarSpecialCooldownMs;
+    const ratio = Math.max(0, Math.min(1, remainingMs / cooldownTotalMs));
     abilityCooldownFill.style.width = `${Math.round((1 - ratio) * 100)}%`;
   }
 };

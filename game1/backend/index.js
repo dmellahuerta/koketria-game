@@ -51,11 +51,9 @@ const pumoriOrbitCooldownMs = 30_000;
 const pumoriOrbitDurationMs = 10_000;
 const pumoriOrbitDamageTickMs = 260;
 const pumoriOrbitDamageRadius = lunarRainRadius;
-const silentConeCooldownMs = 30_000;
-const silentConeProjectileCount = 15;
+const silentConeCooldownMs = 15_000;
+const silentConeProjectileCount = 50;
 const silentConeMaxDistance = 90;
-const silentConeHalfAngleHorizontalDeg = 42;
-const silentConeHalfAngleVerticalDeg = 18;
 const neoorphenMeteorCooldownMs = 30_000;
 const neoorphenMeteorDurationMs = 10_000;
 const neoorphenMeteorWaveIntervalMs = 180;
@@ -340,13 +338,6 @@ const vectorNorm = (v) => {
   const inv = 1 / Math.sqrt(lenSq);
   return { x: v.x * inv, y: v.y * inv, z: v.z * inv };
 };
-const vectorScale = (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s });
-const vectorAdd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
-const vectorCross = (a, b) => ({
-  x: (a.y * b.z) - (a.z * b.y),
-  y: (a.z * b.x) - (a.x * b.z),
-  z: (a.x * b.y) - (a.y * b.x),
-});
 
 const createSeededRng = (seed) => {
   let t = Number(seed) >>> 0;
@@ -903,10 +894,38 @@ const getSpecialCooldownRemainingMs = (combat, characterId, nowMs = Date.now()) 
   return 0;
 };
 
-const getConeDirection = (baseDir, rightAxis, upAxis, horizontalDeg, verticalDeg) => {
-  const h = Math.tan((horizontalDeg * Math.PI) / 180);
-  const v = Math.tan((verticalDeg * Math.PI) / 180);
-  return vectorNorm(vectorAdd(baseDir, vectorAdd(vectorScale(rightAxis, h), vectorScale(upAxis, v))));
+const buildSilentBurstDirections = (yawOffsetRad = 0) => {
+  const pitchLevelsDeg = [-24, -11, 0, 11, 24];
+  const ringCounts = [8, 10, 14, 10, 8];
+  const dirs = [];
+
+  for (let i = 0; i < pitchLevelsDeg.length; i += 1) {
+    const pitchRad = (pitchLevelsDeg[i] * Math.PI) / 180;
+    const horizontalLen = Math.cos(pitchRad);
+    const vertical = Math.sin(pitchRad);
+    const count = ringCounts[i];
+    for (let j = 0; j < count; j += 1) {
+      const yaw = yawOffsetRad + ((j / count) * Math.PI * 2);
+      const direction = vectorNorm({
+        x: horizontalLen * Math.cos(yaw),
+        y: vertical,
+        z: horizontalLen * Math.sin(yaw),
+      });
+      if (direction) {
+        dirs.push(direction);
+      }
+    }
+  }
+
+  const up = vectorNorm({ x: 0, y: 1, z: 0 });
+  const down = vectorNorm({ x: 0, y: -1, z: 0 });
+  if (up) dirs.push(up);
+  if (down) dirs.push(down);
+
+  if (dirs.length <= silentConeProjectileCount) {
+    return dirs;
+  }
+  return dirs.slice(0, silentConeProjectileCount);
 };
 
 const triggerSilentmanConeSpecial = (room, caster) => {
@@ -932,35 +951,12 @@ const triggerSilentmanConeSpecial = (room, caster) => {
   }
 
   const origin = getServerEyeOrigin(caster);
-  const baseDir = getServerAimDirection(caster);
-  if (!baseDir) {
-    return;
-  }
-  const worldUp = { x: 0, y: 1, z: 0 };
-  let rightAxis = vectorNorm(vectorCross(baseDir, worldUp));
-  if (!rightAxis) {
-    rightAxis = { x: 1, y: 0, z: 0 };
-  }
-  let upAxis = vectorNorm(vectorCross(rightAxis, baseDir));
-  if (!upAxis) {
-    upAxis = { x: 0, y: 1, z: 0 };
-  }
-
-  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const directions = buildSilentBurstDirections(Math.random() * Math.PI * 2);
   const rays = [];
   const hitByVictim = new Map();
   const rewindTsMs = nowMs - lagCompensationMagicMs;
-
-  for (let i = 0; i < silentConeProjectileCount; i += 1) {
-    const t = silentConeProjectileCount <= 1 ? 0 : (i / (silentConeProjectileCount - 1));
-    const radiusNorm = Math.sqrt(t);
-    const angle = i * goldenAngle;
-    const horizontalDeg = Math.cos(angle) * silentConeHalfAngleHorizontalDeg * radiusNorm;
-    const verticalDeg = Math.sin(angle) * silentConeHalfAngleVerticalDeg * radiusNorm;
-    const directionNorm = getConeDirection(baseDir, rightAxis, upAxis, horizontalDeg, verticalDeg);
-    if (!directionNorm) {
-      continue;
-    }
+  for (let i = 0; i < directions.length; i += 1) {
+    const directionNorm = directions[i];
 
     const wallHitDistance = resolveWallHitDistance(room, origin, directionNorm, silentConeMaxDistance);
     const effectiveDistance = wallHitDistance === null
