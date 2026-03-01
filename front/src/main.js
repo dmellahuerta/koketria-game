@@ -951,6 +951,94 @@ const loadModelByCandidates = (urls) => {
   });
 };
 
+const pickupModelSpecs = {
+  mana: { url: '/items/mana.glb', targetHeight: 0.62 },
+  defensa: { url: '/items/defensa.glb', targetHeight: 0.7 },
+};
+const pickupModelTemplateCache = new Map();
+const pickupModelPromiseCache = new Map();
+
+const normalizePickupTemplate = (root, targetHeight) => {
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  if (Number.isFinite(size.y) && size.y > 0.0001) {
+    const scaleFactor = targetHeight / size.y;
+    root.scale.setScalar(scaleFactor);
+    box.setFromObject(root);
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  const minY = Number.isFinite(box.min.y) ? box.min.y : 0;
+  root.position.set(-center.x, -minY, -center.z);
+  root.traverse((node) => {
+    if (node.isMesh) {
+      node.frustumCulled = true;
+    }
+  });
+  return root;
+};
+
+const loadPickupModelTemplate = async (kind) => {
+  const key = String(kind || '').trim();
+  if (!key || !pickupModelSpecs[key]) {
+    return null;
+  }
+  if (pickupModelTemplateCache.has(key)) {
+    return pickupModelTemplateCache.get(key);
+  }
+  if (pickupModelPromiseCache.has(key)) {
+    return pickupModelPromiseCache.get(key);
+  }
+
+  const { url, targetHeight } = pickupModelSpecs[key];
+  const promise = new Promise((resolve) => {
+    gltfLoader.load(
+      url,
+      (gltf) => {
+        const sceneRoot = gltf?.scene ? gltf.scene.clone(true) : null;
+        if (!sceneRoot) {
+          pickupModelTemplateCache.set(key, null);
+          resolve(null);
+          return;
+        }
+        const normalized = normalizePickupTemplate(sceneRoot, targetHeight);
+        pickupModelTemplateCache.set(key, normalized);
+        resolve(normalized);
+      },
+      undefined,
+      () => {
+        pickupModelTemplateCache.set(key, null);
+        resolve(null);
+      },
+    );
+  }).finally(() => {
+    pickupModelPromiseCache.delete(key);
+  });
+  pickupModelPromiseCache.set(key, promise);
+  return promise;
+};
+
+const createPickupVisualGroup = (kind, fallbackMeshFactory) => {
+  const group = new THREE.Group();
+  const fallback = fallbackMeshFactory();
+  fallback.name = '__pickup_fallback__';
+  group.add(fallback);
+
+  loadPickupModelTemplate(kind).then((template) => {
+    if (!template || !group.parent) {
+      return;
+    }
+    while (group.children.length > 0) {
+      group.remove(group.children[0]);
+    }
+    const model = template.clone(true);
+    model.name = `pickup_${kind}`;
+    group.add(model);
+    group.userData.modelLoaded = true;
+  });
+
+  return group;
+};
+
 const extractClipWithName = (gltf, clipName) => {
   if (!gltf?.animations || gltf.animations.length === 0) {
     return null;
@@ -1444,7 +1532,7 @@ const bootLobbyLoader = async () => {
   configureLocalAttackSound(activeCharacter);
 
   const charList = [...availableCharacters];
-  const totalTasks = 2 + (charList.length * 2) + 2;
+  const totalTasks = 2 + (charList.length * 2) + 4;
   let done = 0;
   const tick = (label) => {
     done += 1;
@@ -1473,6 +1561,10 @@ const bootLobbyLoader = async () => {
   tick('Audio base cargado');
   await preloadAudioSource(lobbyTrackPath, 10000);
   tick('Audio lobby cargado');
+  await loadPickupModelTemplate('mana');
+  tick('Item mana cargado');
+  await loadPickupModelTemplate('defensa');
+  tick('Item defensa cargado');
 
   await ensureLocalAvatar();
   mountPreviewModel();
@@ -2496,7 +2588,9 @@ const rebuildMapFromSeed = (seed) => {
 
   const ammoRnd = createSeededRng(normalizedSeed ^ 0x85EBCA6B);
   for (let i = 0; i < maxAmmoPickups; i += 1) {
-    const mesh = new THREE.Mesh(ammoPickupGeometry, ammoPickupMaterial.clone());
+    const mesh = createPickupVisualGroup('mana', () => {
+      return new THREE.Mesh(ammoPickupGeometry, ammoPickupMaterial.clone());
+    });
     const x = (ammoRnd() - 0.5) * 180;
     const z = (ammoRnd() - 0.5) * 180;
     const baseY = 0.35;
@@ -2513,7 +2607,9 @@ const rebuildMapFromSeed = (seed) => {
 
   const shieldRnd = createSeededRng(normalizedSeed ^ 0xC2B2AE35);
   for (let i = 0; i < maxShieldPickups; i += 1) {
-    const mesh = new THREE.Mesh(shieldPickupGeometry, shieldPickupMaterial.clone());
+    const mesh = createPickupVisualGroup('defensa', () => {
+      return new THREE.Mesh(shieldPickupGeometry, shieldPickupMaterial.clone());
+    });
     const x = (shieldRnd() - 0.5) * 180;
     const z = (shieldRnd() - 0.5) * 180;
     const baseY = 0.6;
