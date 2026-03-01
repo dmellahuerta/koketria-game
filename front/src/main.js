@@ -2010,17 +2010,15 @@ const dir = new THREE.Vector3();
 const clock = new THREE.Clock();
 const remoteFacingYawOffset = Math.PI;
 const DEBUG_WEAPON_ATTACH = false;
-const remoteInterpolationMs = 110;
-const remoteExtrapolationMs = 80;
-const remoteHardCatchupDistance = 2.5;
-const remoteMediumCatchupDistance = 1.2;
-const remoteSnapDistance = 6.5;
+const remoteInterpolationMs = 170;
+const remoteExtrapolationMs = 160;
+const remoteHardCatchupDistance = 4.8;
+const remoteMediumCatchupDistance = 2.4;
+const remoteSnapDistance = 9.5;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 
-const getEstimatedServerNowMs = () => {
-  return Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
-};
+const getEstimatedServerNowMs = () => Date.now();
 
 const updateServerTimeOffset = (serverTs) => {
   const ts = Number(serverTs);
@@ -3384,7 +3382,6 @@ const syncRemotePlayer = (player) => {
   const pos = player.state?.position || { x: 0, y: playerGroundY, z: 0 };
   const rot = player.state?.rotation || { yaw: 0, pitch: 0 };
   const snapshotTs = Number.isFinite(Number(player.ts)) ? Number(player.ts) : Date.now();
-  updateServerTimeOffset(snapshotTs);
   entry.isJumping = Boolean(player.state?.jumping);
   if (Number.isFinite(Number(player.health))) {
     entry.health = Math.max(0, Math.min(maxHealth, Math.round(Number(player.health))));
@@ -5024,7 +5021,7 @@ const updateKoketriaNature = (delta) => {
 };
 
 const updateRemotePlayers = (delta) => {
-  const baseFactor = Math.min(1, delta * 9);
+  const baseFactor = Math.min(1, delta * 8);
   const now = performance.now();
   const renderTs = getEstimatedServerNowMs() - remoteInterpolationMs;
 
@@ -5087,9 +5084,9 @@ const updateRemotePlayers = (delta) => {
     const positionError = entry.group.position.distanceTo(entry.targetPosition);
     let factor = baseFactor;
     if (positionError > remoteHardCatchupDistance) {
-      factor = Math.max(factor, Math.min(1, delta * 20));
+      factor = Math.max(factor, Math.min(1, delta * 12));
     } else if (positionError > remoteMediumCatchupDistance) {
-      factor = Math.max(factor, Math.min(1, delta * 13));
+      factor = Math.max(factor, Math.min(1, delta * 10));
     }
     if (positionError > remoteSnapDistance) {
       entry.group.position.copy(entry.targetPosition);
