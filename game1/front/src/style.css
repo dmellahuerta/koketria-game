@@ -150,16 +150,16 @@ canvas {
 }
 
 .versus-teams {
-  margin: 10px 0 12px;
+  margin: 14px 0 16px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 18px;
 }
 
 .versus-team {
   border: 1px solid rgba(122, 255, 122, 0.35);
   border-radius: 10px;
-  padding: 8px;
+  padding: 10px;
   background: rgba(2, 32, 2, 0.55);
 }
 
@@ -172,15 +172,15 @@ canvas {
 
 .versus-players {
   display: grid;
-  gap: 6px;
+  gap: 10px;
 }
 
 .versus-player {
   border: 1px solid rgba(122, 255, 122, 0.28);
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 8px 10px;
   display: grid;
-  gap: 2px;
+  gap: 4px;
   background: rgba(0, 22, 0, 0.62);
 }
 
