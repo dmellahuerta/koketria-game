@@ -166,6 +166,43 @@ const getPlayerTeam = (room, playerId) => {
   return team === 'red' || team === 'blue' ? team : null;
 };
 
+const normalizePlayerTeamId = (value) => {
+  const team = String(value || '').trim().toLowerCase();
+  if (team === 'red' || team === 'blue') {
+    return team;
+  }
+  return null;
+};
+
+const getVersusKillsTarget = (room) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return killsToWin;
+  }
+  const versusType = String(room.versusType || '').trim().toLowerCase();
+  if (versusType === '1v1') {
+    return 10;
+  }
+  if (versusType === '2v2') {
+    return 20;
+  }
+  return killsToWin;
+};
+
+const getTeamKills = (room, team) => {
+  if (!room || !team) {
+    return 0;
+  }
+  let total = 0;
+  room.players.forEach((playerId) => {
+    if (getPlayerTeam(room, playerId) !== team) {
+      return;
+    }
+    const stats = getPlayerStats(room, playerId);
+    total += Number(stats.kills || 0);
+  });
+  return total;
+};
+
 const rebalanceVersusTeams = (room) => {
   if (!room) {
     return;
@@ -1193,8 +1230,32 @@ const processPlayerDeath = (room, victimId, killerId) => {
   });
 
   broadcastRoomState(room);
-  if (killer && killerKills >= killsToWin) {
-    startRoundResetCountdown(room, killer);
+  if (!killer) {
+    return;
+  }
+
+  if (room.mode === 'versusmatch') {
+    const killerTeam = getPlayerTeam(room, killer);
+    if (!killerTeam) {
+      return;
+    }
+    const targetKills = getVersusKillsTarget(room);
+    const teamKills = getTeamKills(room, killerTeam);
+    if (teamKills >= targetKills) {
+      startRoundResetCountdown(room, killer, {
+        winnerTeam: killerTeam,
+        winnerScore: teamKills,
+        killsToWin: targetKills,
+      });
+    }
+    return;
+  }
+
+  if (killerKills >= killsToWin) {
+    startRoundResetCountdown(room, killer, {
+      winnerScore: killerKills,
+      killsToWin,
+    });
   }
 };
 
@@ -1831,7 +1892,7 @@ const triggerNeoorphenMeteorSpecial = (room, caster) => {
   }, neoorphenMeteorDurationMs);
 };
 
-const startRoundResetCountdown = (room, winnerId) => {
+const startRoundResetCountdown = (room, winnerId, options = {}) => {
   if (!room || room.roundResetTimer) {
     return;
   }
@@ -1862,8 +1923,11 @@ const startRoundResetCountdown = (room, winnerId) => {
         id: winner.id,
         name: winner.name,
         character: winner.character || null,
+        team: normalizePlayerTeamId(options.winnerTeam),
       } : { id: winnerId, name: 'Desconocido', character: null },
-      killsToWin,
+      winnerTeam: normalizePlayerTeamId(options.winnerTeam),
+      winnerScore: Number(options.winnerScore || 0),
+      killsToWin: Number(options.killsToWin || killsToWin),
       countdownSeconds: roundResetSeconds,
     }),
   });

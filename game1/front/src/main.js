@@ -75,6 +75,12 @@ app.innerHTML = `
   </section>
 
   <div id="hud">
+    <div id="teamScoreHud" class="team-score-hud hidden">
+      <span id="teamScoreRed" class="team-score red">ROJO 0</span>
+      <span id="teamScoreBlue" class="team-score blue">AZUL 0</span>
+      <span id="teamScoreTarget" class="team-score-target">META 10</span>
+    </div>
+
     <div id="ammoBarWrap" class="side-bar left">
       <span id="ammoSideLabel">30 / 90</span>
       <div class="bar-track"><div id="ammoBarFill" class="bar-fill ammo"></div></div>
@@ -264,6 +270,10 @@ const abilityCooldownFill = document.querySelector('#abilityCooldownFill');
 const healthBarFill = document.querySelector('#healthBarFill');
 const shieldBarFill = document.querySelector('#shieldBarFill');
 const ammoBarFill = document.querySelector('#ammoBarFill');
+const teamScoreHud = document.querySelector('#teamScoreHud');
+const teamScoreRed = document.querySelector('#teamScoreRed');
+const teamScoreBlue = document.querySelector('#teamScoreBlue');
+const teamScoreTarget = document.querySelector('#teamScoreTarget');
 const stats = document.querySelector('#stats');
 const roomHud = document.querySelector('#roomHud');
 const stateHud = document.querySelector('#stateHud');
@@ -686,6 +696,46 @@ const shouldShowTeamMarkers = () => {
       && isVersusRoom(state.joinedRoom.room)
       && state.joinedRoom.room.status === 'in_game',
   );
+};
+
+const getVersusScoreTarget = (room) => {
+  const type = String(room?.versusType || '').trim().toLowerCase();
+  if (type === '1v1') {
+    return 10;
+  }
+  if (type === '2v2') {
+    return 20;
+  }
+  return 20;
+};
+
+const updateTeamScoreHud = () => {
+  if (!teamScoreHud || !teamScoreRed || !teamScoreBlue || !teamScoreTarget) {
+    return;
+  }
+  if (!state.joinedRoom || !isVersusRoom(state.joinedRoom.room) || state.joinedRoom.room.status !== 'in_game') {
+    teamScoreHud.classList.add('hidden');
+    return;
+  }
+
+  let red = 0;
+  let blue = 0;
+  const players = Array.isArray(state.joinedRoom.players) ? state.joinedRoom.players : [];
+  for (let i = 0; i < players.length; i += 1) {
+    const player = players[i];
+    const killsCount = Math.max(0, Number(player.kills || 0));
+    const team = normalizePlayerTeam(player.team);
+    if (team === 'red') {
+      red += killsCount;
+    } else if (team === 'blue') {
+      blue += killsCount;
+    }
+  }
+  const target = getVersusScoreTarget(state.joinedRoom.room);
+  teamScoreRed.textContent = `ROJO ${red}`;
+  teamScoreBlue.textContent = `AZUL ${blue}`;
+  teamScoreTarget.textContent = `META ${target}`;
+  teamScoreHud.classList.remove('hidden');
 };
 
 const isInVersusWaitingLobby = () => {
@@ -3333,6 +3383,7 @@ const updateHud = () => {
     weatherHud.textContent = 'Clima: -';
     playersHud.textContent = 'Jugadores: -';
     hostControls.classList.add('hidden');
+    updateTeamScoreHud();
     return;
   }
 
@@ -3360,6 +3411,7 @@ const updateHud = () => {
   renderScoreboard();
   renderPerfPanel();
   updateBleedEffect();
+  updateTeamScoreHud();
 };
 
 const updateRespawnOverlay = () => {
@@ -3382,12 +3434,19 @@ const hideWinnerOverlay = () => {
 const showWinnerOverlay = (winner, countdownSeconds) => {
   const winnerName = String(winner?.name || 'Desconocido');
   const winnerCharacter = String(winner?.character || 'Sin personaje');
+  const winnerTeam = normalizePlayerTeam(winner?.team);
   const safeCountdown = Math.max(1, Number(countdownSeconds) || 10);
 
   isMatchEnding = true;
   matchWinnerEndsAt = performance.now() + (safeCountdown * 1000);
   matchWinnerSecondsLeft = safeCountdown;
-  winnerText.textContent = `Ganador: ${winnerName} (${winnerCharacter})`;
+  if (winnerTeam === 'red') {
+    winnerText.textContent = 'Ganador: Equipo Rojo';
+  } else if (winnerTeam === 'blue') {
+    winnerText.textContent = 'Ganador: Equipo Azul';
+  } else {
+    winnerText.textContent = `Ganador: ${winnerName} (${winnerCharacter})`;
+  }
   winnerCounter.textContent = String(matchWinnerSecondsLeft);
   winnerScreen.classList.remove('hidden');
 
@@ -5331,7 +5390,11 @@ const connectWebSocket = () => {
       if (!state.joinedRoom) {
         return;
       }
-      showWinnerOverlay(payload.data?.winner, payload.data?.countdownSeconds);
+      const winnerData = payload.data?.winner || {};
+      if (payload.data?.winnerTeam) {
+        winnerData.team = payload.data.winnerTeam;
+      }
+      showWinnerOverlay(winnerData, payload.data?.countdownSeconds);
       return;
     }
 
