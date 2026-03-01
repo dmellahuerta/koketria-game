@@ -958,7 +958,37 @@ const pickupModelSpecs = {
 const pickupModelTemplateCache = new Map();
 const pickupModelPromiseCache = new Map();
 
-const normalizePickupTemplate = (root, targetHeight) => {
+const applyPickupMaterialBoost = (root, kind) => {
+  const isShield = kind === 'defensa';
+  const tint = new THREE.Color(isShield ? 0x8cf6ff : 0x8ab8ff);
+  const emissiveBoost = isShield ? 1.35 : 1.15;
+
+  root.traverse((node) => {
+    if (!node.isMesh || !node.material) {
+      return;
+    }
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    materials.forEach((material) => {
+      if (material.color && typeof material.color.multiplyScalar === 'function') {
+        material.color.multiplyScalar(1.22);
+      }
+      if ('emissive' in material && material.emissive) {
+        const next = material.color ? material.color.clone() : tint.clone();
+        material.emissive.copy(next.lerp(tint, 0.55));
+        material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, emissiveBoost);
+      }
+      if ('metalness' in material) {
+        material.metalness = Math.min(0.18, Number(material.metalness || 0));
+      }
+      if ('roughness' in material) {
+        material.roughness = Math.max(0.55, Number(material.roughness || 0.8));
+      }
+      material.needsUpdate = true;
+    });
+  });
+};
+
+const normalizePickupTemplate = (root, targetHeight, kind) => {
   const box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new THREE.Vector3());
   if (Number.isFinite(size.y) && size.y > 0.0001) {
@@ -969,6 +999,7 @@ const normalizePickupTemplate = (root, targetHeight) => {
   const center = box.getCenter(new THREE.Vector3());
   const minY = Number.isFinite(box.min.y) ? box.min.y : 0;
   root.position.set(-center.x, -minY, -center.z);
+  applyPickupMaterialBoost(root, kind);
   root.traverse((node) => {
     if (node.isMesh) {
       node.frustumCulled = true;
@@ -1000,7 +1031,7 @@ const loadPickupModelTemplate = async (kind) => {
           resolve(null);
           return;
         }
-        const normalized = normalizePickupTemplate(sceneRoot, targetHeight);
+        const normalized = normalizePickupTemplate(sceneRoot, targetHeight, key);
         pickupModelTemplateCache.set(key, normalized);
         resolve(normalized);
       },
