@@ -24,12 +24,24 @@
               <span class="status">ONLINE</span>
             </div>
             <div class="play-links">
-              <a class="play-link is-dev" href="http://localhost:5173">Entrar (DEV)</a>
-              <a class="play-link" href="https://koketria.misterrii.com">Entrar (PROD)</a>
+              <a class="play-link is-dev" data-env="dev" href="http://localhost:5173">Entrar (DEV)</a>
+              <a class="play-link" data-env="prod" href="https://koketria.misterrii.com">Entrar (PROD)</a>
             </div>
           </li>
         </ul>
       </section>
     </main>
+    <script>
+      (function () {
+        var host = window.location.hostname;
+        var isDev = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
+        var showEnv = isDev ? 'dev' : 'prod';
+        document.querySelectorAll('[data-env]').forEach(function (el) {
+          if (el.getAttribute('data-env') !== showEnv) {
+            el.classList.add('hidden-link');
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

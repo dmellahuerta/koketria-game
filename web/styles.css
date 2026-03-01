@@ -150,6 +150,10 @@ body {
   box-shadow: 0 0 12px rgba(46, 255, 111, 0.42);
 }
 
+.hidden-link {
+  display: none;
+}
+
 @keyframes rain {
   0% {
     transform: translateY(-10%);
