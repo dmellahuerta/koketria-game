@@ -686,6 +686,108 @@ const syncLobbyScreens = () => {
   }
 };
 
+const syncVersusPlayerPreviews = () => {
+  const nodes = document.querySelectorAll('.versus-player-model[data-preview-key]');
+  const activeKeys = new Set();
+  nodes.forEach((node) => {
+    const key = String(node.dataset.previewKey || '').trim();
+    const characterId = String(node.dataset.character || '').trim();
+    if (!key) {
+      return;
+    }
+    activeKeys.add(key);
+    const existing = versusPreviewSlots.get(key);
+    if (existing && existing.characterId === characterId && existing.renderer?.domElement?.parentElement === node) {
+      return;
+    }
+    if (existing) {
+      disposeVersusPreviewSlot(key);
+    }
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
+    const width = Math.max(60, node.clientWidth || 92);
+    const height = Math.max(60, node.clientHeight || 92);
+    renderer.setSize(width, height, false);
+    node.innerHTML = '';
+    node.appendChild(renderer.domElement);
+
+    const hemi = new THREE.HemisphereLight(0xc8ffe2, 0x102010, 0.95);
+    scene.add(hemi);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+    keyLight.position.set(2.8, 4.8, 3.4);
+    scene.add(keyLight);
+
+    const slot = {
+      key,
+      characterId,
+      node,
+      renderer,
+      scene,
+      camera,
+      mixer: null,
+      model: null,
+      rotateSpeed: 0.32 + (Math.random() * 0.2),
+    };
+    versusPreviewSlots.set(key, slot);
+
+    if (!characterId) {
+      return;
+    }
+
+    const mountCharacter = (resource) => {
+      if (!resource?.loaded || !resource.scene || !versusPreviewSlots.has(key)) {
+        return;
+      }
+      const current = versusPreviewSlots.get(key);
+      if (!current || current.characterId !== characterId) {
+        return;
+      }
+      const cloned = cloneSkinned(resource.scene);
+      const box = new THREE.Box3().setFromObject(cloned);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      cloned.position.set(-center.x, -box.min.y, -center.z);
+      current.scene.add(cloned);
+      current.model = cloned;
+
+      current.camera.position.set(0, Math.max(0.95, size.y * 0.62), Math.max(1.45, size.y * 0.9));
+      current.camera.lookAt(0, Math.max(0.72, size.y * 0.45), 0);
+
+      const clip = resource.animationSet?.dead
+        || resource.animationSet?.idle
+        || resource.animationSet?.running
+        || findAnimationByName(resource.animations || [], 'dead', ['dead', 'idle', 'running']);
+      if (clip) {
+        const mixer = new THREE.AnimationMixer(cloned);
+        const action = mixer.clipAction(clip);
+        action.reset();
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.play();
+        current.mixer = mixer;
+      }
+    };
+
+    const cached = characterResources.get(characterId);
+    if (cached?.loaded && cached.scene) {
+      mountCharacter(cached);
+    } else {
+      ensureCharacterResource(characterId).then((resource) => {
+        mountCharacter(resource);
+      });
+    }
+  });
+
+  const existingKeys = [...versusPreviewSlots.keys()];
+  for (let i = 0; i < existingKeys.length; i += 1) {
+    if (!activeKeys.has(existingKeys[i])) {
+      disposeVersusPreviewSlot(existingKeys[i]);
+    }
+  }
+};
+
 const renderVersusSlots = (container, players, slotCount) => {
   if (!container) {
     return;
@@ -698,9 +800,21 @@ const renderVersusSlots = (container, players, slotCount) => {
     if (player) {
       const name = String(player.name || `Player ${i + 1}`);
       const character = getCharacterLabel(player.character || '-');
-      rows.push(`<div class="versus-player"><strong>${name}</strong><span>${character}</span></div>`);
+      rows.push(`
+        <div class="versus-player">
+          <div class="versus-player-model" data-preview-key="${container.id}-${i}" data-character="${String(player.character || '')}"></div>
+          <strong>${name}</strong>
+          <span>${character}</span>
+        </div>
+      `);
     } else {
-      rows.push('<div class="versus-player empty"><strong>Esperando...</strong><span>Slot libre</span></div>');
+      rows.push(`
+        <div class="versus-player empty">
+          <div class="versus-player-model placeholder"></div>
+          <strong>Esperando...</strong>
+          <span>Slot libre</span>
+        </div>
+      `);
     }
   }
   container.innerHTML = rows.join('');
@@ -712,6 +826,7 @@ const updateVersusLobbyUi = () => {
   }
   if (!isInVersusWaitingLobby()) {
     versusLobby.classList.add('hidden');
+    clearVersusPreviewSlots();
     return;
   }
   const room = state.joinedRoom.room;
@@ -740,6 +855,7 @@ const updateVersusLobbyUi = () => {
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
   renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize);
   renderVersusSlots(versusRightPlayers, rightPlayers, teamSize);
+  syncVersusPlayerPreviews();
   versusStartBtn.disabled = !isHostPlayer || !enoughPlayers;
 };
 
@@ -1020,6 +1136,7 @@ const previewState = {
   lastWidth: 0,
   lastHeight: 0,
 };
+const versusPreviewSlots = new Map();
 
 const localAvatar = {
   group: null,
@@ -1056,6 +1173,28 @@ const getCharacterLabel = (characterId) => {
     return 'pezuñalunar';
   }
   return characterId;
+};
+
+const disposeVersusPreviewSlot = (key) => {
+  const slot = versusPreviewSlots.get(key);
+  if (!slot) {
+    return;
+  }
+  if (slot.model && slot.scene) {
+    slot.scene.remove(slot.model);
+  }
+  if (slot.renderer && slot.renderer.domElement?.parentElement) {
+    slot.renderer.domElement.parentElement.removeChild(slot.renderer.domElement);
+  }
+  slot.renderer?.dispose();
+  versusPreviewSlots.delete(key);
+};
+
+const clearVersusPreviewSlots = () => {
+  const keys = [...versusPreviewSlots.keys()];
+  for (let i = 0; i < keys.length; i += 1) {
+    disposeVersusPreviewSlot(keys[i]);
+  }
 };
 
 const getWeaponLabel = (weaponFile) => {
@@ -7007,6 +7146,12 @@ const shouldRenderLobbyPreview = () => {
     && !lobbySection.classList.contains('hidden');
 };
 
+const shouldRenderVersusPreviews = () => {
+  return isInVersusWaitingLobby()
+    && versusLobby
+    && !versusLobby.classList.contains('hidden');
+};
+
 const animate = () => {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
@@ -7046,6 +7191,28 @@ const animate = () => {
   if (shouldRenderLobbyPreview() && previewState.renderer && previewState.scene && previewState.camera) {
     resizeCharacterPreview();
     previewState.renderer.render(previewState.scene, previewState.camera);
+  }
+  if (shouldRenderVersusPreviews() && versusPreviewSlots.size > 0) {
+    for (const slot of versusPreviewSlots.values()) {
+      if (!slot.renderer || !slot.scene || !slot.camera || !slot.node?.isConnected) {
+        continue;
+      }
+      const width = Math.max(60, slot.node.clientWidth || 92);
+      const height = Math.max(60, slot.node.clientHeight || 92);
+      const dom = slot.renderer.domElement;
+      if (dom && (dom.width !== width || dom.height !== height)) {
+        slot.renderer.setSize(width, height, false);
+      }
+      slot.camera.aspect = width / height;
+      slot.camera.updateProjectionMatrix();
+      if (slot.mixer) {
+        slot.mixer.update(delta);
+      }
+      if (slot.model) {
+        slot.model.rotation.y += delta * slot.rotateSpeed;
+      }
+      slot.renderer.render(slot.scene, slot.camera);
+    }
   }
   renderer.render(scene, getRenderCamera());
   renderPerfStats.drawCalls = renderer.info.render.calls || 0;
