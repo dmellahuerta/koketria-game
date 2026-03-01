@@ -510,10 +510,45 @@ const renderScoreboard = () => {
     return (a.deaths || 0) - (b.deaths || 0);
   });
 
-  scoreboardBody.innerHTML = players.map((player) => {
+  const rowHtml = (player) => {
     const me = state.self && player.id === state.self.id ? ' (Tú)' : '';
     return `<tr><td>${player.name}${me}</td><td>${player.kills || 0}</td><td>${player.deaths || 0}</td></tr>`;
-  }).join('');
+  };
+
+  const room = state.joinedRoom.room || {};
+  const isVersus2v2 = isVersusRoom(room) && String(room.versusType || '').toLowerCase() === '2v2';
+  if (isVersus2v2) {
+    const redPlayers = players.filter((player) => normalizePlayerTeam(player.team) === 'red');
+    const bluePlayers = players.filter((player) => normalizePlayerTeam(player.team) === 'blue');
+    const unknownPlayers = players.filter((player) => !normalizePlayerTeam(player.team));
+
+    const renderTeamRows = (teamClass, teamLabel, teamPlayers) => {
+      const rows = [];
+      rows.push(`<tr class="scoreboard-team-row ${teamClass}"><td colspan="3">${teamLabel}</td></tr>`);
+      if (teamPlayers.length <= 0) {
+        rows.push('<tr class="scoreboard-empty-row"><td colspan="3">Esperando jugador...</td></tr>');
+      } else {
+        for (let i = 0; i < teamPlayers.length; i += 1) {
+          rows.push(rowHtml(teamPlayers[i]));
+        }
+      }
+      return rows.join('');
+    };
+
+    const html = [
+      renderTeamRows('team-red', 'Equipo Rojo', redPlayers),
+      renderTeamRows('team-blue', 'Equipo Azul', bluePlayers),
+    ];
+    if (unknownPlayers.length > 0) {
+      html.push('<tr class="scoreboard-team-row team-unknown"><td colspan="3">Sin equipo</td></tr>');
+      for (let i = 0; i < unknownPlayers.length; i += 1) {
+        html.push(rowHtml(unknownPlayers[i]));
+      }
+    }
+    scoreboardBody.innerHTML = html.join('');
+  } else {
+    scoreboardBody.innerHTML = players.map(rowHtml).join('');
+  }
 
   scoreboard.classList.remove('hidden');
 };

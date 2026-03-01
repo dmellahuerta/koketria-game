@@ -858,6 +858,33 @@ button:disabled {
   text-align: center;
 }
 
+.scoreboard-team-row td {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom-color: rgba(255, 255, 255, 0.15);
+}
+
+.scoreboard-team-row.team-red td {
+  background: rgba(80, 14, 14, 0.5);
+  color: #ffb4b4;
+}
+
+.scoreboard-team-row.team-blue td {
+  background: rgba(14, 28, 80, 0.5);
+  color: #bad2ff;
+}
+
+.scoreboard-team-row.team-unknown td {
+  background: rgba(35, 35, 35, 0.5);
+  color: #e5e5e5;
+}
+
+.scoreboard-empty-row td {
+  opacity: 0.75;
+  font-style: italic;
+}
+
 .respawn-card h2 {
   margin: 0 0 8px;
   font-size: 1.2rem;
