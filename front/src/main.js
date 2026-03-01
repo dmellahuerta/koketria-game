@@ -19,7 +19,7 @@ app.innerHTML = `
   <section id="lobby" class="hidden">
     <div class="lobby-layout">
       <div class="lobby-main">
-        <h1>Matrix Lobby</h1>
+        <h1>Koketria Game</h1>
         <p id="connectionStatus">Conectando al backend...</p>
         <label>
           Nombre de jugador
