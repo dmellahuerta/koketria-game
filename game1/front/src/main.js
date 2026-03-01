@@ -57,12 +57,12 @@ app.innerHTML = `
       </label>
       <p id="versusWaitingInfo">Esperando jugadores...</p>
       <div id="versusTeams" class="versus-teams">
-        <div class="versus-team">
-          <h3>Lado Izquierdo</h3>
+        <div class="versus-team team-red">
+          <h3>Equipo Rojo</h3>
           <div id="versusLeftPlayers" class="versus-players"></div>
         </div>
-        <div class="versus-team">
-          <h3>Lado Derecho</h3>
+        <div class="versus-team team-blue">
+          <h3>Equipo Azul</h3>
           <div id="versusRightPlayers" class="versus-players"></div>
         </div>
       </div>
@@ -672,6 +672,22 @@ const isVersusRoom = (room) => {
   return String(room?.mode || '').toLowerCase() === 'versusmatch';
 };
 
+const normalizePlayerTeam = (team) => {
+  const value = String(team || '').trim().toLowerCase();
+  if (value === 'red' || value === 'blue') {
+    return value;
+  }
+  return null;
+};
+
+const shouldShowTeamMarkers = () => {
+  return Boolean(
+    state.joinedRoom
+      && isVersusRoom(state.joinedRoom.room)
+      && state.joinedRoom.room.status === 'in_game',
+  );
+};
+
 const isInVersusWaitingLobby = () => {
   return Boolean(state.joinedRoom && isVersusRoom(state.joinedRoom.room) && state.joinedRoom.room.status === 'waiting');
 };
@@ -799,7 +815,7 @@ const renderVersusSlots = (container, players, slotCount, containerKey) => {
   for (let i = 0; i < slots; i += 1) {
     const player = safePlayers[i];
     if (player) {
-      renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}`);
+      renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}|${normalizePlayerTeam(player.team) || ''}`);
     } else {
       renderKeyParts.push('empty');
     }
@@ -859,9 +875,15 @@ const updateVersusLobbyUi = () => {
     return String(a.name || '').localeCompare(String(b.name || ''));
   });
   const teamSize = hasType ? (versusType === '2v2' ? 2 : 1) : Math.max(1, Math.ceil(maxPlayers / 2));
-  const leftPlayers = players.slice(0, teamSize);
-  const rightPlayers = players.slice(teamSize, teamSize * 2);
-  const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}`).join(',')}`;
+  let leftPlayers = players.filter((p) => normalizePlayerTeam(p.team) === 'red');
+  let rightPlayers = players.filter((p) => normalizePlayerTeam(p.team) === 'blue');
+  if (leftPlayers.length === 0 && rightPlayers.length === 0) {
+    leftPlayers = players.slice(0, teamSize);
+    rightPlayers = players.slice(teamSize, teamSize * 2);
+  }
+  leftPlayers = leftPlayers.slice(0, teamSize);
+  rightPlayers = rightPlayers.slice(0, teamSize);
+  const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}`;
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
   versusLobby.classList.remove('hidden');
   versusRoomInfo.textContent = `Sala: ${room.name} (${room.id})`;
@@ -1167,6 +1189,8 @@ const localAvatar = {
   shootUntil: 0,
   loadingKey: '',
   funnyUntil: 0,
+  team: null,
+  teamMarker: null,
 };
 
 const getCharacterAssetKey = (characterId) => {
@@ -3754,6 +3778,9 @@ const buildAnimatedRemoteModel = (resource) => {
 };
 
 const disposeLocalAvatar = () => {
+  if (localAvatar.teamMarker) {
+    disposeTeamMarker(localAvatar.teamMarker);
+  }
   if (localAvatar.group) {
     scene.remove(localAvatar.group);
   }
@@ -3762,6 +3789,7 @@ const disposeLocalAvatar = () => {
   localAvatar.actions = null;
   localAvatar.currentAnimation = '';
   localAvatar.funnyUntil = 0;
+  localAvatar.teamMarker = null;
 };
 
 const ensureLocalAvatar = async () => {
@@ -3785,12 +3813,16 @@ const ensureLocalAvatar = async () => {
   localAvatar.currentAnimation = '';
   localAvatar.shootUntil = 0;
   localAvatar.funnyUntil = 0;
+  ensureLocalTeamMarker();
   setLocalAvatarAnimation('idle');
 };
 
 const updateLocalAvatar = (delta) => {
   if (!localAvatar.group) {
     return;
+  }
+  if (localAvatar.teamMarker) {
+    localAvatar.teamMarker.visible = shouldShowTeamMarkers() && !isRespawning;
   }
 
   const visible = Boolean(state.joinedRoom && isThirdPerson && !isRespawning);
@@ -4017,6 +4049,7 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   liveEntry.isDead = false;
   liveEntry.isJumping = false;
   liveEntry.deadAt = 0;
+  ensureRemoteTeamMarker(liveEntry);
   const hpBar = createRemoteHealthBar();
   liveEntry.group.add(hpBar.holder);
   liveEntry.healthBar = hpBar;
@@ -4025,6 +4058,10 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
 };
 
 const disposeRemotePlayer = (entry) => {
+  if (entry.teamMarker) {
+    disposeTeamMarker(entry.teamMarker);
+    entry.teamMarker = null;
+  }
   if (entry.healthBar) {
     if (entry.healthBar.holder?.parent) {
       entry.healthBar.holder.parent.remove(entry.healthBar.holder);
@@ -4086,6 +4123,8 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     movingUntil: 0,
     lastAnimationAt: 0,
     healthBar: null,
+    team: null,
+    teamMarker: null,
   });
 
   const entry = state.remotePlayers.get(id);
@@ -4104,6 +4143,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
   if (!entry.character) {
     entry.character = availableCharacters[0] || activeCharacter || 'silentman';
   }
+  ensureRemoteTeamMarker(entry);
   upgradeRemotePlayerToCharacter(entry);
 };
 
@@ -4124,6 +4164,8 @@ const syncRemotePlayer = (player) => {
   if (player.name) {
     entry.name = String(player.name);
   }
+  entry.team = normalizePlayerTeam(player.team);
+  ensureRemoteTeamMarker(entry);
   const hasCharacterUpdate = typeof player.character === 'string' && player.character.length > 0;
   const resolvedCharacter = hasCharacterUpdate ? resolveCharacterForPlayer(player.character) : entry.character;
   if (resolvedCharacter !== entry.character) {
@@ -4678,6 +4720,8 @@ const applyOwnStateFromRoom = (roomState) => {
   if (!selfPlayer) {
     return;
   }
+  localAvatar.team = normalizePlayerTeam(selfPlayer.team);
+  ensureLocalTeamMarker();
 
   const pos = selfPlayer.state?.position;
   const rot = selfPlayer.state?.rotation;
@@ -4726,6 +4770,18 @@ const applyOwnStateFromRoom = (roomState) => {
   }
 };
 
+const syncLocalTeamFromRoom = (roomState) => {
+  if (!state.self || !roomState?.players) {
+    return;
+  }
+  const selfPlayer = roomState.players.find((player) => player.id === state.self.id);
+  if (!selfPlayer) {
+    return;
+  }
+  localAvatar.team = normalizePlayerTeam(selfPlayer.team);
+  ensureLocalTeamMarker();
+};
+
 const applyRoomState = (roomState, options = {}) => {
   const wasOutsideRoom = !state.joinedRoom;
   if (wasOutsideRoom) {
@@ -4737,6 +4793,7 @@ const applyRoomState = (roomState, options = {}) => {
     : hashStringToSeed(roomState.room?.id);
   rebuildMapFromSeed(roomSeed);
   syncRemotePlayersFromRoom(roomState);
+  syncLocalTeamFromRoom(roomState);
   applyWeather(roomState.room?.weather);
   setBattleTheme(roomState.room?.battleTheme);
 
@@ -4824,6 +4881,8 @@ const connectWebSocket = () => {
       setBattleTheme('battle1');
       resetCombatStats();
       hideWinnerOverlay();
+      localAvatar.team = null;
+      ensureLocalTeamMarker();
       updateHud();
       syncLobbyScreens();
       updateVersusLobbyUi();
@@ -5297,6 +5356,8 @@ const connectWebSocket = () => {
     setBattleTheme('battle1');
     resetCombatStats();
     hideWinnerOverlay();
+    localAvatar.team = null;
+    ensureLocalTeamMarker();
     updateHud();
     syncLobbyScreens();
     updateVersusLobbyUi();
@@ -5563,6 +5624,85 @@ const createRemoteHealthBar = () => {
   return {
     holder, bg, fill, text, textCanvas, textCtx, textTexture, lastText: '',
   };
+};
+
+const disposeTeamMarker = (marker) => {
+  if (!marker) {
+    return;
+  }
+  if (marker.parent) {
+    marker.parent.remove(marker);
+  }
+  if (marker.geometry) {
+    marker.geometry.dispose();
+  }
+  if (marker.material) {
+    marker.material.dispose();
+  }
+};
+
+const createTeamMarker = (team) => {
+  const normalizedTeam = normalizePlayerTeam(team);
+  const color = normalizedTeam === 'red' ? 0xff5151 : 0x4f87ff;
+  const marker = new THREE.Mesh(
+    new THREE.RingGeometry(0.44, 0.56, 36),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  marker.rotation.x = -Math.PI / 2;
+  marker.position.set(0, 0.03, 0);
+  marker.renderOrder = 80;
+  marker.userData.team = normalizedTeam;
+  return marker;
+};
+
+const ensureLocalTeamMarker = () => {
+  const team = normalizePlayerTeam(localAvatar.team);
+  if (!localAvatar.group || !team) {
+    if (localAvatar.teamMarker) {
+      disposeTeamMarker(localAvatar.teamMarker);
+      localAvatar.teamMarker = null;
+    }
+    return;
+  }
+  if (!localAvatar.teamMarker || localAvatar.teamMarker.userData.team !== team) {
+    if (localAvatar.teamMarker) {
+      disposeTeamMarker(localAvatar.teamMarker);
+    }
+    localAvatar.teamMarker = createTeamMarker(team);
+    localAvatar.group.add(localAvatar.teamMarker);
+  } else if (localAvatar.teamMarker.parent !== localAvatar.group) {
+    localAvatar.group.add(localAvatar.teamMarker);
+  }
+};
+
+const ensureRemoteTeamMarker = (entry) => {
+  if (!entry?.group) {
+    return;
+  }
+  const team = normalizePlayerTeam(entry.team);
+  if (!team) {
+    if (entry.teamMarker) {
+      disposeTeamMarker(entry.teamMarker);
+      entry.teamMarker = null;
+    }
+    return;
+  }
+  if (!entry.teamMarker || entry.teamMarker.userData.team !== team) {
+    if (entry.teamMarker) {
+      disposeTeamMarker(entry.teamMarker);
+    }
+    entry.teamMarker = createTeamMarker(team);
+    entry.group.add(entry.teamMarker);
+  } else if (entry.teamMarker.parent !== entry.group) {
+    entry.group.add(entry.teamMarker);
+  }
 };
 
 const updateRemoteHealthBar = (entry) => {
@@ -6495,6 +6635,9 @@ const updateRemotePlayers = (delta) => {
       const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
       entry.healthBar.holder.scale.setScalar(scale);
       entry.healthBar.holder.visible = !entry.isDead && visibleByDistance;
+    }
+    if (entry.teamMarker) {
+      entry.teamMarker.visible = shouldShowTeamMarkers() && !entry.isDead;
     }
 
     if (entry.mixer) {

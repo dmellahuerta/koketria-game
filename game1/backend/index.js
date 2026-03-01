@@ -155,6 +155,47 @@ const getVersusRequirements = (versusType) => {
   return null;
 };
 
+const getPlayerTeam = (room, playerId) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return null;
+  }
+  if (!room.teams) {
+    room.teams = new Map();
+  }
+  const team = room.teams.get(playerId);
+  return team === 'red' || team === 'blue' ? team : null;
+};
+
+const rebalanceVersusTeams = (room) => {
+  if (!room) {
+    return;
+  }
+  if (!room.teams) {
+    room.teams = new Map();
+  }
+  if (room.mode !== 'versusmatch') {
+    room.teams.clear();
+    return;
+  }
+  const requirements = getVersusRequirements(room.versusType);
+  const teamSize = requirements?.versusType === '2v2' ? 2 : 1;
+  const activeIds = new Set(room.players);
+  const staleIds = [];
+  room.teams.forEach((_, playerId) => {
+    if (!activeIds.has(playerId)) {
+      staleIds.push(playerId);
+    }
+  });
+  staleIds.forEach((playerId) => room.teams.delete(playerId));
+
+  let index = 0;
+  room.players.forEach((playerId) => {
+    const team = index < teamSize ? 'red' : 'blue';
+    room.teams.set(playerId, team);
+    index += 1;
+  });
+};
+
 const countCustomRooms = () => {
   let total = 0;
   rooms.forEach((room) => {
@@ -183,6 +224,7 @@ const createVersusRoom = (hostClient, roomName = '') => {
     mapSeed: Math.floor(Math.random() * 0x7fffffff),
     isServerManaged: false,
     players: new Set(),
+    teams: new Map(),
     stats: new Map(),
     combat: new Map(),
     mapCollision: null,
@@ -215,6 +257,7 @@ const ensureServerRoom = () => {
     mapSeed: Math.floor(Math.random() * 0x7fffffff),
     isServerManaged: true,
     players: new Set(),
+    teams: new Map(),
     stats: new Map(),
     combat: new Map(),
     mapCollision: null,
@@ -1920,6 +1963,13 @@ const serializePlayer = (client) => {
   };
 };
 
+const serializePlayerForRoom = (room, client) => {
+  return {
+    ...serializePlayer(client),
+    team: getPlayerTeam(room, client.id),
+  };
+};
+
 const getRoomState = (room) => {
   updateRoomCombatRegen(room, Date.now());
   const players = [];
@@ -1929,7 +1979,7 @@ const getRoomState = (room) => {
     if (client) {
       const combat = getCombatState(room, playerId);
       players.push({
-        ...serializePlayer(client),
+        ...serializePlayerForRoom(room, client),
         ...getPlayerStats(room, playerId),
         health: Math.round(combat.health),
         shield: Math.round(combat.shield),
@@ -1991,6 +2041,7 @@ const leaveCurrentRoom = (client) => {
   }
 
   room.players.delete(client.id);
+  room.teams?.delete(client.id);
   room.stats.delete(client.id);
   room.combat.delete(client.id);
 
@@ -2023,6 +2074,10 @@ const leaveCurrentRoom = (client) => {
     room.hostId = room.isServerManaged ? null : room.players.values().next().value;
   }
 
+  if (room.mode === 'versusmatch') {
+    rebalanceVersusTeams(room);
+  }
+
   if (!room.isServerManaged && room.status === 'in_game' && room.players.size < 2) {
     room.status = 'finished';
   }
@@ -2041,6 +2096,9 @@ const joinRoom = (client, room) => {
   }
 
   room.players.add(client.id);
+  if (room.mode === 'versusmatch') {
+    rebalanceVersusTeams(room);
+  }
   if (!room.stats.has(client.id)) {
     room.stats.set(client.id, { kills: 0, deaths: 0 });
   }
@@ -2080,7 +2138,7 @@ const joinRoom = (client, room) => {
   broadcastToRoom(room, {
     type: 'player_joined',
     ...json(true, {
-      player: serializePlayer(client),
+      player: serializePlayerForRoom(room, client),
       roomId: room.id,
     }),
   }, client.id);
@@ -2349,6 +2407,7 @@ const start = async () => {
           room.versusType = requirements.versusType;
           room.requiredPlayers = requirements.requiredPlayers;
           room.maxPlayers = requirements.maxPlayers;
+          rebalanceVersusTeams(room);
           broadcastRoomState(room);
           broadcastRoomList();
           return;

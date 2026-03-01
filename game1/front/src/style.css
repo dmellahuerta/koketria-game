@@ -170,6 +170,24 @@ canvas {
   text-transform: uppercase;
 }
 
+.versus-team.team-red {
+  border-color: rgba(255, 107, 107, 0.52);
+  background: rgba(52, 12, 12, 0.46);
+}
+
+.versus-team.team-blue {
+  border-color: rgba(106, 152, 255, 0.52);
+  background: rgba(11, 24, 54, 0.46);
+}
+
+.versus-team.team-red h3 {
+  color: #ffb8b8;
+}
+
+.versus-team.team-blue h3 {
+  color: #bcd7ff;
+}
+
 .versus-players {
   display: grid;
   gap: 10px;
