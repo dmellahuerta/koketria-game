@@ -1910,6 +1910,8 @@ const activeHolyProjectiles = [];
 const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
 const activeLunarProjectiles = [];
+const maxActiveTracers = 420;
+const maxActiveImpacts = 680;
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -3479,6 +3481,13 @@ const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
   tracer.userData.life = life;
   scene.add(tracer);
   activeTracers.push(tracer);
+  if (activeTracers.length > maxActiveTracers) {
+    const old = activeTracers.shift();
+    if (old) {
+      scene.remove(old);
+      old.material.dispose();
+    }
+  }
 };
 
 const createHolyShotVisual = (start, end, options = {}) => {
@@ -3695,6 +3704,9 @@ const createLunarFireVisual = (start, end, options = {}) => {
 };
 
 const createImpact = (position, color = 0x7dff92) => {
+  if (activeImpacts.length >= maxActiveImpacts) {
+    return null;
+  }
   const impact = new THREE.Mesh(impactGeometry, impactMaterial.clone());
   impact.material.color = new THREE.Color(color);
   impact.position.copy(position);
@@ -5233,7 +5245,8 @@ const updateHolyProjectiles = (delta) => {
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.02) * 0.24));
 
     projectile.trailTimer += delta;
-    if (projectile.trailTimer >= 0.012) {
+    const trailInterval = projectile.source === 'remote' ? 0.028 : 0.012;
+    if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
       const spark = createImpact(pos, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
       if (spark) {
@@ -5309,7 +5322,8 @@ const updateHammerProjectiles = (delta) => {
     projectile.mesh.rotation.set(spin * 0.9, spin * 1.1, spin * 0.75);
 
     projectile.trailTimer += delta;
-    if (projectile.trailTimer >= 0.018) {
+    const trailInterval = projectile.source === 'remote' ? 0.032 : 0.018;
+    if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
       const spark = createImpact(projectile.pos, Math.random() > 0.5 ? 0xfff2c6 : 0x9af0ff);
       if (spark) {
@@ -5420,7 +5434,8 @@ const updatePoisonProjectiles = (delta) => {
     projectile.mesh.scale.setScalar(1.12 + (Math.sin(performance.now() * 0.02) * 0.28));
 
     projectile.trailTimer += delta;
-    if (projectile.trailTimer >= 0.007) {
+    const trailInterval = projectile.source === 'remote' ? 0.016 : 0.007;
+    if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
       const colorA = Math.random() > 0.5 ? 0x66ff73 : 0x9dff7a;
       const colorB = Math.random() > 0.5 ? 0x5dff6c : 0x8fff79;
@@ -5506,7 +5521,8 @@ const updateLunarProjectiles = (delta) => {
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.03) * 0.18));
 
     projectile.trailTimer += delta;
-    if (projectile.trailTimer >= 0.005) {
+    const trailInterval = projectile.source === 'remote' ? 0.012 : 0.005;
+    if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
       const tailLen = 2.9 + Math.random() * 1.4;
       const tailEnd = pos.clone().add(projectile.dir.clone().multiplyScalar(-tailLen));
@@ -5661,6 +5677,12 @@ const updateWinnerCountdown = () => {
   }
 };
 
+const shouldRenderLobbyPreview = () => {
+  return !state.joinedRoom
+    && lobbySection
+    && !lobbySection.classList.contains('hidden');
+};
+
 const animate = () => {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
@@ -5687,13 +5709,13 @@ const animate = () => {
   updateDamageIndicator();
   updateRemoteShootSound(delta);
   updateBleedEffect(delta);
-  if (previewState.mixer) {
+  if (shouldRenderLobbyPreview() && previewState.mixer) {
     previewState.mixer.update(delta);
   }
-  if (previewState.model) {
+  if (shouldRenderLobbyPreview() && previewState.model) {
     previewState.model.rotation.y += delta * 0.45;
   }
-  if (previewState.renderer && previewState.scene && previewState.camera) {
+  if (shouldRenderLobbyPreview() && previewState.renderer && previewState.scene && previewState.camera) {
     resizeCharacterPreview();
     previewState.renderer.render(previewState.scene, previewState.camera);
   }
