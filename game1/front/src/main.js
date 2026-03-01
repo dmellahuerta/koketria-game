@@ -730,10 +730,14 @@ const normalizePlayerTeam = (team) => {
 };
 
 const shouldShowTeamMarkers = () => {
+  const room = state.joinedRoom?.room;
+  const versusType = String(room?.versusType || '').toLowerCase();
+  const isValidVersusType = versusType === '1v1' || versusType === '2v2';
   return Boolean(
     state.joinedRoom
-      && isVersusRoom(state.joinedRoom.room)
-      && state.joinedRoom.room.status === 'in_game',
+      && isVersusRoom(room)
+      && isValidVersusType
+      && room.status === 'in_game',
   );
 };
 
@@ -797,7 +801,10 @@ const updateTeamScoreHud = () => {
   if (!teamScoreHud || !teamScoreRed || !teamScoreBlue || !teamScoreTarget) {
     return;
   }
-  if (!state.joinedRoom || !isVersusRoom(state.joinedRoom.room) || state.joinedRoom.room.status !== 'in_game') {
+  const room = state.joinedRoom?.room;
+  const versusType = String(room?.versusType || '').toLowerCase();
+  const isValidVersusType = versusType === '1v1' || versusType === '2v2';
+  if (!state.joinedRoom || !isVersusRoom(room) || !isValidVersusType || room.status !== 'in_game') {
     teamScoreHud.classList.add('hidden');
     return;
   }
@@ -815,7 +822,7 @@ const updateTeamScoreHud = () => {
       blue += killsCount;
     }
   }
-  const target = getVersusScoreTarget(state.joinedRoom.room);
+  const target = getVersusScoreTarget(room);
   teamScoreRed.textContent = `ROJO ${red}`;
   teamScoreBlue.textContent = `AZUL ${blue}`;
   teamScoreTarget.textContent = `META ${target}`;
