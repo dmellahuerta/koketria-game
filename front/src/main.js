@@ -5471,8 +5471,6 @@ const updateShieldPickups = (delta) => {
       }
     }
 
-    pickup.mesh.rotation.x += delta * 1.3;
-    pickup.mesh.rotation.y += delta * 1.7;
     pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * pickupFloatSpeed + pickup.phase) * pickupFloatAmplitude;
     if (Math.random() < delta * 3.1) {
       spawnPickupSpark(pickup, 0x8ff7ff);
