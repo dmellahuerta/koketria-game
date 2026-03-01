@@ -75,6 +75,7 @@ app.innerHTML = `
       <p id="healthStat">Vida: 100</p>
       <p id="shieldStat">Escudo: 0</p>
       <p id="ammoStat">Balas: 30 / 90</p>
+      <p id="specialStat">Especial R: -</p>
       <p id="stats">Kills: 0</p>
       <p id="roomHud">Sala: -</p>
       <p id="stateHud">Estado: waiting</p>
@@ -206,6 +207,7 @@ const scoreboardBody = document.querySelector('#scoreboardBody');
 const healthStat = document.querySelector('#healthStat');
 const shieldStat = document.querySelector('#shieldStat');
 const ammoStat = document.querySelector('#ammoStat');
+const specialStat = document.querySelector('#specialStat');
 const healthSideLabel = document.querySelector('#healthSideLabel');
 const shieldSideLabel = document.querySelector('#shieldSideLabel');
 const ammoSideLabel = document.querySelector('#ammoSideLabel');
@@ -1754,6 +1756,9 @@ const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
+const lunarSpecialCooldownMs = 60_000;
+let lunarRainCooldownEndsAt = 0;
+let lastLunarCooldownShown = null;
 
 const applyLoopAudioSource = (audio, src, attrName) => {
   const current = audio.getAttribute(attrName) || '';
@@ -2872,6 +2877,42 @@ const getCurrentAttackIntervalSeconds = () => {
   return 1 / fireRate;
 };
 
+const getLunarRainCooldownRemainingMs = () => {
+  return Math.max(0, lunarRainCooldownEndsAt - performance.now());
+};
+
+const setLunarRainCooldownRemainingMs = (remainingMs) => {
+  const numeric = Number(remainingMs);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    lunarRainCooldownEndsAt = 0;
+    return;
+  }
+  lunarRainCooldownEndsAt = performance.now() + numeric;
+};
+
+const renderSpecialStat = (force = false) => {
+  if (!specialStat) {
+    return;
+  }
+  if (!isPezunalunarCharacter(activeCharacter)) {
+    if (force || lastLunarCooldownShown !== -1) {
+      specialStat.textContent = 'Especial R: -';
+      lastLunarCooldownShown = -1;
+    }
+    return;
+  }
+
+  const remainingMs = getLunarRainCooldownRemainingMs();
+  const secondsLeft = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+  if (!force && lastLunarCooldownShown === secondsLeft) {
+    return;
+  }
+  lastLunarCooldownShown = secondsLeft;
+  specialStat.textContent = secondsLeft > 0
+    ? `Especial R: ${secondsLeft}s`
+    : 'Especial R: LISTO';
+};
+
 rebuildMapFromSeed(1);
 
 const updateHud = () => {
@@ -2885,6 +2926,7 @@ const updateHud = () => {
   healthStat.textContent = `Vida: ${shownHealth}`;
   shieldStat.textContent = `Escudo: ${shownShield}`;
   ammoStat.textContent = `${ammoLabel}: ${currentAmmoLikeValue} / ${reserveAmmoLikeValue}${!usingMana && isReloading ? ' (recargando...)' : ''}`;
+  renderSpecialStat(true);
   stats.textContent = `Kills: ${kills}`;
   healthSideLabel.textContent = `${shownHealth}`;
   shieldSideLabel.textContent = `${shownShield}`;
@@ -3055,6 +3097,8 @@ const resetCombatStats = () => {
   mana = maxMana;
   manaHudValue = Math.round(maxMana);
   pendingHealthRegen = 0;
+  lunarRainCooldownEndsAt = 0;
+  lastLunarCooldownShown = null;
   isReloading = false;
   reloadCooldown = 0;
   isJumping = false;
@@ -3083,6 +3127,19 @@ const reloadWeapon = () => {
   isReloading = true;
   reloadCooldown = reloadTime;
   updateHud();
+};
+
+const triggerLunarRainSpecial = () => {
+  if (!isPezunalunarCharacter(activeCharacter) || !canPlay()) {
+    return false;
+  }
+  const remainingMs = getLunarRainCooldownRemainingMs();
+  if (remainingMs > 0) {
+    renderSpecialStat(true);
+    return true;
+  }
+  sendWs({ type: 'player_special_lunar_rain' });
+  return true;
 };
 
 const respawnPlayer = () => {
@@ -4130,6 +4187,9 @@ const applyOwnStateFromRoom = (roomState) => {
   if (Number.isFinite(Number(selfPlayer.pendingHealthRegen))) {
     pendingHealthRegen = Math.max(0, Number(selfPlayer.pendingHealthRegen));
   }
+  if (Number.isFinite(Number(selfPlayer.lunarRainCooldownMs))) {
+    setLunarRainCooldownRemainingMs(Number(selfPlayer.lunarRainCooldownMs));
+  }
   clampPendingHealthRegenToMissing();
   if (selfPlayer.alive === false && !isRespawning && isMatchRunning()) {
     startRespawnCountdown();
@@ -4337,6 +4397,32 @@ const connectWebSocket = () => {
       return;
     }
 
+    if (payload.type === 'special_lunar_rain_wave') {
+      const data = payload.data || {};
+      const ownerId = String(data.playerId || '');
+      const strikes = Array.isArray(data.strikes) ? data.strikes : [];
+      for (let i = 0; i < strikes.length; i += 1) {
+        const strike = strikes[i] || {};
+        const start = strike.start || {};
+        const impact = strike.impact || {};
+        if (
+          !Number.isFinite(Number(start.x))
+          || !Number.isFinite(Number(start.y))
+          || !Number.isFinite(Number(start.z))
+          || !Number.isFinite(Number(impact.x))
+          || !Number.isFinite(Number(impact.y))
+          || !Number.isFinite(Number(impact.z))
+        ) {
+          continue;
+        }
+        const startVec = new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z));
+        const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
+        createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId });
+        createImpact(impactVec, Math.random() > 0.5 ? 0xbce9ff : 0x84cfff);
+      }
+      return;
+    }
+
     if (payload.type === 'player_damage') {
       if (!state.self || !canPlay()) {
         return;
@@ -4366,6 +4452,7 @@ const connectWebSocket = () => {
       const nextMana = Number(payload.data?.mana);
       const nextHealth = Number(payload.data?.health);
       const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
+      const nextLunarRainCooldownMs = Number(payload.data?.lunarRainCooldownMs);
       let changed = false;
       if (Number.isFinite(nextMana)) {
         mana = Math.max(0, Math.min(maxMana, Math.round(nextMana)));
@@ -4378,6 +4465,9 @@ const connectWebSocket = () => {
       }
       if (Number.isFinite(nextPendingHealthRegen)) {
         pendingHealthRegen = Math.max(0, nextPendingHealthRegen);
+      }
+      if (Number.isFinite(nextLunarRainCooldownMs)) {
+        setLunarRainCooldownRemainingMs(nextLunarRainCooldownMs);
       }
       clampPendingHealthRegenToMissing();
       if (changed) {
@@ -5066,7 +5156,9 @@ window.addEventListener('keydown', (event) => {
 
   if (event.code === 'KeyR') {
     cancelLocalFunnyAnimation();
-    reloadWeapon();
+    if (!triggerLunarRainSpecial()) {
+      reloadWeapon();
+    }
   }
 
   if (event.code in keys) {
@@ -6288,6 +6380,7 @@ const animate = () => {
   updateEffects(delta);
   updateCrosshair();
   updateDamageIndicator();
+  renderSpecialStat(false);
   updateRemoteShootSound(delta);
   updateBleedEffect(delta);
   if (shouldRenderLobbyPreview() && previewState.mixer) {

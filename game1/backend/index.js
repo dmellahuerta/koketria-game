@@ -38,6 +38,15 @@ const manaCostPerShot = Math.ceil(maxMana / 3);
 const manaRegenPerSecond = 12;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
+const lunarRainCooldownMs = 60_000;
+const lunarRainDurationMs = 8_000;
+const lunarRainWaveIntervalMs = 320;
+const lunarRainProjectilesPerWave = 8;
+const lunarRainRadius = 22;
+const lunarRainStrikeDamage = hitDamage;
+const lunarRainStrikeAoeRadius = 4.2;
+const lunarRainSkyMinY = 30;
+const lunarRainSkyMaxY = 52;
 const maxAimAngleDeltaDeg = envNumber('MAX_AIM_DELTA_DEG', 95);
 const maxOriginDrift = 2.8;
 const minWallHitDistance = 0.12;
@@ -102,6 +111,14 @@ const pickBattleThemeDifferentFrom = (currentTheme) => {
   return candidates[index];
 };
 
+const clearRoomSpecialTimers = (room) => {
+  if (!room?.specialTimers) {
+    return;
+  }
+  room.specialTimers.forEach((timerId) => clearInterval(timerId));
+  room.specialTimers.clear();
+};
+
 const ensureServerRoom = () => {
   const existing = rooms.get(serverRoomId);
   if (existing) {
@@ -123,6 +140,7 @@ const ensureServerRoom = () => {
     mapCollision: null,
     mapProfile: null,
     roundResetTimer: null,
+    specialTimers: new Set(),
   };
   rooms.set(room.id, room);
   return room;
@@ -160,6 +178,7 @@ const resetRoomCombat = (room) => {
       lastHealthRegenAt: now,
       lastManaRegenAt: now,
       lastShotAt: 0,
+      lastLunarRainAt: 0,
     });
   });
 };
@@ -176,6 +195,7 @@ const getCombatState = (room, playerId) => {
       lastHealthRegenAt: now,
       lastManaRegenAt: now,
       lastShotAt: 0,
+      lastLunarRainAt: 0,
     });
   }
   return room.combat.get(playerId);
@@ -385,6 +405,11 @@ const isManaCharacter = (characterId) => {
     || id === 'neoorphen'
     || id === 'pezunalunar'
     || id === 'pezuanalunar';
+};
+
+const isPezunalunarCharacter = (characterId) => {
+  const id = normalizeCharacterId(characterId);
+  return id === 'pezunalunar' || id === 'pezuanalunar';
 };
 
 const getShotIntervalMs = (characterId) => {
@@ -776,11 +801,170 @@ const processPlayerDeath = (room, victimId, killerId) => {
   }
 };
 
+const getLunarRainCooldownRemainingMs = (combat, nowMs = Date.now()) => {
+  if (!combat) {
+    return 0;
+  }
+  const last = Number(combat.lastLunarRainAt || 0);
+  if (!Number.isFinite(last) || last <= 0) {
+    return 0;
+  }
+  return Math.max(0, (last + lunarRainCooldownMs) - nowMs);
+};
+
+const pickLunarRainImpactPoint = (room, center, radius) => {
+  const profile = getRoomMapProfile(room);
+  for (let i = 0; i < 24; i += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * radius;
+    const x = center.x + (Math.cos(angle) * dist);
+    const z = center.z + (Math.sin(angle) * dist);
+    if (!isInsideMapBounds(profile, x, z, 0.15)) {
+      continue;
+    }
+    return { x, y: 0.2, z };
+  }
+  return { x: center.x, y: 0.2, z: center.z };
+};
+
+const applyLunarRainStrikeDamage = (room, casterId, impactPoint) => {
+  const aoeRadiusSq = lunarRainStrikeAoeRadius * lunarRainStrikeAoeRadius;
+  let roomStateChanged = false;
+
+  for (const victimId of room.players) {
+    if (victimId === casterId) {
+      continue;
+    }
+    const victimClient = getClientById(victimId);
+    if (!victimClient?.state?.position) {
+      continue;
+    }
+    const victimCombat = getCombatState(room, victimId);
+    if (!victimCombat.alive) {
+      continue;
+    }
+
+    const dx = Number(victimClient.state.position.x) - impactPoint.x;
+    const dz = Number(victimClient.state.position.z) - impactPoint.z;
+    if ((dx * dx) + (dz * dz) > aoeRadiusSq) {
+      continue;
+    }
+
+    if (victimCombat.shield > 0) {
+      const reducedDamage = Math.ceil(lunarRainStrikeDamage * (1 - shieldDamageReduction));
+      const shieldCost = Math.ceil(lunarRainStrikeDamage * shieldDamageCostFactor);
+      victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
+      victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
+    } else {
+      victimCombat.health = Math.max(0, victimCombat.health - lunarRainStrikeDamage);
+    }
+
+    send(victimClient.ws, {
+      type: 'player_damage',
+      ...json(true, {
+        fromPlayerId: casterId,
+        health: victimCombat.health,
+        shield: victimCombat.shield,
+        headshot: false,
+      }),
+    });
+    roomStateChanged = true;
+
+    if (victimCombat.health <= 0) {
+      processPlayerDeath(room, victimId, casterId);
+    }
+  }
+
+  if (roomStateChanged) {
+    broadcastRoomState(room);
+  }
+};
+
+const triggerPezunalunarSpecial = (room, caster) => {
+  if (!room || !caster || room.status !== 'in_game') {
+    return;
+  }
+  const nowMs = Date.now();
+  const casterCombat = getCombatState(room, caster.id);
+  if (!casterCombat.alive || !isPezunalunarCharacter(caster.character)) {
+    return;
+  }
+  const cooldownRemaining = getLunarRainCooldownRemainingMs(casterCombat, nowMs);
+  if (cooldownRemaining > 0) {
+    send(caster.ws, {
+      type: 'player_resources',
+      ...json(true, {
+        mana: Math.round(casterCombat.mana),
+        lunarRainCooldownMs: cooldownRemaining,
+      }),
+    });
+    return;
+  }
+
+  casterCombat.lastLunarRainAt = nowMs;
+  send(caster.ws, {
+    type: 'player_resources',
+    ...json(true, {
+      mana: Math.round(casterCombat.mana),
+      lunarRainCooldownMs: lunarRainCooldownMs,
+    }),
+  });
+
+  const intervalId = setInterval(() => {
+    if (room.status !== 'in_game' || !room.players.has(caster.id)) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+    const casterClient = getClientById(caster.id);
+    const currentCasterCombat = getCombatState(room, caster.id);
+    if (!casterClient || !currentCasterCombat.alive) {
+      clearInterval(intervalId);
+      room.specialTimers?.delete(intervalId);
+      return;
+    }
+
+    const center = {
+      x: Number(casterClient.state?.position?.x || 0),
+      y: Number(casterClient.state?.position?.y || 1.7),
+      z: Number(casterClient.state?.position?.z || 0),
+    };
+    const strikes = [];
+    for (let i = 0; i < lunarRainProjectilesPerWave; i += 1) {
+      const impact = pickLunarRainImpactPoint(room, center, lunarRainRadius);
+      const start = {
+        x: impact.x + ((Math.random() - 0.5) * 4.6),
+        y: lunarRainSkyMinY + (Math.random() * (lunarRainSkyMaxY - lunarRainSkyMinY)),
+        z: impact.z + ((Math.random() - 0.5) * 4.6),
+      };
+      strikes.push({ start, impact });
+      applyLunarRainStrikeDamage(room, caster.id, impact);
+    }
+
+    broadcastToRoom(room, {
+      type: 'special_lunar_rain_wave',
+      ...json(true, {
+        playerId: caster.id,
+        character: caster.character || null,
+        strikes,
+        ts: Date.now(),
+      }),
+    });
+  }, lunarRainWaveIntervalMs);
+
+  room.specialTimers?.add(intervalId);
+  setTimeout(() => {
+    clearInterval(intervalId);
+    room.specialTimers?.delete(intervalId);
+  }, lunarRainDurationMs);
+};
+
 const startRoundResetCountdown = (room, winnerId) => {
   if (!room || room.roundResetTimer) {
     return;
   }
 
+  clearRoomSpecialTimers(room);
   const winner = getClientById(winnerId);
   room.status = 'cooldown';
 
@@ -915,6 +1099,7 @@ const getRoomState = (room) => {
         health: Math.round(combat.health),
         shield: Math.round(combat.shield),
         mana: Math.round(combat.mana),
+        lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, Date.now()),
         pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
         alive: Boolean(combat.alive),
       });
@@ -981,9 +1166,11 @@ const leaveCurrentRoom = (client) => {
 
   if (room.players.size === 0) {
     if (!room.isServerManaged) {
+      clearRoomSpecialTimers(room);
       clearRoundResetTimer(room);
       rooms.delete(room.id);
     } else {
+      clearRoomSpecialTimers(room);
       clearRoundResetTimer(room);
       resetRoomStats(room);
       resetRoomCombat(room);
@@ -1032,6 +1219,7 @@ const joinRoom = (client, room) => {
     lastHealthRegenAt: now,
     lastManaRegenAt: now,
     lastShotAt: 0,
+    lastLunarRainAt: 0,
   });
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
@@ -1390,6 +1578,7 @@ const start = async () => {
                 type: 'player_resources',
                 ...json(true, {
                   mana: Math.round(shooterCombat.mana),
+                  lunarRainCooldownMs: getLunarRainCooldownRemainingMs(shooterCombat, nowMs),
                 }),
               });
               return;
@@ -1399,6 +1588,7 @@ const start = async () => {
               type: 'player_resources',
               ...json(true, {
                 mana: Math.round(shooterCombat.mana),
+                lunarRainCooldownMs: getLunarRainCooldownRemainingMs(shooterCombat, nowMs),
               }),
             });
           }
@@ -1519,6 +1709,18 @@ const start = async () => {
           return;
         }
 
+        if (message.type === 'player_special_lunar_rain') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.status !== 'in_game') {
+            return;
+          }
+          triggerPezunalunarSpecial(room, current);
+          return;
+        }
+
         if (message.type === 'player_funny') {
           if (!current.roomId) {
             return;
@@ -1567,6 +1769,7 @@ const start = async () => {
                 health: Number(combat.health || 0),
                 pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
                 mana: Math.round(combat.mana),
+                lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, nowMs),
               }),
             });
             return;
@@ -1582,6 +1785,7 @@ const start = async () => {
               health: Number(combat.health || 0),
               pendingHealthRegen: Number(combat.pendingHealthRegen || 0),
               mana: Math.round(combat.mana),
+              lunarRainCooldownMs: getLunarRainCooldownRemainingMs(combat, nowMs),
             }),
           });
           return;
