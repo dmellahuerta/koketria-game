@@ -756,11 +756,11 @@ const syncVersusPlayerPreviews = () => {
       current.camera.position.set(0, Math.max(0.95, size.y * 0.62), Math.max(1.45, size.y * 0.9));
       current.camera.lookAt(0, Math.max(0.72, size.y * 0.45), 0);
 
-      const clip = resource.animationSet?.funny
-        || resource.animationSet?.dead
+      const clip = resource.animationSet?.running
         || resource.animationSet?.idle
-        || resource.animationSet?.running
-        || findAnimationByName(resource.animations || [], 'funny', ['funny', 'dead', 'idle', 'running']);
+        || resource.animationSet?.funny
+        || resource.animationSet?.dead
+        || findAnimationByName(resource.animations || [], 'running', ['running', 'idle', 'funny', 'dead']);
       if (clip) {
         const mixer = new THREE.AnimationMixer(cloned);
         const action = mixer.clipAction(clip);

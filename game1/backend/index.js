@@ -168,6 +168,7 @@ const countCustomRooms = () => {
 const createVersusRoom = (hostClient, roomName = '') => {
   const baseName = String(roomName || '').trim();
   const safeName = baseName ? baseName.slice(0, 36) : `Versus-${Math.random().toString(36).slice(2, 7)}`;
+  const defaults = getVersusRequirements('1v1');
   const room = {
     id: randomUUID().slice(0, 8),
     name: safeName,
@@ -176,9 +177,9 @@ const createVersusRoom = (hostClient, roomName = '') => {
     weather: pickWeather(),
     battleTheme: pickBattleTheme(),
     mode: 'versusmatch',
-    versusType: null,
-    requiredPlayers: 0,
-    maxPlayers: versusRoomMax,
+    versusType: defaults?.versusType || '1v1',
+    requiredPlayers: defaults?.requiredPlayers || 2,
+    maxPlayers: defaults?.maxPlayers || Math.min(2, versusRoomMax),
     mapSeed: Math.floor(Math.random() * 0x7fffffff),
     isServerManaged: false,
     players: new Set(),
