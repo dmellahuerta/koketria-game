@@ -2015,6 +2015,9 @@ const remoteExtrapolationMs = 160;
 const remoteHardCatchupDistance = 4.8;
 const remoteMediumCatchupDistance = 2.4;
 const remoteSnapDistance = 9.5;
+const remoteAnimMoveSpeedOn = 0.55;
+const remoteAnimMoveSpeedOff = 0.32;
+const remoteAnimSwitchCooldownMs = 140;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 
@@ -3319,6 +3322,8 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     targetPitch: 0,
     netSnapshots: [],
     netInitialized: false,
+    smoothedMoveSpeed: 0,
+    lastAnimationAt: 0,
     healthBar: null,
   });
 
@@ -3427,6 +3432,7 @@ const syncRemotePlayer = (player) => {
     entry.group.rotation.y = snapshot.yaw + remoteFacingYawOffset;
     entry.targetYaw = snapshot.yaw;
     entry.targetPitch = snapshot.pitch;
+    entry.smoothedMoveSpeed = 0;
     entry.netInitialized = true;
   }
 };
@@ -5088,6 +5094,7 @@ const updateRemotePlayers = (delta) => {
     } else if (positionError > remoteMediumCatchupDistance) {
       factor = Math.max(factor, Math.min(1, delta * 10));
     }
+    const prevPos = entry.group.position.clone();
     if (positionError > remoteSnapDistance) {
       entry.group.position.copy(entry.targetPosition);
     } else {
@@ -5098,8 +5105,19 @@ const updateRemotePlayers = (delta) => {
       entry.targetYaw + remoteFacingYawOffset,
       factor,
     );
-    const stillMoving = entry.group.position.distanceToSquared(entry.targetPosition) > 0.01;
+    const movedDistance = prevPos.distanceTo(entry.group.position);
+    const instantMoveSpeed = delta > 0 ? (movedDistance / delta) : 0;
+    const moveFilter = Math.min(1, delta * 10);
+    entry.smoothedMoveSpeed = THREE.MathUtils.lerp(
+      Number(entry.smoothedMoveSpeed || 0),
+      instantMoveSpeed,
+      moveFilter,
+    );
+    const movingNow = entry.currentAnimation === 'move'
+      ? entry.smoothedMoveSpeed > remoteAnimMoveSpeedOff
+      : entry.smoothedMoveSpeed > remoteAnimMoveSpeedOn;
     const isAirborne = entry.isJumping || entry.targetPosition.y > 0.08 || entry.group.position.y > 0.08;
+    const canSwitchAnim = (now - Number(entry.lastAnimationAt || 0)) >= remoteAnimSwitchCooldownMs;
 
     if (entry.head) {
       entry.head.rotation.x = lerpAngle(entry.head.rotation.x, entry.targetPitch, factor);
@@ -5123,10 +5141,13 @@ const updateRemotePlayers = (delta) => {
       }
       if (isAirborne) {
         setRemoteAnimation(entry, 'jump');
-      } else if (stillMoving) {
+        entry.lastAnimationAt = now;
+      } else if (movingNow) {
         setRemoteAnimation(entry, 'move');
+        entry.lastAnimationAt = now;
       } else {
         setRemoteIdle(entry);
+        entry.lastAnimationAt = now;
       }
       entry.animationUntil = 0;
     }
@@ -5135,13 +5156,16 @@ const updateRemotePlayers = (delta) => {
       if (isAirborne) {
         if (entry.currentAnimation !== 'jump') {
           setRemoteAnimation(entry, 'jump');
+          entry.lastAnimationAt = now;
         }
-      } else if (stillMoving) {
-        if (entry.currentAnimation !== 'move') {
+      } else if (movingNow) {
+        if (entry.currentAnimation !== 'move' && canSwitchAnim) {
           setRemoteAnimation(entry, 'move');
+          entry.lastAnimationAt = now;
         }
-      } else if (entry.currentAnimation !== 'idle') {
+      } else if (entry.currentAnimation !== 'idle' && canSwitchAnim) {
         setRemoteIdle(entry);
+        entry.lastAnimationAt = now;
       }
     }
   }
