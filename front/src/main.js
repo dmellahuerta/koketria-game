@@ -1716,8 +1716,8 @@ shootSound.volume = 0.24;
 let shootSoundActive = false;
 const localAttackVoices = [];
 const maxLocalAttackVoices = 8;
-const preLobbyTrackPath = '/lobby/1.mp3';
-const lobbyTrackPath = '/lobby/1.mp3';
+const preLobbyTrackPath = '/themes/pre-lobby.mp3';
+const lobbyTrackPath = '/themes/lobby.mp3';
 const battleThemeTrackById = {
   battle1: '/themes/battle1.mp3',
   battle2: '/themes/battle2.mp3',
