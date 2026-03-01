@@ -180,6 +180,16 @@ const resetRoomStats = (room) => {
   });
 };
 
+const resetCombatSpecialCooldowns = (combat) => {
+  if (!combat) {
+    return;
+  }
+  combat.lastLunarRainAt = 0;
+  combat.lastPumoriOrbitAt = 0;
+  combat.lastSilentConeAt = 0;
+  combat.lastNeoorphenMeteorAt = 0;
+};
+
 const resetRoomCombat = (room) => {
   if (!room) {
     return;
@@ -1725,6 +1735,7 @@ const joinRoom = (client, room) => {
     lastSilentConeAt: 0,
     lastNeoorphenMeteorAt: 0,
   });
+  resetCombatSpecialCooldowns(room.combat.get(client.id));
   const spawn = pickSpawnPosition(room, client.id, client.id);
   client.state.position = {
     x: spawn.x,
@@ -1959,6 +1970,12 @@ const start = async () => {
           }
 
           room.status = message.type === 'start_game' ? 'in_game' : 'finished';
+          if (message.type === 'start_game') {
+            room.players.forEach((playerId) => {
+              const combat = getCombatState(room, playerId);
+              resetCombatSpecialCooldowns(combat);
+            });
+          }
 
           broadcastToRoom(room, {
             type: 'game_state',
@@ -2388,6 +2405,7 @@ const start = async () => {
           combat.lastHealthRegenAt = Date.now();
           combat.lastManaRegenAt = Date.now();
           combat.lastShotAt = 0;
+          resetCombatSpecialCooldowns(combat);
           const spawn = pickSpawnPosition(room, `${current.id}-respawn`, current.id);
           current.state.position = {
             x: spawn.x,
