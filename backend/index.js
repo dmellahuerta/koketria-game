@@ -49,6 +49,7 @@ const mapAxisXBase = 118;
 const mapAxisZBase = 96;
 const mapBoundaryMinRadius = 0.74;
 const mapBoundaryMaxRadius = 1.24;
+const playerCollisionRadius = 0.55;
 
 const json = (ok, data, error) => {
   return { ok, data, error };
@@ -96,6 +97,7 @@ const ensureServerRoom = () => {
     stats: new Map(),
     combat: new Map(),
     mapCollision: null,
+    mapProfile: null,
     roundResetTimer: null,
   };
   rooms.set(room.id, room);
@@ -251,6 +253,16 @@ const createSeededRng = (seed) => {
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
+};
+
+const hashStringToSeed = (value) => {
+  const text = String(value || '');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) || 1;
 };
 
 const createMapProfile = (seed) => {
@@ -424,6 +436,75 @@ const getRoomMapCollision = (room) => {
 
   room.mapCollision = { seed, boxes };
   return boxes;
+};
+
+const getRoomMapProfile = (room) => {
+  const seed = ensureRoomMapSeed(room);
+  if (room.mapProfile && room.mapProfile.seed === seed) {
+    return room.mapProfile.profile;
+  }
+  const profile = createMapProfile(seed);
+  room.mapProfile = { seed, profile };
+  return profile;
+};
+
+const collidesWithMapBox = (room, x, z, radius = playerCollisionRadius) => {
+  const boxes = getRoomMapCollision(room);
+  for (let i = 0; i < boxes.length; i += 1) {
+    const box = boxes[i];
+    if (
+      x + radius > box.minX
+      && x - radius < box.maxX
+      && z + radius > box.minZ
+      && z - radius < box.maxZ
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const isValidSpawnPoint = (room, profile, x, z) => {
+  return isInsideMapBounds(profile, x, z, playerCollisionRadius + 0.05)
+    && !collidesWithMapBox(room, x, z, playerCollisionRadius);
+};
+
+const pickSpawnPosition = (room, salt = '') => {
+  const profile = getRoomMapProfile(room);
+  const seed = ensureRoomMapSeed(room);
+  const nowSalt = Date.now() & 0xffff;
+  const rnd = createSeededRng((seed ^ hashStringToSeed(salt) ^ nowSalt) >>> 0);
+
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const theta = rnd() * Math.PI * 2;
+    const maxRadiusNorm = 0.78;
+    const minRadiusNorm = 0.06;
+    const radiusNorm = minRadiusNorm + (rnd() * (maxRadiusNorm - minRadiusNorm));
+    const boundaryPoint = getBoundaryPointAt(profile, theta, 0);
+    const x = boundaryPoint.x * radiusNorm;
+    const z = boundaryPoint.z * radiusNorm;
+    if (isValidSpawnPoint(room, profile, x, z)) {
+      return { x, y: 1.7, z };
+    }
+  }
+
+  if (isValidSpawnPoint(room, profile, 0, 0)) {
+    return { x: 0, y: 1.7, z: 0 };
+  }
+
+  for (let radius = 1; radius <= 18; radius += 1) {
+    const samples = 28;
+    for (let i = 0; i < samples; i += 1) {
+      const theta = (i / samples) * Math.PI * 2;
+      const x = Math.cos(theta) * radius;
+      const z = Math.sin(theta) * radius;
+      if (isValidSpawnPoint(room, profile, x, z)) {
+        return { x, y: 1.7, z };
+      }
+    }
+  }
+
+  return { x: 0, y: 1.7, z: 0 };
 };
 
 const resolveWallHitDistance = (room, origin, directionNorm, maxDistance) => {
@@ -824,6 +905,14 @@ const joinRoom = (client, room) => {
     lastManaRegenAt: now,
     lastShotAt: 0,
   });
+  const spawn = pickSpawnPosition(room, client.id);
+  client.state.position = {
+    x: spawn.x,
+    y: spawn.y,
+    z: spawn.z,
+  };
+  client.state.jumping = false;
+  client.state.moving = false;
   client.stateHistory = [];
   pushClientStateSnapshot(client, Date.now());
   client.roomId = room.id;
@@ -1378,12 +1467,25 @@ const start = async () => {
           combat.mana = maxMana;
           combat.lastManaRegenAt = Date.now();
           combat.lastShotAt = 0;
+          const spawn = pickSpawnPosition(room, `${current.id}-respawn`);
+          current.state.position = {
+            x: spawn.x,
+            y: spawn.y,
+            z: spawn.z,
+          };
+          current.state.jumping = false;
+          current.state.moving = false;
           pushClientStateSnapshot(current, Date.now());
 
           broadcastToRoom(room, {
             type: 'player_respawned',
             ...json(true, {
               playerId: current.id,
+              position: {
+                x: current.state.position.x,
+                y: current.state.position.y,
+                z: current.state.position.z,
+              },
               health: Math.round(combat.health),
               shield: Math.round(combat.shield),
               mana: Math.round(combat.mana),

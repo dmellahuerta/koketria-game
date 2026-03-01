@@ -2778,9 +2778,6 @@ const respawnPlayer = () => {
   respawnSecondsLeft = respawnDurationSeconds;
   respawnEndsAt = 0;
   updateRespawnOverlay();
-  camera.position.set((Math.random() - 0.5) * 12, playerGroundY, (Math.random() - 0.5) * 12);
-  constrainPlayerToWorld();
-  sendLocalPlayerState(true);
   sendWs({ type: 'player_respawn' });
   updateHud();
 };
@@ -4082,6 +4079,16 @@ const connectWebSocket = () => {
       }
 
       if (state.self && playerId === state.self.id) {
+        const respawnPos = payload.data?.position;
+        if (
+          respawnPos
+          && Number.isFinite(Number(respawnPos.x))
+          && Number.isFinite(Number(respawnPos.y))
+          && Number.isFinite(Number(respawnPos.z))
+        ) {
+          camera.position.set(Number(respawnPos.x), Number(respawnPos.y), Number(respawnPos.z));
+          constrainPlayerToWorld();
+        }
         health = Number.isFinite(payload.data?.health) ? Math.round(payload.data.health) : maxHealth;
         shield = Number.isFinite(payload.data?.shield) ? Math.round(payload.data.shield) : startShield;
         if (Number.isFinite(payload.data?.mana)) {
@@ -4107,6 +4114,19 @@ const connectWebSocket = () => {
         : maxHealth;
       remote.animationUntil = 0;
       setRemoteIdle(remote);
+      const remoteRespawnPos = payload.data?.position;
+      if (
+        remoteRespawnPos
+        && Number.isFinite(Number(remoteRespawnPos.x))
+        && Number.isFinite(Number(remoteRespawnPos.y))
+        && Number.isFinite(Number(remoteRespawnPos.z))
+      ) {
+        const rx = Number(remoteRespawnPos.x);
+        const ry = Number(remoteRespawnPos.y) - playerGroundY;
+        const rz = Number(remoteRespawnPos.z);
+        remote.group.position.set(rx, ry, rz);
+        remote.targetPosition.set(rx, ry, rz);
+      }
       updateRemoteHealthBar(remote);
       return;
     }
@@ -4497,6 +4517,38 @@ const collidesWithPillar = (x, z) => {
   return false;
 };
 
+const isWalkablePoint = (x, z) => {
+  if (!isInsideMapBounds(x, z, playerCollisionRadius + 0.05)) {
+    return false;
+  }
+  return !collidesWithPillar(x, z);
+};
+
+const findNearestWalkablePoint = (originX, originZ) => {
+  const start = clampPointToMapBounds(originX, originZ, playerCollisionRadius + 0.05);
+  if (isWalkablePoint(start.x, start.z)) {
+    return start;
+  }
+
+  const maxRadius = 14;
+  for (let radius = 0.6; radius <= maxRadius; radius += 0.6) {
+    const samples = 24;
+    for (let i = 0; i < samples; i += 1) {
+      const theta = (i / samples) * Math.PI * 2;
+      const candidate = clampPointToMapBounds(
+        start.x + (Math.cos(theta) * radius),
+        start.z + (Math.sin(theta) * radius),
+        playerCollisionRadius + 0.05,
+      );
+      if (isWalkablePoint(candidate.x, candidate.z)) {
+        return candidate;
+      }
+    }
+  }
+
+  return start;
+};
+
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
@@ -4518,6 +4570,11 @@ const applyWorldCollisions = (targetX, targetZ) => {
 };
 
 const constrainPlayerToWorld = () => {
+  if (!isWalkablePoint(camera.position.x, camera.position.z)) {
+    const safe = findNearestWalkablePoint(camera.position.x, camera.position.z);
+    camera.position.x = safe.x;
+    camera.position.z = safe.z;
+  }
   const fixed = applyWorldCollisions(camera.position.x, camera.position.z);
   camera.position.x = fixed.x;
   camera.position.z = fixed.z;
