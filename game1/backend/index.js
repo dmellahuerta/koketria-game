@@ -2263,26 +2263,26 @@ const leaveCurrentRoom = (client) => {
       const redCount = getTeamPlayerCount(room, 'red');
       const blueCount = getTeamPlayerCount(room, 'blue');
       const requiredPlayers = Math.max(2, Number(room.requiredPlayers) || 2);
-      const isOneVsOne = String(room.versusType || '').toLowerCase() === '1v1';
-      const isTwoVsTwo = String(room.versusType || '').toLowerCase() === '2v2';
 
       if (room.players.size < requiredPlayers) {
-        let inferredWinnerTeam = null;
-        if (redCount > 0 && blueCount <= 0) {
-          inferredWinnerTeam = 'red';
-        } else if (blueCount > 0 && redCount <= 0) {
-          inferredWinnerTeam = 'blue';
-        } else if (leavingTeam === 'red') {
-          inferredWinnerTeam = 'blue';
-        } else if (leavingTeam === 'blue') {
-          inferredWinnerTeam = 'red';
-        } else if (room.players.size > 0) {
-          const remainingId = room.players.values().next().value;
-          inferredWinnerTeam = getPlayerTeam(room, remainingId);
-        }
-
+        const remainingId = room.players.values().next().value;
+        const remainingTeam = remainingId ? getPlayerTeam(room, remainingId) : null;
+        const inferredWinnerTeam = normalizePlayerTeamId(
+          remainingTeam
+          || (leavingTeam === 'red' ? 'blue' : null)
+          || (leavingTeam === 'blue' ? 'red' : null),
+        );
         if (inferredWinnerTeam) {
           startVersusRoomDeletionCountdown(room, inferredWinnerTeam);
+          return;
+        }
+        // Fallback defensivo: si no hay metadata de team, elegir por conteo.
+        if (redCount > blueCount) {
+          startVersusRoomDeletionCountdown(room, 'red');
+          return;
+        }
+        if (blueCount > redCount) {
+          startVersusRoomDeletionCountdown(room, 'blue');
           return;
         }
       }
@@ -2295,7 +2295,7 @@ const leaveCurrentRoom = (client) => {
         startVersusRoomDeletionCountdown(room, 'red');
         return;
       }
-      if ((isOneVsOne || isTwoVsTwo) && room.players.size > 0 && redCount <= 0 && blueCount <= 0) {
+      if (room.players.size > 0 && redCount <= 0 && blueCount <= 0) {
         let inferredWinnerTeam = null;
         if (leavingTeam === 'red') {
           inferredWinnerTeam = 'blue';
