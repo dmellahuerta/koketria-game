@@ -6059,7 +6059,9 @@ const updateRemotePlayers = (delta) => {
     } else if (positionError > remoteMediumCatchupDistance) {
       factor = Math.max(factor, Math.min(1, delta * 10));
     }
-    const prevPos = entry.group.position.clone();
+    const prevX = entry.group.position.x;
+    const prevY = entry.group.position.y;
+    const prevZ = entry.group.position.z;
     if (positionError > remoteSnapDistance) {
       entry.group.position.copy(entry.targetPosition);
     } else {
@@ -6070,7 +6072,10 @@ const updateRemotePlayers = (delta) => {
       entry.targetYaw + remoteFacingYawOffset,
       factor,
     );
-    const movedDistance = prevPos.distanceTo(entry.group.position);
+    const dxMoved = entry.group.position.x - prevX;
+    const dyMoved = entry.group.position.y - prevY;
+    const dzMoved = entry.group.position.z - prevZ;
+    const movedDistance = Math.sqrt((dxMoved * dxMoved) + (dyMoved * dyMoved) + (dzMoved * dzMoved));
     const instantMoveSpeed = delta > 0 ? (movedDistance / delta) : 0;
     const moveFilter = Math.min(1, delta * 10);
     entry.smoothedMoveSpeed = THREE.MathUtils.lerp(

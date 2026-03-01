@@ -1134,9 +1134,7 @@ const applyLunarRainStrikeDamage = (room, casterId, impactPoint) => {
     }
   }
 
-  if (roomStateChanged) {
-    broadcastRoomState(room);
-  }
+  return roomStateChanged;
 };
 
 const triggerPezunalunarSpecial = (room, caster) => {
@@ -1189,6 +1187,7 @@ const triggerPezunalunarSpecial = (room, caster) => {
       z: Number(casterClient.state?.position?.z || 0),
     };
     const strikes = [];
+    let waveStateChanged = false;
     for (let i = 0; i < lunarRainProjectilesPerWave; i += 1) {
       const impact = pickLunarRainImpactPoint(room, center, lunarRainRadius);
       const start = {
@@ -1197,7 +1196,9 @@ const triggerPezunalunarSpecial = (room, caster) => {
         z: impact.z + ((Math.random() - 0.5) * 4.6),
       };
       strikes.push({ start, impact });
-      applyLunarRainStrikeDamage(room, caster.id, impact);
+      if (applyLunarRainStrikeDamage(room, caster.id, impact)) {
+        waveStateChanged = true;
+      }
     }
 
     broadcastToRoom(room, {
@@ -1209,6 +1210,9 @@ const triggerPezunalunarSpecial = (room, caster) => {
         ts: Date.now(),
       }),
     });
+    if (waveStateChanged) {
+      broadcastRoomState(room);
+    }
   }, lunarRainWaveIntervalMs);
 
   room.specialTimers?.add(intervalId);
@@ -1388,9 +1392,7 @@ const applyNeoorphenMeteorStrikeDamage = (room, casterId, impactPoint) => {
     }
   }
 
-  if (roomStateChanged) {
-    broadcastRoomState(room);
-  }
+  return roomStateChanged;
 };
 
 const triggerNeoorphenMeteorSpecial = (room, caster) => {
@@ -1444,6 +1446,7 @@ const triggerNeoorphenMeteorSpecial = (room, caster) => {
       z: Number(casterClient.state?.position?.z || 0),
     };
     const strikes = [];
+    let waveStateChanged = false;
     for (let i = 0; i < neoorphenMeteorProjectilesPerWave; i += 1) {
       const impact = pickLunarRainImpactPoint(room, center, neoorphenMeteorRadius);
       const start = {
@@ -1452,7 +1455,9 @@ const triggerNeoorphenMeteorSpecial = (room, caster) => {
         z: impact.z + ((Math.random() - 0.5) * 7.2),
       };
       strikes.push({ start, impact });
-      applyNeoorphenMeteorStrikeDamage(room, caster.id, impact);
+      if (applyNeoorphenMeteorStrikeDamage(room, caster.id, impact)) {
+        waveStateChanged = true;
+      }
     }
 
     broadcastToRoom(room, {
@@ -1464,6 +1469,9 @@ const triggerNeoorphenMeteorSpecial = (room, caster) => {
         ts: Date.now(),
       }),
     });
+    if (waveStateChanged) {
+      broadcastRoomState(room);
+    }
   }, neoorphenMeteorWaveIntervalMs);
 
   room.specialTimers?.add(intervalId);
