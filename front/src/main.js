@@ -2030,7 +2030,7 @@ const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
-const maxActivePickupSparks = 320;
+const maxActivePickupSparks = 720;
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -5159,8 +5159,11 @@ const updateAmmoPickups = (delta) => {
 
     pickup.mesh.rotation.y += delta * 2.2;
     pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2.4 + pickup.phase) * 0.09;
-    if (Math.random() < delta * 0.14) {
+    if (Math.random() < delta * 2.2) {
       spawnPickupSpark(pickup, 0x8fc3ff);
+      if (Math.random() < 0.55) {
+        spawnPickupSpark(pickup, 0x8fc3ff);
+      }
     }
 
     if (!canPlay() || (isManaCharacter(activeCharacter) ? mana >= maxMana : ammoReserve >= maxAmmoTotal)) {
@@ -5195,8 +5198,11 @@ const updateShieldPickups = (delta) => {
     pickup.mesh.rotation.x += delta * 1.3;
     pickup.mesh.rotation.y += delta * 1.7;
     pickup.mesh.position.y = pickup.baseY + Math.sin(nowSeconds * 2 + pickup.phase) * 0.1;
-    if (Math.random() < delta * 0.16) {
+    if (Math.random() < delta * 2.4) {
       spawnPickupSpark(pickup, 0x8ff7ff);
+      if (Math.random() < 0.6) {
+        spawnPickupSpark(pickup, 0x8ff7ff);
+      }
     }
 
     if (!canPlay() || shield >= maxShield) {
