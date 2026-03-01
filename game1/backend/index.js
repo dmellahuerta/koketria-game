@@ -71,6 +71,11 @@ const minWallHitDistance = 0.12;
 const lagCompensationMs = envNumber('LAG_COMP_MS', 120);
 const lagCompensationBulletMs = envNumber('LAG_COMP_BULLET_MS', lagCompensationMs);
 const lagCompensationMagicMs = envNumber('LAG_COMP_MAGIC_MS', Math.max(lagCompensationMs + 30, 150));
+const combatTickMs = envNumber('COMBAT_TICK_MS', 50);
+const combatEventsPerTickMax = envNumber('COMBAT_EVENTS_PER_TICK_MAX', 80);
+const combatQueueMaxPerRoom = envNumber('COMBAT_QUEUE_MAX_PER_ROOM', 512);
+const lagCompRttFactor = envNumber('LAG_COMP_RTT_FACTOR', 0.35);
+const lagCompExtraMaxMs = envNumber('LAG_COMP_EXTRA_MAX_MS', 120);
 const stateHistoryWindowMs = 1500;
 const roomStateSyncIntervalMs = 1000;
 const mapPillarCount = 180;
@@ -159,6 +164,7 @@ const ensureServerRoom = () => {
     mapProfile: null,
     roundResetTimer: null,
     specialTimers: new Set(),
+    combatEventQueue: [],
   };
   rooms.set(room.id, room);
   return room;
@@ -489,6 +495,249 @@ const getAimDeltaDegrees = (dirA, dirB) => {
   }
   const dot = clamp(vectorDot(dirA, dirB), -1, 1);
   return (Math.acos(dot) * 180) / Math.PI;
+};
+
+const getClientReportedRttMs = (client) => {
+  const raw = Number(client?.latencyMs || 0);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 0;
+  }
+  return clamp(raw, 0, 450);
+};
+
+const getDynamicRewindLagMs = (baseLagMs, clientRttMs) => {
+  const dynamic = baseLagMs + Math.round(clientRttMs * lagCompRttFactor);
+  return clamp(dynamic, baseLagMs, baseLagMs + lagCompExtraMaxMs);
+};
+
+const enqueueRoomCombatEvent = (room, event) => {
+  if (!room || !event) {
+    return;
+  }
+  if (!Array.isArray(room.combatEventQueue)) {
+    room.combatEventQueue = [];
+  }
+  if (room.combatEventQueue.length >= combatQueueMaxPerRoom) {
+    room.combatEventQueue.shift();
+  }
+  room.combatEventQueue.push(event);
+};
+
+const processShotCombatEvent = (room, event, nowMs = Date.now()) => {
+  const current = getClientById(event.playerId);
+  if (!current || current.roomId !== room.id) {
+    return;
+  }
+  if (room.status !== 'in_game') {
+    return;
+  }
+
+  const origin = event.origin || {};
+  const direction = event.direction || {};
+  const distance = Number(event.distance || 0);
+  if (
+    !validNumber(origin.x)
+    || !validNumber(origin.y)
+    || !validNumber(origin.z)
+    || !validNumber(direction.x)
+    || !validNumber(direction.y)
+    || !validNumber(direction.z)
+  ) {
+    return;
+  }
+
+  const shooterCombat = getCombatState(room, current.id);
+  if (!shooterCombat.alive) {
+    return;
+  }
+
+  const shooterIsMana = isManaCharacter(current.character || '');
+  updateCombatMana(shooterCombat, nowMs);
+  const shotIntervalMs = getShotIntervalMs(current.character || '');
+  const elapsedSinceLastShot = nowMs - Number(shooterCombat.lastShotAt || 0);
+  if (elapsedSinceLastShot < shotIntervalMs) {
+    return;
+  }
+
+  if (shooterIsMana) {
+    if (shooterCombat.mana < manaCostPerShot) {
+      send(current.ws, {
+        type: 'player_resources',
+        ...json(true, {
+          mana: Math.round(shooterCombat.mana),
+          lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
+        }),
+      });
+      return;
+    }
+    shooterCombat.mana = Math.max(0, shooterCombat.mana - manaCostPerShot);
+    send(current.ws, {
+      type: 'player_resources',
+      ...json(true, {
+        mana: Math.round(shooterCombat.mana),
+        lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
+      }),
+    });
+  }
+
+  shooterCombat.lastShotAt = nowMs;
+
+  const maxDistance = clamp(distance, 1, 220);
+  const serverOrigin = getServerEyeOrigin(current);
+  const clientOrigin = {
+    x: clamp(origin.x, -250, 250),
+    y: clamp(origin.y, 0, 10),
+    z: clamp(origin.z, -250, 250),
+  };
+  const driftVec = vectorSub(clientOrigin, serverOrigin);
+  const drift = Math.sqrt(vectorLenSq(driftVec));
+  const originClamped = drift <= maxOriginDrift ? clientOrigin : serverOrigin;
+
+  const clientDirectionNorm = vectorNorm({
+    x: clamp(direction.x, -1, 1),
+    y: clamp(direction.y, -1, 1),
+    z: clamp(direction.z, -1, 1),
+  });
+  if (!clientDirectionNorm) {
+    return;
+  }
+  const serverDirectionNorm = getServerAimDirection(current);
+  if (!serverDirectionNorm) {
+    return;
+  }
+  const aimDelta = getAimDeltaDegrees(clientDirectionNorm, serverDirectionNorm);
+  const directionNorm = aimDelta <= maxAimAngleDeltaDeg ? clientDirectionNorm : serverDirectionNorm;
+
+  const wallHitDistance = resolveWallHitDistance(room, originClamped, directionNorm, maxDistance);
+  const effectiveDistance = wallHitDistance === null
+    ? maxDistance
+    : Math.max(0, Math.min(maxDistance, wallHitDistance));
+
+  broadcastToRoom(room, {
+    type: 'player_shoot',
+    ...json(true, {
+      playerId: current.id,
+      character: current.character || null,
+      origin: {
+        x: originClamped.x,
+        y: originClamped.y,
+        z: originClamped.z,
+      },
+      direction: {
+        x: directionNorm.x,
+        y: directionNorm.y,
+        z: directionNorm.z,
+      },
+      distance: effectiveDistance,
+      ts: nowMs,
+    }),
+  }, current.id);
+
+  const baseRewindLagMs = shooterIsMana ? lagCompensationMagicMs : lagCompensationBulletMs;
+  const dynamicRewindLagMs = getDynamicRewindLagMs(baseRewindLagMs, getClientReportedRttMs(current));
+  const rewindTsMs = nowMs - dynamicRewindLagMs;
+  const hit = resolveShotHitOnPlayers(
+    room,
+    current.id,
+    originClamped,
+    directionNorm,
+    effectiveDistance,
+    rewindTsMs,
+  );
+  if (!hit) {
+    return;
+  }
+
+  const victimCombat = getCombatState(room, hit.victimId);
+  if (!victimCombat.alive) {
+    return;
+  }
+
+  if (hit.hitType === 'head') {
+    victimCombat.health = 0;
+    victimCombat.shield = Math.max(0, victimCombat.shield);
+  } else if (victimCombat.shield > 0) {
+    const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
+    const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
+    victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
+    victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
+  } else {
+    victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
+  }
+
+  const victim = getClientById(hit.victimId);
+  if (victim) {
+    send(victim.ws, {
+      type: 'player_damage',
+      ...json(true, {
+        fromPlayerId: current.id,
+        health: victimCombat.health,
+        shield: victimCombat.shield,
+        headshot: hit.hitType === 'head',
+      }),
+    });
+  }
+  send(current.ws, {
+    type: 'hit_confirm',
+    ...json(true, {
+      victimId: hit.victimId,
+      headshot: hit.hitType === 'head',
+      ts: nowMs,
+    }),
+  });
+  broadcastRoomState(room);
+
+  if (victimCombat.health <= 0) {
+    processPlayerDeath(room, hit.victimId, current.id);
+  }
+};
+
+const processSpecialCombatEvent = (room, event) => {
+  const current = getClientById(event.playerId);
+  if (!current || current.roomId !== room.id || room.status !== 'in_game') {
+    return;
+  }
+  if (event.type === 'special_lunar_rain') {
+    triggerPezunalunarSpecial(room, current);
+    return;
+  }
+  if (event.type === 'special_silent_cone') {
+    triggerSilentmanConeSpecial(room, current);
+    return;
+  }
+  if (event.type === 'special_neoorphen_meteor') {
+    triggerNeoorphenMeteorSpecial(room, current);
+    return;
+  }
+  if (event.type === 'special_pumori_orbit') {
+    triggerPumoriSpecial(room, current);
+  }
+};
+
+const processQueuedCombatEvents = (room, nowMs = Date.now()) => {
+  if (!room || room.players.size <= 0 || room.status !== 'in_game') {
+    if (room?.combatEventQueue?.length) {
+      room.combatEventQueue.length = 0;
+    }
+    return;
+  }
+  const queue = room.combatEventQueue;
+  if (!Array.isArray(queue) || queue.length <= 0) {
+    return;
+  }
+
+  const toProcess = Math.min(combatEventsPerTickMax, queue.length);
+  for (let i = 0; i < toProcess; i += 1) {
+    const event = queue.shift();
+    if (!event) {
+      continue;
+    }
+    if (event.type === 'shot') {
+      processShotCombatEvent(room, event, nowMs);
+      continue;
+    }
+    processSpecialCombatEvent(room, event);
+  }
 };
 
 const rayAabbIntersectionT = (origin, dir, aabb, maxDistance) => {
@@ -1844,6 +2093,7 @@ const start = async () => {
           moving: false,
         },
         stateHistory: [],
+        latencyMs: 0,
         ws,
       };
 
@@ -1892,6 +2142,10 @@ const start = async () => {
         }
 
         if (message.type === 'ping') {
+          const reportedRttMs = Number(message.rttMs);
+          if (Number.isFinite(reportedRttMs) && reportedRttMs >= 0) {
+            current.latencyMs = clamp(reportedRttMs, 0, 450);
+          }
           send(ws, {
             type: 'pong',
             ...json(true, {
@@ -2073,7 +2327,6 @@ const start = async () => {
           const origin = message.origin || {};
           const direction = message.direction || {};
           const distance = Number(message.distance || 0);
-
           if (
             !validNumber(origin.x)
             || !validNumber(origin.y)
@@ -2084,155 +2337,22 @@ const start = async () => {
           ) {
             return;
           }
-
-          const shooterCombat = getCombatState(room, current.id);
-          if (!shooterCombat.alive) {
-            return;
-          }
-
-          const nowMs = Date.now();
-          const shooterIsMana = isManaCharacter(current.character || '');
-          updateCombatMana(shooterCombat, nowMs);
-
-          const shotIntervalMs = getShotIntervalMs(current.character || '');
-          const elapsedSinceLastShot = nowMs - Number(shooterCombat.lastShotAt || 0);
-          if (elapsedSinceLastShot < shotIntervalMs) {
-            return;
-          }
-
-          if (shooterIsMana) {
-            if (shooterCombat.mana < manaCostPerShot) {
-              send(ws, {
-                type: 'player_resources',
-                ...json(true, {
-                  mana: Math.round(shooterCombat.mana),
-                  lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
-                }),
-              });
-              return;
-            }
-            shooterCombat.mana = Math.max(0, shooterCombat.mana - manaCostPerShot);
-            send(ws, {
-              type: 'player_resources',
-              ...json(true, {
-                mana: Math.round(shooterCombat.mana),
-                lunarRainCooldownMs: getSpecialCooldownRemainingMs(shooterCombat, current.character, nowMs),
-              }),
-            });
-          }
-
-          shooterCombat.lastShotAt = nowMs;
-
-          const maxDistance = clamp(distance, 1, 220);
-          const serverOrigin = getServerEyeOrigin(current);
-          const clientOrigin = {
-            x: clamp(origin.x, -250, 250),
-            y: clamp(origin.y, 0, 10),
-            z: clamp(origin.z, -250, 250),
-          };
-          const driftVec = vectorSub(clientOrigin, serverOrigin);
-          const drift = Math.sqrt(vectorLenSq(driftVec));
-          const originClamped = drift <= maxOriginDrift ? clientOrigin : serverOrigin;
-
-          const clientDirectionNorm = vectorNorm({
-            x: clamp(direction.x, -1, 1),
-            y: clamp(direction.y, -1, 1),
-            z: clamp(direction.z, -1, 1),
+          enqueueRoomCombatEvent(room, {
+            type: 'shot',
+            playerId: current.id,
+            origin: {
+              x: origin.x,
+              y: origin.y,
+              z: origin.z,
+            },
+            direction: {
+              x: direction.x,
+              y: direction.y,
+              z: direction.z,
+            },
+            distance,
+            queuedAt: Date.now(),
           });
-          if (!clientDirectionNorm) {
-            return;
-          }
-          const serverDirectionNorm = getServerAimDirection(current);
-          if (!serverDirectionNorm) {
-            return;
-          }
-
-          const aimDelta = getAimDeltaDegrees(clientDirectionNorm, serverDirectionNorm);
-          const directionNorm = aimDelta <= maxAimAngleDeltaDeg ? clientDirectionNorm : serverDirectionNorm;
-
-          const wallHitDistance = resolveWallHitDistance(room, originClamped, directionNorm, maxDistance);
-          const effectiveDistance = wallHitDistance === null
-            ? maxDistance
-            : Math.max(0, Math.min(maxDistance, wallHitDistance));
-
-          broadcastToRoom(room, {
-            type: 'player_shoot',
-            ...json(true, {
-              playerId: current.id,
-              character: current.character || null,
-              origin: {
-                x: originClamped.x,
-                y: originClamped.y,
-                z: originClamped.z,
-              },
-              direction: {
-                x: directionNorm.x,
-                y: directionNorm.y,
-                z: directionNorm.z,
-              },
-              distance: effectiveDistance,
-              ts: nowMs,
-            }),
-          }, current.id);
-
-          const rewindLagMs = shooterIsMana ? lagCompensationMagicMs : lagCompensationBulletMs;
-          const rewindTsMs = nowMs - rewindLagMs;
-          const hit = resolveShotHitOnPlayers(
-            room,
-            current.id,
-            originClamped,
-            directionNorm,
-            effectiveDistance,
-            rewindTsMs,
-          );
-          if (!hit) {
-            return;
-          }
-
-          const victimCombat = getCombatState(room, hit.victimId);
-          if (!victimCombat.alive) {
-            return;
-          }
-
-          if (hit.hitType === 'head') {
-            victimCombat.health = 0;
-            victimCombat.shield = Math.max(0, victimCombat.shield);
-          } else {
-            if (victimCombat.shield > 0) {
-              const reducedDamage = Math.ceil(hitDamage * (1 - shieldDamageReduction));
-              const shieldCost = Math.ceil(hitDamage * shieldDamageCostFactor);
-              victimCombat.shield = Math.max(0, victimCombat.shield - shieldCost);
-              victimCombat.health = Math.max(0, victimCombat.health - reducedDamage);
-            } else {
-              victimCombat.health = Math.max(0, victimCombat.health - hitDamage);
-            }
-          }
-
-          const victim = getClientById(hit.victimId);
-          if (victim) {
-            send(victim.ws, {
-              type: 'player_damage',
-              ...json(true, {
-                fromPlayerId: current.id,
-                health: victimCombat.health,
-                shield: victimCombat.shield,
-                headshot: hit.hitType === 'head',
-              }),
-            });
-          }
-          send(current.ws, {
-            type: 'hit_confirm',
-            ...json(true, {
-              victimId: hit.victimId,
-              headshot: hit.hitType === 'head',
-              ts: nowMs,
-            }),
-          });
-          broadcastRoomState(room);
-
-          if (victimCombat.health <= 0) {
-            processPlayerDeath(room, hit.victimId, current.id);
-          }
 
           return;
         }
@@ -2245,7 +2365,11 @@ const start = async () => {
           if (!room || room.status !== 'in_game') {
             return;
           }
-          triggerPezunalunarSpecial(room, current);
+          enqueueRoomCombatEvent(room, {
+            type: 'special_lunar_rain',
+            playerId: current.id,
+            queuedAt: Date.now(),
+          });
           return;
         }
 
@@ -2257,7 +2381,11 @@ const start = async () => {
           if (!room || room.status !== 'in_game') {
             return;
           }
-          triggerSilentmanConeSpecial(room, current);
+          enqueueRoomCombatEvent(room, {
+            type: 'special_silent_cone',
+            playerId: current.id,
+            queuedAt: Date.now(),
+          });
           return;
         }
 
@@ -2269,7 +2397,11 @@ const start = async () => {
           if (!room || room.status !== 'in_game') {
             return;
           }
-          triggerNeoorphenMeteorSpecial(room, current);
+          enqueueRoomCombatEvent(room, {
+            type: 'special_neoorphen_meteor',
+            playerId: current.id,
+            queuedAt: Date.now(),
+          });
           return;
         }
 
@@ -2281,7 +2413,11 @@ const start = async () => {
           if (!room || room.status !== 'in_game') {
             return;
           }
-          triggerPumoriSpecial(room, current);
+          enqueueRoomCombatEvent(room, {
+            type: 'special_pumori_orbit',
+            playerId: current.id,
+            queuedAt: Date.now(),
+          });
           return;
         }
 
@@ -2471,6 +2607,13 @@ const start = async () => {
         broadcastRoomState(room);
       });
     }, roomStateSyncIntervalMs);
+
+    setInterval(() => {
+      const now = Date.now();
+      rooms.forEach((room) => {
+        processQueuedCombatEvents(room, now);
+      });
+    }, combatTickMs);
 
     app.log.info(`HTTP listo en http://0.0.0.0:${port}`);
     app.log.info(`WS listo en ws://0.0.0.0:${port}/ws`);

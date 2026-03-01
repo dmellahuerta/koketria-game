@@ -570,6 +570,7 @@ let lastLatencyProbeAt = 0;
 const latencyProbeIntervalMs = 2_000;
 let fpsFrames = 0;
 let fpsSampleStartedAt = performance.now();
+let vfxQuality = 1;
 
 const requestLatencyProbe = (force = false) => {
   const now = performance.now();
@@ -593,6 +594,7 @@ const requestLatencyProbe = (force = false) => {
     type: 'ping',
     probeId,
     clientTs: Date.now(),
+    rttMs: Number.isFinite(state.latencyMs) ? Math.round(state.latencyMs) : undefined,
   });
 };
 
@@ -603,6 +605,18 @@ const updatePerfMetrics = () => {
 
   if (elapsed >= 500) {
     state.fps = Math.max(0, Math.round((fpsFrames * 1000) / elapsed));
+    const fps = state.fps;
+    if (fps >= 58) {
+      vfxQuality = 1;
+    } else if (fps >= 48) {
+      vfxQuality = 0.82;
+    } else if (fps >= 38) {
+      vfxQuality = 0.62;
+    } else if (fps >= 30) {
+      vfxQuality = 0.48;
+    } else {
+      vfxQuality = 0.34;
+    }
     fpsFrames = 0;
     fpsSampleStartedAt = now;
     if (state.showPerf && state.joinedRoom) {
@@ -2208,6 +2222,37 @@ const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
+const vfxNearDistance = 35;
+const vfxFarDistance = 165;
+const tmpSegDir = new THREE.Vector3();
+const tmpSegToCenter = new THREE.Vector3();
+const tmpClosestPoint = new THREE.Vector3();
+const tmpTravelVec = new THREE.Vector3();
+const tmpLocalHead = new THREE.Vector3();
+const tmpLocalBody = new THREE.Vector3();
+const tracerUpAxis = new THREE.Vector3(0, 1, 0);
+
+const getVfxSpawnBudget = (position) => {
+  const cam = getRenderCamera();
+  if (!cam || !position) {
+    return vfxQuality;
+  }
+  const dx = position.x - cam.position.x;
+  const dy = position.y - cam.position.y;
+  const dz = position.z - cam.position.z;
+  const dist = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+  if (dist <= vfxNearDistance) {
+    return vfxQuality;
+  }
+  if (dist >= vfxFarDistance) {
+    return vfxQuality * 0.35;
+  }
+  const t = (dist - vfxNearDistance) / (vfxFarDistance - vfxNearDistance);
+  return vfxQuality * (1 - (t * 0.65));
+};
+
+const getDynamicMaxTracers = () => Math.max(120, Math.round(maxActiveTracers * (0.45 + (vfxQuality * 0.55))));
+const getDynamicMaxImpacts = () => Math.max(180, Math.round(maxActiveImpacts * (0.4 + (vfxQuality * 0.6))));
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -3898,9 +3943,14 @@ const clearRemotePlayers = () => {
 };
 
 const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
-  const direction = end.clone().sub(start);
-  const distance = direction.length();
+  tmpTravelVec.subVectors(end, start);
+  const distance = tmpTravelVec.length();
   if (distance <= 0.0001) {
+    return;
+  }
+  const mid = tmpClosestPoint.copy(start).add(end).multiplyScalar(0.5);
+  const budget = getVfxSpawnBudget(mid);
+  if (budget < 0.999 && Math.random() > budget) {
     return;
   }
 
@@ -3912,13 +3962,13 @@ const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
   material.color = new THREE.Color(color);
   material.opacity = opacity;
   const tracer = new THREE.Mesh(tracerGeometry, material);
-  tracer.position.copy(start).add(end).multiplyScalar(0.5);
-  tracer.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  tracer.position.copy(mid);
+  tracer.quaternion.setFromUnitVectors(tracerUpAxis, tmpTravelVec.multiplyScalar(1 / distance));
   tracer.scale.set(radiusScale, distance, radiusScale);
   tracer.userData.life = life;
   scene.add(tracer);
   activeTracers.push(tracer);
-  if (activeTracers.length > maxActiveTracers) {
+  if (activeTracers.length > getDynamicMaxTracers()) {
     const old = activeTracers.shift();
     if (old) {
       scene.remove(old);
@@ -4264,7 +4314,11 @@ const createLunarFireVisual = (start, end, options = {}) => {
 };
 
 const createImpact = (position, color = 0x7dff92) => {
-  if (activeImpacts.length >= maxActiveImpacts) {
+  const budget = getVfxSpawnBudget(position);
+  if (budget < 0.999 && Math.random() > budget) {
+    return null;
+  }
+  if (activeImpacts.length >= getDynamicMaxImpacts()) {
     return null;
   }
   const impact = new THREE.Mesh(impactGeometry, impactMaterial.clone());
@@ -4277,45 +4331,45 @@ const createImpact = (position, color = 0x7dff92) => {
 };
 
 const testSegmentSphereHit = (segStart, segEnd, center, radius) => {
-  const segDir = segEnd.clone().sub(segStart);
-  const segLen = segDir.length();
+  tmpSegDir.subVectors(segEnd, segStart);
+  const segLen = tmpSegDir.length();
   if (segLen <= 0.0001) {
     return null;
   }
-  segDir.multiplyScalar(1 / segLen);
-  const segToCenter = center.clone().sub(segStart);
-  const proj = segToCenter.dot(segDir);
+  tmpSegDir.multiplyScalar(1 / segLen);
+  tmpSegToCenter.subVectors(center, segStart);
+  const proj = tmpSegToCenter.dot(tmpSegDir);
   if (proj < 0 || proj > segLen) {
     return null;
   }
-  const closest = segDir.multiplyScalar(proj).add(segStart);
-  if (closest.distanceToSquared(center) <= radius * radius) {
-    return closest;
+  tmpClosestPoint.copy(tmpSegDir).multiplyScalar(proj).add(segStart);
+  if (tmpClosestPoint.distanceToSquared(center) <= radius * radius) {
+    return tmpClosestPoint.clone();
   }
   return null;
 };
 
 const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
-  const travel = segEnd.clone().sub(segStart);
-  const distance = travel.length();
+  tmpTravelVec.subVectors(segEnd, segStart);
+  const distance = tmpTravelVec.length();
   if (distance <= 0.0001) {
     return null;
   }
-  const dirNorm = travel.multiplyScalar(1 / distance);
-  raycaster.set(segStart, dirNorm);
+  tmpTravelVec.multiplyScalar(1 / distance);
+  raycaster.set(segStart, tmpTravelVec);
   raycaster.far = distance + pad;
   const hits = raycaster.intersectObjects(shootables, false);
   return hits.length > 0 ? hits[0].point.clone() : null;
 };
 
 const getLocalSegmentCharacterImpact = (segStart, segEnd) => {
-  const localHead = camera.position.clone().add(new THREE.Vector3(0, headCenterOffsetY, 0));
-  const localBody = camera.position.clone().add(new THREE.Vector3(0, bodyCenterOffsetY, 0));
-  const head = testSegmentSphereHit(segStart, segEnd, localHead, headshotRadius);
+  tmpLocalHead.set(camera.position.x, camera.position.y + headCenterOffsetY, camera.position.z);
+  tmpLocalBody.set(camera.position.x, camera.position.y + bodyCenterOffsetY, camera.position.z);
+  const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, headshotRadius);
   if (head) {
     return { point: head, headshot: true };
   }
-  const body = testSegmentSphereHit(segStart, segEnd, localBody, bodyshotRadius);
+  const body = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, bodyshotRadius);
   if (body) {
     return { point: body, headshot: false };
   }
