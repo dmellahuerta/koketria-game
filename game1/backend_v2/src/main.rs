@@ -180,7 +180,7 @@ async fn proxy_ws(client_socket: WebSocket, state: Arc<AppState>, addr: SocketAd
 
 fn map_client_ws_message(message: AxumWsMessage) -> Option<TungsteniteMessage> {
     match message {
-        AxumWsMessage::Text(text) => Some(TungsteniteMessage::Text(text)),
+        AxumWsMessage::Text(text) => Some(TungsteniteMessage::Text(text.to_string().into())),
         AxumWsMessage::Binary(bin) => Some(TungsteniteMessage::Binary(bin)),
         AxumWsMessage::Ping(v) => Some(TungsteniteMessage::Ping(v)),
         AxumWsMessage::Pong(v) => Some(TungsteniteMessage::Pong(v)),
@@ -190,7 +190,7 @@ fn map_client_ws_message(message: AxumWsMessage) -> Option<TungsteniteMessage> {
 
 fn map_upstream_ws_message(message: TungsteniteMessage) -> Option<AxumWsMessage> {
     match message {
-        TungsteniteMessage::Text(text) => Some(AxumWsMessage::Text(text)),
+        TungsteniteMessage::Text(text) => Some(AxumWsMessage::Text(text.to_string().into())),
         TungsteniteMessage::Binary(bin) => Some(AxumWsMessage::Binary(bin)),
         TungsteniteMessage::Ping(v) => Some(AxumWsMessage::Ping(v)),
         TungsteniteMessage::Pong(v) => Some(AxumWsMessage::Pong(v)),

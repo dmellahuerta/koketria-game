@@ -25,6 +25,8 @@ Servicios expuestos:
 - Frontend juego (Vite dev): `http://localhost:5173`
 - Backend: `http://localhost:3000`
 - WebSocket salas: `ws://localhost:3000/ws`
+- Backend v2 (Rust, proxy compat): `http://localhost:3001`
+- Health backend v2: `http://localhost:3001/_v2/health`
 
 ## Detener servicios
 
@@ -49,6 +51,7 @@ Logs por servicio:
 ```bash
 docker compose -f docker/docker-compose.yml logs -f front
 docker compose -f docker/docker-compose.yml logs -f backend
+docker compose -f docker/docker-compose.yml logs -f backend_v2
 ```
 
 ## Consideraciones del backend
