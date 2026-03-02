@@ -47,9 +47,10 @@ services:
     environment:
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true
-      - VITE_API_BASE_URL=http://localhost:3000
+      - VITE_API_BASE_URL=http://localhost:3001
     depends_on:
       - backend
+      - backend_v2
 
 volumes:
   backend_node_modules:
