@@ -24,6 +24,10 @@
 
       <section class="panel">
         <h2>Listado</h2>
+        <div id="installBox" class="install-box hidden-link">
+          <span>Instala la app para abrir misterrii network como aplicación.</span>
+          <button id="installBtn" type="button">Instalar app</button>
+        </div>
         <ul class="games">
           <li class="game-item">
             <div class="game-meta">
@@ -43,6 +47,9 @@
         var host = window.location.hostname;
         var isDev = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
         var showEnv = isDev ? 'dev' : 'prod';
+        var deferredPrompt = null;
+        var installBox = document.getElementById('installBox');
+        var installBtn = document.getElementById('installBtn');
         document.querySelectorAll('[data-env]').forEach(function (el) {
           if (el.getAttribute('data-env') !== showEnv) {
             el.classList.add('hidden-link');
@@ -56,6 +63,38 @@
             navigator.serviceWorker.register('/sw.js').catch(function () {});
           });
         }
+
+        window.addEventListener('beforeinstallprompt', function (event) {
+          if (!(isProdHost && isHttps) || !installBox || !installBtn) {
+            return;
+          }
+          event.preventDefault();
+          deferredPrompt = event;
+          installBox.classList.remove('hidden-link');
+        });
+
+        if (installBtn) {
+          installBtn.addEventListener('click', async function () {
+            if (!deferredPrompt) {
+              return;
+            }
+            deferredPrompt.prompt();
+            try {
+              await deferredPrompt.userChoice;
+            } catch (_err) {}
+            deferredPrompt = null;
+            if (installBox) {
+              installBox.classList.add('hidden-link');
+            }
+          });
+        }
+
+        window.addEventListener('appinstalled', function () {
+          deferredPrompt = null;
+          if (installBox) {
+            installBox.classList.add('hidden-link');
+          }
+        });
       })();
     </script>
   </body>
