@@ -432,8 +432,12 @@ const resetMobileInput = () => {
 const detectMobileControlsEnabled = () => {
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches
     || window.matchMedia('(any-pointer: coarse)').matches;
-  const hasTouch = (navigator.maxTouchPoints || 0) > 0;
-  return coarsePointer && hasTouch;
+  const hasFineHoverPointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  const hasTouchApi = ('ontouchstart' in window)
+    || ((navigator.maxTouchPoints || 0) > 0)
+    || ((navigator.msMaxTouchPoints || 0) > 0);
+  const mobileUserAgent = /android|iphone|ipad|ipod|mobile/i.test(String(navigator.userAgent || ''));
+  return !hasFineHoverPointer && (coarsePointer || hasTouchApi || mobileUserAgent);
 };
 
 const syncMobileControlsVisibility = () => {
