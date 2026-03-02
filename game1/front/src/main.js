@@ -546,7 +546,10 @@ const syncMobileFullscreenPrompt = () => {
 const syncMobileControlsVisibility = () => {
   const wasActive = mobileInput.active;
   mobileInput.enabled = detectMobileControlsEnabled();
-  const canShow = mobileInput.enabled && canPlay() && !isInVersusWaitingLobby() && !isOptionsOpen;
+  const canShow = mobileInput.enabled
+    && Boolean(state.joinedRoom)
+    && !isInVersusWaitingLobby()
+    && !isOptionsOpen;
   mobileInput.active = canShow;
   if (!mobileControls) {
     return;
