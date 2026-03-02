@@ -189,7 +189,6 @@ app.innerHTML = `
     <div class="mobile-right">
       <button id="mobileJumpBtn" type="button" class="mobile-btn">Saltar</button>
       <button id="mobileSpecialBtn" type="button" class="mobile-btn">Especial</button>
-      <button id="mobileReloadBtn" type="button" class="mobile-btn">Recargar</button>
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
     </div>
   </div>
@@ -341,7 +340,6 @@ const mobileJoystickThumb = document.querySelector('#mobileJoystickThumb');
 const mobileFireBtn = document.querySelector('#mobileFireBtn');
 const mobileSpecialBtn = document.querySelector('#mobileSpecialBtn');
 const mobileJumpBtn = document.querySelector('#mobileJumpBtn');
-const mobileReloadBtn = document.querySelector('#mobileReloadBtn');
 const teamAimIndicator = document.querySelector('#teamAimIndicator');
 const teamMiniMap = document.querySelector('#teamMiniMap');
 const optionsScreen = document.querySelector('#optionsScreen');
@@ -6591,13 +6589,6 @@ const bindMobileTouchControls = () => {
     }
   }, { passive: false });
 
-  mobileReloadBtn?.addEventListener('touchstart', (event) => {
-    if (mobileInput.active) {
-      cancelLocalFunnyAnimation();
-      reloadWeapon();
-      event.preventDefault();
-    }
-  }, { passive: false });
 };
 
 window.addEventListener('keydown', (event) => {
