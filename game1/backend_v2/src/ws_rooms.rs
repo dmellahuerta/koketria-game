@@ -194,8 +194,11 @@ impl Inner {
 
     fn public_rooms_json(&self) -> Value {
         let mut rooms = Vec::new();
-        for room_id in self.rooms.rooms.keys() {
-            if let Some(summary) = self.room_summary_json(room_id) {
+        for room in self.rooms.rooms.values() {
+            if !should_expose_room_in_list(room) {
+                continue;
+            }
+            if let Some(summary) = self.room_summary_json(&room.id) {
                 rooms.push(summary);
             }
         }
@@ -314,25 +317,19 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         process_message(&state, &client_id, parsed).await;
     }
 
-    let mut inner = state.inner.lock().await;
-    if let Some(client) = inner.clients.get(&client_id).cloned() {
-        if let Some(room_id) = client.room_id {
-            inner.rooms.leave_room(&room_id, &client_id);
-            inner.broadcast_room(
-                &room_id,
-                json!({
-                  "type": "player_left",
-                  "ok": true,
-                  "data": { "playerId": client_id }
-                }),
-                None,
-            );
-            inner.broadcast_room_state(&room_id);
-            inner.broadcast_rooms_list_all();
-        }
+    let maybe_versus_countdown = {
+        let mut inner = state.inner.lock().await;
+        let countdown = leave_room_internal(&mut inner, &client_id, false);
+        inner.clients.remove(&client_id);
+        countdown
+    };
+    if let Some((room_id, winner_team)) = maybe_versus_countdown {
+        tokio::spawn(start_versus_room_deletion_countdown(
+            Arc::clone(&state),
+            room_id,
+            winner_team,
+        ));
     }
-    inner.clients.remove(&client_id);
-    drop(inner);
     info!("[ws_rooms] disconnected client_id={}", client_id);
     write_task.abort();
 }
@@ -439,7 +436,14 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             join_room_internal(&mut inner, client_id, &room_id);
         }
         "leave_room" => {
-            leave_room_internal(&mut inner, client_id, true);
+            let maybe_versus_countdown = leave_room_internal(&mut inner, client_id, true);
+            if let Some((room_id, winner_team)) = maybe_versus_countdown {
+                tokio::spawn(start_versus_room_deletion_countdown(
+                    Arc::clone(state),
+                    room_id,
+                    winner_team,
+                ));
+            }
         }
         "room_set_versus_type" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1222,7 +1226,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
 fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     if let Some(existing_room) = inner.clients.get(client_id).and_then(|c| c.room_id.clone()) {
         if existing_room != room_id {
-            leave_room_internal(inner, client_id, false);
+            let _ = leave_room_internal(inner, client_id, false);
         }
     }
 
@@ -1274,7 +1278,11 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     inner.broadcast_rooms_list_all();
 }
 
-fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool) {
+fn leave_room_internal(
+    inner: &mut Inner,
+    client_id: &str,
+    send_left_room: bool,
+) -> Option<(String, Team)> {
     let Some(room_id) = inner.clients.get(client_id).and_then(|c| c.room_id.clone()) else {
         if send_left_room {
             inner.send_to(
@@ -1282,8 +1290,13 @@ fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool)
                 json!({ "type": "left_room", "ok": true, "data": Value::Null }),
             );
         }
-        return;
+        return None;
     };
+    let leaving_team = inner
+        .rooms
+        .rooms
+        .get(&room_id)
+        .and_then(|room| room.teams.get(client_id).copied());
     inner.rooms.leave_room(&room_id, client_id);
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = None;
@@ -1297,6 +1310,7 @@ fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool)
         }),
         Some(client_id),
     );
+    let maybe_versus_winner_team = infer_versus_winner_after_leave(inner, &room_id, leaving_team);
     inner.broadcast_room_state(&room_id);
     inner.broadcast_rooms_list_all();
     if send_left_room {
@@ -1305,6 +1319,7 @@ fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool)
             json!({ "type": "left_room", "ok": true, "data": Value::Null }),
         );
     }
+    maybe_versus_winner_team.map(|team| (room_id, team))
 }
 
 fn game_state_payload(inner: &Inner, room_id: &str) -> Value {
@@ -1465,6 +1480,183 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
         None,
     );
     inner.broadcast_room_state(&room_id);
+    inner.broadcast_rooms_list_all();
+}
+
+fn should_expose_room_in_list(room: &crate::rooms::Room) -> bool {
+    if room.is_server_managed {
+        return true;
+    }
+    if room.mode == RoomMode::VersusMatch && room.status == RoomStatus::Cooldown {
+        return false;
+    }
+    true
+}
+
+fn infer_versus_winner_after_leave(
+    inner: &Inner,
+    room_id: &str,
+    leaving_team: Option<Team>,
+) -> Option<Team> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    if room.mode != RoomMode::VersusMatch || room.status != RoomStatus::InGame {
+        return None;
+    }
+    if room.players.is_empty() {
+        return None;
+    }
+
+    let mut red_count: usize = 0;
+    let mut blue_count: usize = 0;
+    for player_id in &room.players {
+        match room.teams.get(player_id).copied() {
+            Some(Team::Red) => red_count += 1,
+            Some(Team::Blue) => blue_count += 1,
+            None => {}
+        }
+    }
+
+    let required_players = room.required_players.max(2);
+    if room.players.len() < required_players {
+        if let Some(remaining_team) = room
+            .players
+            .iter()
+            .find_map(|id| room.teams.get(id).copied())
+        {
+            return Some(remaining_team);
+        }
+        if let Some(team) = leaving_team {
+            return Some(team.opposite());
+        }
+        if red_count > blue_count {
+            return Some(Team::Red);
+        }
+        if blue_count > red_count {
+            return Some(Team::Blue);
+        }
+    }
+
+    if red_count == 0 && blue_count > 0 {
+        return Some(Team::Blue);
+    }
+    if blue_count == 0 && red_count > 0 {
+        return Some(Team::Red);
+    }
+    if red_count == 0 && blue_count == 0 {
+        if let Some(team) = leaving_team {
+            return Some(team.opposite());
+        }
+    }
+
+    None
+}
+
+async fn start_versus_room_deletion_countdown(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    winner_team: Team,
+) {
+    {
+        let mut inner = state.inner.lock().await;
+        let Some(room) = inner.rooms.rooms.get(&room_id) else {
+            return;
+        };
+        if room.mode != RoomMode::VersusMatch
+            || room.is_server_managed
+            || room.status != RoomStatus::InGame
+        {
+            return;
+        }
+        if let Some(room_mut) = inner.rooms.rooms.get_mut(&room_id) {
+            room_mut.status = RoomStatus::Cooldown;
+        }
+
+        let winner_client_id = inner.rooms.rooms.get(&room_id).and_then(|r| {
+            r.players
+                .iter()
+                .find(|id| r.teams.get(*id).copied() == Some(winner_team))
+                .cloned()
+        });
+        let winner_payload = if let Some(winner_id) = winner_client_id {
+            if let Some(client) = inner.clients.get(&winner_id) {
+                json!({
+                  "id": client.id,
+                  "name": client.name,
+                  "character": client.character,
+                  "team": winner_team.as_wire()
+                })
+            } else {
+                json!({
+                  "id": winner_id,
+                  "name": format!("Equipo {}", if winner_team == Team::Red { "Rojo" } else { "Azul" }),
+                  "character": Value::Null,
+                  "team": winner_team.as_wire()
+                })
+            }
+        } else {
+            json!({
+              "id": "",
+              "name": format!("Equipo {}", if winner_team == Team::Red { "Rojo" } else { "Azul" }),
+              "character": Value::Null,
+              "team": winner_team.as_wire()
+            })
+        };
+
+        inner.broadcast_room(
+            &room_id,
+            json!({
+              "type":"game_state",
+              "ok": true,
+              "data": game_state_payload(&inner, &room_id)
+            }),
+            None,
+        );
+        inner.broadcast_room(
+            &room_id,
+            json!({
+              "type":"match_winner",
+              "ok": true,
+              "data": {
+                "winner": winner_payload,
+                "winnerTeam": winner_team.as_wire(),
+                "winnerScore": team_kills(&inner, &room_id, winner_team),
+                "killsToWin": kills_to_win_for_room(&inner, &room_id),
+                "countdownSeconds": ROUND_RESET_SECONDS
+              }
+            }),
+            None,
+        );
+        inner.broadcast_room_state(&room_id);
+        inner.broadcast_rooms_list_all();
+    }
+
+    sleep(Duration::from_secs(ROUND_RESET_SECONDS as u64)).await;
+
+    let mut inner = state.inner.lock().await;
+    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+        return;
+    };
+    if room.mode != RoomMode::VersusMatch
+        || room.is_server_managed
+        || room.status != RoomStatus::Cooldown
+    {
+        return;
+    }
+    let player_ids: Vec<String> = room.players.iter().cloned().collect();
+    for player_id in player_ids {
+        if let Some(client) = inner.clients.get_mut(&player_id) {
+            client.room_id = None;
+        }
+        inner.send_to(
+            &player_id,
+            json!({
+              "type":"left_room",
+              "ok": true,
+              "data": Value::Null
+            }),
+        );
+    }
+    inner.rooms.rooms.remove(&room_id);
     inner.broadcast_rooms_list_all();
 }
 
