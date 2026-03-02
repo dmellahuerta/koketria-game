@@ -441,6 +441,7 @@ const detectMobileControlsEnabled = () => {
 };
 
 const syncMobileControlsVisibility = () => {
+  const wasActive = mobileInput.active;
   mobileInput.enabled = detectMobileControlsEnabled();
   const canShow = mobileInput.enabled && canPlay() && !isInVersusWaitingLobby() && !isOptionsOpen;
   mobileInput.active = canShow;
@@ -449,7 +450,7 @@ const syncMobileControlsVisibility = () => {
   }
   mobileControls.classList.toggle('hidden', !canShow);
   app.classList.toggle('mobile-input', canShow);
-  if (!canShow) {
+  if (!canShow && wasActive) {
     resetMobileInput();
   }
 };
