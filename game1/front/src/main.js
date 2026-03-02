@@ -501,9 +501,15 @@ const syncMobileFullscreenPrompt = () => {
     return;
   }
 
+  const isInGameRoom = Boolean(
+    state.joinedRoom
+    && state.joinedRoom.room
+    && state.joinedRoom.room.status === 'in_game'
+    && app.classList.contains('in-room'),
+  );
+
   const shouldShow = mobileInput.enabled
-    && Boolean(state.joinedRoom)
-    && canPlay()
+    && isInGameRoom
     && !isInVersusWaitingLobby()
     && !isFullscreenActive()
     && !mobileFullscreenPromptDismissed;
