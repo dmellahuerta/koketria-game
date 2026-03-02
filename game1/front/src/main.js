@@ -191,9 +191,6 @@ app.innerHTML = `
   </div>
 
   <div id="crosshair" aria-hidden="true"></div>
-  <div id="teamAimIndicator" class="hidden">-</div>
-  <canvas id="teamMiniMap" class="hidden" width="180" height="180"></canvas>
-
   <div id="chatFeed" class="chat-feed">
     <div id="chatLog" class="chat-log"></div>
   </div>
@@ -783,15 +780,7 @@ const normalizePlayerTeam = (team) => {
 };
 
 const shouldShowTeamMarkers = () => {
-  const room = state.joinedRoom?.room;
-  const versusType = String(room?.versusType || '').toLowerCase();
-  const isValidVersusType = versusType === '1v1' || versusType === '2v2';
-  return Boolean(
-    state.joinedRoom
-      && isVersusRoom(room)
-      && isValidVersusType
-      && room.status === 'in_game',
-  );
+  return false;
 };
 
 const getTeamPalette = (team) => {
@@ -6131,45 +6120,16 @@ const createTeamOutline = (team) => {
 };
 
 const ensureLocalTeamOutline = () => {
-  const team = normalizePlayerTeam(localAvatar.team);
-  if (!localAvatar.group || !team) {
-    if (localAvatar.teamOutline) {
-      disposeTeamMarker(localAvatar.teamOutline);
-      localAvatar.teamOutline = null;
-    }
-    return;
-  }
-  if (!localAvatar.teamOutline || localAvatar.teamOutline.userData.team !== team) {
-    if (localAvatar.teamOutline) {
-      disposeTeamMarker(localAvatar.teamOutline);
-    }
-    localAvatar.teamOutline = createTeamOutline(team);
-    localAvatar.group.add(localAvatar.teamOutline);
-  } else if (localAvatar.teamOutline.parent !== localAvatar.group) {
-    localAvatar.group.add(localAvatar.teamOutline);
+  if (localAvatar.teamOutline) {
+    disposeTeamMarker(localAvatar.teamOutline);
+    localAvatar.teamOutline = null;
   }
 };
 
 const ensureRemoteTeamOutline = (entry) => {
-  if (!entry?.group) {
-    return;
-  }
-  const team = normalizePlayerTeam(entry.team);
-  if (!team) {
-    if (entry.teamOutline) {
-      disposeTeamMarker(entry.teamOutline);
-      entry.teamOutline = null;
-    }
-    return;
-  }
-  if (!entry.teamOutline || entry.teamOutline.userData.team !== team) {
-    if (entry.teamOutline) {
-      disposeTeamMarker(entry.teamOutline);
-    }
-    entry.teamOutline = createTeamOutline(team);
-    entry.group.add(entry.teamOutline);
-  } else if (entry.teamOutline.parent !== entry.group) {
-    entry.group.add(entry.teamOutline);
+  if (entry?.teamOutline) {
+    disposeTeamMarker(entry.teamOutline);
+    entry.teamOutline = null;
   }
 };
 
@@ -7831,8 +7791,6 @@ const animate = () => {
   updateEffects(delta);
   updateCrosshair();
   updateDamageIndicator();
-  updateTeamAimIndicator();
-  updateMiniMap();
   renderSpecialStat(false);
   updateRemoteShootSound(delta);
   updateBleedEffect(delta);
