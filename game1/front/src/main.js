@@ -413,6 +413,8 @@ const mobileInput = {
   active: false,
   moveTouchId: null,
   lookTouchId: null,
+  movePointerId: null,
+  lookPointerId: null,
   moveX: 0,
   moveY: 0,
   lookLastX: 0,
@@ -431,6 +433,8 @@ const clearMovementKeys = () => {
 const resetMobileInput = () => {
   mobileInput.moveTouchId = null;
   mobileInput.lookTouchId = null;
+  mobileInput.movePointerId = null;
+  mobileInput.lookPointerId = null;
   mobileInput.moveX = 0;
   mobileInput.moveY = 0;
   isFiring = false;
@@ -6554,9 +6558,10 @@ const bindMobileTouchControls = () => {
   if (!mobileControls || !mobileJoystick || !mobileLookZone) {
     return;
   }
+  const canUseMobileControls = () => mobileInput.active && canPlay();
 
   mobileJoystick.addEventListener('touchstart', (event) => {
-    if (!mobileInput.active || mobileInput.moveTouchId !== null) {
+    if (!canUseMobileControls() || mobileInput.moveTouchId !== null) {
       return;
     }
     const touch = event.changedTouches[0];
@@ -6569,7 +6574,7 @@ const bindMobileTouchControls = () => {
   }, { passive: false });
 
   mobileJoystick.addEventListener('touchmove', (event) => {
-    if (!mobileInput.active || mobileInput.moveTouchId === null) {
+    if (!canUseMobileControls() || mobileInput.moveTouchId === null) {
       return;
     }
     for (let i = 0; i < event.changedTouches.length; i += 1) {
@@ -6604,7 +6609,7 @@ const bindMobileTouchControls = () => {
   mobileJoystick.addEventListener('touchcancel', releaseMoveTouch, { passive: false });
 
   mobileLookZone.addEventListener('touchstart', (event) => {
-    if (!mobileInput.active || mobileInput.lookTouchId !== null) {
+    if (!canUseMobileControls() || mobileInput.lookTouchId !== null) {
       return;
     }
     const touch = event.changedTouches[0];
@@ -6618,7 +6623,7 @@ const bindMobileTouchControls = () => {
   }, { passive: false });
 
   mobileLookZone.addEventListener('touchmove', (event) => {
-    if (!mobileInput.active || mobileInput.lookTouchId === null) {
+    if (!canUseMobileControls() || mobileInput.lookTouchId === null) {
       return;
     }
     for (let i = 0; i < event.changedTouches.length; i += 1) {
@@ -6652,7 +6657,7 @@ const bindMobileTouchControls = () => {
   mobileLookZone.addEventListener('touchcancel', releaseLookTouch, { passive: false });
 
   const holdFireStart = (event) => {
-    if (!mobileInput.active || !canPlay()) {
+    if (!canUseMobileControls()) {
       return;
     }
     cancelLocalFunnyAnimation();
@@ -6668,7 +6673,7 @@ const bindMobileTouchControls = () => {
   mobileFireBtn?.addEventListener('touchcancel', holdFireEnd, { passive: false });
 
   mobileSpecialBtn?.addEventListener('touchstart', (event) => {
-    if (mobileInput.active) {
+    if (canUseMobileControls()) {
       cancelLocalFunnyAnimation();
       triggerCharacterSpecial();
       event.preventDefault();
@@ -6676,12 +6681,97 @@ const bindMobileTouchControls = () => {
   }, { passive: false });
 
   mobileJumpBtn?.addEventListener('touchstart', (event) => {
-    if (mobileInput.active) {
+    if (canUseMobileControls()) {
       triggerMobileJump();
       event.preventDefault();
     }
   }, { passive: false });
 
+  mobileJoystick.addEventListener('pointerdown', (event) => {
+    if (!canUseMobileControls() || mobileInput.movePointerId !== null) {
+      return;
+    }
+    mobileInput.movePointerId = event.pointerId;
+    updateMobileJoystickFromTouch(event);
+    event.preventDefault();
+  });
+
+  mobileJoystick.addEventListener('pointermove', (event) => {
+    if (!canUseMobileControls() || mobileInput.movePointerId !== event.pointerId) {
+      return;
+    }
+    updateMobileJoystickFromTouch(event);
+    event.preventDefault();
+  });
+
+  const releaseMovePointer = (event) => {
+    if (mobileInput.movePointerId !== event.pointerId) {
+      return;
+    }
+    mobileInput.movePointerId = null;
+    mobileInput.moveX = 0;
+    mobileInput.moveY = 0;
+    if (mobileJoystickThumb) {
+      mobileJoystickThumb.style.transform = 'translate(-50%, -50%)';
+    }
+    event.preventDefault();
+  };
+  mobileJoystick.addEventListener('pointerup', releaseMovePointer);
+  mobileJoystick.addEventListener('pointercancel', releaseMovePointer);
+
+  mobileLookZone.addEventListener('pointerdown', (event) => {
+    if (!canUseMobileControls() || mobileInput.lookPointerId !== null) {
+      return;
+    }
+    mobileInput.lookPointerId = event.pointerId;
+    mobileInput.lookLastX = event.clientX;
+    mobileInput.lookLastY = event.clientY;
+    event.preventDefault();
+  });
+
+  mobileLookZone.addEventListener('pointermove', (event) => {
+    if (!canUseMobileControls() || mobileInput.lookPointerId !== event.pointerId) {
+      return;
+    }
+    const dx = event.clientX - mobileInput.lookLastX;
+    const dy = event.clientY - mobileInput.lookLastY;
+    mobileInput.lookLastX = event.clientX;
+    mobileInput.lookLastY = event.clientY;
+    applyMobileLookDelta(dx, dy);
+    event.preventDefault();
+  });
+
+  const releaseLookPointer = (event) => {
+    if (mobileInput.lookPointerId !== event.pointerId) {
+      return;
+    }
+    mobileInput.lookPointerId = null;
+    event.preventDefault();
+  };
+  mobileLookZone.addEventListener('pointerup', releaseLookPointer);
+  mobileLookZone.addEventListener('pointercancel', releaseLookPointer);
+
+  mobileFireBtn?.addEventListener('pointerdown', holdFireStart);
+  mobileFireBtn?.addEventListener('pointerup', holdFireEnd);
+  mobileFireBtn?.addEventListener('pointercancel', holdFireEnd);
+  mobileFireBtn?.addEventListener('pointerleave', holdFireEnd);
+
+  mobileSpecialBtn?.addEventListener('pointerdown', (event) => {
+    if (!canUseMobileControls()) {
+      return;
+    }
+    cancelLocalFunnyAnimation();
+    triggerCharacterSpecial();
+    event.preventDefault();
+  });
+
+  mobileJumpBtn?.addEventListener('pointerdown', (event) => {
+    if (!canUseMobileControls()) {
+      return;
+    }
+    triggerMobileJump();
+    event.preventDefault();
+  });
 };
 
 window.addEventListener('keydown', (event) => {
