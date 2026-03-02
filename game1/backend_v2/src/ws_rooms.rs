@@ -185,6 +185,9 @@ const SPECIAL_HIT_DAMAGE: f64 = 17.0;
 const LUNAR_STRIKE_AOE_RADIUS: f64 = 4.2;
 const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 4.2;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
+const PUMORI_ORBIT_DURATION_MS: i64 = 10_000;
+const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 260;
+const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -1327,12 +1330,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "ok": true,
                   "data": {
                     "playerId": client_id,
-                    "durationMs": 10_000,
+                    "durationMs": PUMORI_ORBIT_DURATION_MS,
                     "ts": now_ms()
                   }
                 }),
                 None,
             );
+            tokio::spawn(run_pumori_orbit_damage(
+                Arc::clone(state),
+                room_id.clone(),
+                client_id.to_string(),
+            ));
         }
         "player_respawn" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1868,6 +1876,81 @@ fn apply_hit_and_emit(
 
     inner.broadcast_room_state(room_id);
     false
+}
+
+async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, caster_id: String) {
+    let ticks = (PUMORI_ORBIT_DURATION_MS / PUMORI_ORBIT_DAMAGE_TICK_MS).max(1);
+    for _ in 0..ticks {
+        sleep(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64)).await;
+
+        let winner = {
+            let mut inner = state.inner.lock().await;
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame || !room.players.contains(&caster_id) {
+                return;
+            }
+            let Some(caster) = inner.clients.get(&caster_id) else {
+                return;
+            };
+            if !caster.combat.alive {
+                return;
+            }
+            let center = caster.state.position.clone();
+            let candidate_ids: Vec<String> = room
+                .players
+                .iter()
+                .filter(|id| id.as_str() != caster_id)
+                .cloned()
+                .collect();
+
+            let mut hit_ids = Vec::new();
+            for victim_id in candidate_ids {
+                if is_friendly_fire_blocked(&inner, &room_id, &caster_id, &victim_id) {
+                    continue;
+                }
+                let Some(victim) = inner.clients.get(&victim_id) else {
+                    continue;
+                };
+                if !victim.combat.alive {
+                    continue;
+                }
+                let dx = victim.state.position.x - center.x;
+                let dz = victim.state.position.z - center.z;
+                if (dx * dx + dz * dz).sqrt() <= PUMORI_ORBIT_DAMAGE_RADIUS {
+                    hit_ids.push(victim_id);
+                }
+            }
+
+            let now = now_ms();
+            let mut winner = false;
+            for victim_id in hit_ids {
+                if apply_hit_and_emit(
+                    &mut inner,
+                    &room_id,
+                    &caster_id,
+                    &victim_id,
+                    false,
+                    SPECIAL_HIT_DAMAGE,
+                    now,
+                ) {
+                    winner = true;
+                    break;
+                }
+            }
+            winner
+        };
+
+        if winner {
+            tokio::spawn(schedule_match_reset(
+                Arc::clone(&state),
+                room_id.clone(),
+                ROUND_RESET_SECONDS as u64,
+            ));
+            return;
+        }
+    }
 }
 
 async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
