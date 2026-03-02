@@ -19,7 +19,7 @@ COPY --from=build /app/target/release/backend_v2 /usr/local/bin/backend_v2
 
 ENV LISTEN_HOST=0.0.0.0
 ENV PORT=3001
-ENV BACKEND_V1_URL=http://backend:3000
+ENV FRONT_PUBLIC_DIR=/front_public
 
 EXPOSE 3001
 

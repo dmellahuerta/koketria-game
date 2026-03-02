@@ -27,18 +27,19 @@ services:
     volumes:
       - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
 
-  backend:
+  backend_v2:
     build:
-      context: ../game1/backend
+      context: ../game1/backend_v2
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    volumes:
+      - ../game1/front/public:/front_public:ro
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - LAG_COMP_MS=${LAG_COMP_MS:-160}
-      - MAX_AIM_DELTA_DEG=${MAX_AIM_DELTA_DEG:-95}
+      - LISTEN_HOST=0.0.0.0
+      - PORT=3001
+      - FRONT_PUBLIC_DIR=/front_public
     expose:
-      - "3000"
+      - "3001"
 
   front:
     build:
@@ -46,7 +47,7 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     depends_on:
-      - backend
+      - backend_v2
     expose:
       - "80"
 

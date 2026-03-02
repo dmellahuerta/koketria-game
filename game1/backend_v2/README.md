@@ -1,17 +1,12 @@
 # backend_v2 (Rust)
 
-Backend `v2` en Rust para `game1`, con compatibilidad inmediata:
-- Proxy HTTP hacia backend actual
-- Proxy WebSocket (`/ws`) hacia backend actual
-
-Esto permite mantener el comportamiento del juego mientras se migra la logica interna por etapas.
+Backend `v2` en Rust para `game1` (standalone).
 
 ## Variables de entorno
 
 - `LISTEN_HOST` (default: `0.0.0.0`)
 - `PORT` (default: `3001`)
-- `BACKEND_V1_URL` (default: `http://127.0.0.1:3000`)
-- `BACKEND_V1_WS_URL` (opcional; si no se define, se deriva desde `BACKEND_V1_URL`)
+- `FRONT_PUBLIC_DIR` (opcional): ruta absoluta de `front/public` para endpoints `/characters` y `/weapons`.
 
 ## Ejecutar local
 
@@ -19,7 +14,7 @@ Esto permite mantener el comportamiento del juego mientras se migra la logica in
 cargo run
 ```
 
-Por defecto queda escuchando en `http://127.0.0.1:3001` y reenviando a `http://127.0.0.1:3000`.
+Por defecto queda escuchando en `http://127.0.0.1:3001`.
 
 ## Contrato congelado (fase 1)
 
@@ -39,9 +34,9 @@ Variables opcionales:
 - `BASE_URL` (default `http://127.0.0.1:3001`)
 - `WS_URL` (default derivada de `BASE_URL`)
 - `GOLDEN_PATH` (default `contract/golden/core_flow.json`)
-- `RUST_WS_ROOMS_ENABLED` (default `false`): si esta activo, `/ws` maneja lobby/salas desde Rust.
+- `/ws` siempre corre sobre salas Rust.
 
-## Progreso fase 2 (salas en Rust)
+## Salas y jugabilidad (Rust)
 
 Se agrego el dominio de salas/versus en:
 
@@ -55,11 +50,7 @@ Incluye reglas de:
 - `switch_team`
 - validacion de `start` para `1v1` / `2v2`
 
-Con tests unitarios en el mismo archivo. En este commit todavia no esta conectado al runtime WS principal (siguiente paso de integracion).
-
-## Integracion WS de salas (fase 2 parcial)
-
-Se agrego `src/ws_rooms.rs` con soporte WS local para:
+Se implementa `src/ws_rooms.rs` con soporte WS para:
 
 - `connected`, `rooms_list`, `room_joined`, `room_state`, `left_room`
 - `create_room`, `join_room`, `leave_room`
@@ -77,13 +68,6 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
   - `player_damage`
   - `player_death`
 - `player_special_*` (lunar/silent/neoorphen/pumori) en Rust:
-  - cooldown basico por personaje
-  - emision de eventos visuales compatibles con frontend
-
-Queda detras de feature flag por env:
-
-```bash
-RUST_WS_ROOMS_ENABLED=true
-```
-
-Si no se habilita, `/ws` sigue funcionando como proxy al backend legacy.
+  - cooldown por personaje
+  - emision visual
+  - daño autoritativo y K/D para specials

@@ -4,7 +4,7 @@ Guía para levantar frontend y backend con un solo comando usando `docker/docker
 
 Estructura actual del proyecto:
 - `game1/front`
-- `game1/backend`
+- `game1/backend_v2`
 
 ## Prerrequisitos
 
@@ -27,9 +27,8 @@ Servicios expuestos:
 - Health backend v2: `http://localhost:3001/_v2/health`
 
 Nota:
-- En dev no existe servicio `backend` separado.
-- `backend_v2` levanta internamente el backend legacy solo como dependencia temporal de compatibilidad.
-- Opcional: `RUST_WS_ROOMS_ENABLED=true` para probar el lobby/salas WS implementado en Rust.
+- En dev no existe servicio `backend` legacy.
+- `backend_v2` corre standalone (HTTP + WS + salas) en Rust.
 - Opcional: `RUST_LOG=debug` para ver logs detallados de conexiones/eventos WS en backend_v2.
 
 ## Detener servicios
@@ -59,32 +58,31 @@ docker compose -f docker/docker-compose.yml logs -f backend_v2
 
 ## Consideraciones del backend
 
-El servicio `backend` está configurado para ejecutar:
-
-```bash
-node index.js
-```
-
-Asegurate de tener `game1/backend/index.js`. Si tu entrypoint es otro (por ejemplo `src/server.js`), cambiá el `command` del servicio `backend` en `docker/docker-compose.yml`.
+`backend_v2` expone:
+- `GET /_v2/health` -> `ok`
+- `GET /health` -> `{ ok: true, data: { status: "up" } }`
+- `GET /version`
+- `GET /characters`
+- `GET /weapons`
+- `WS /ws`
 
 ## Variables del frontend
 
 - `VITE_API_BASE_URL` (ya configurada en compose): base HTTP del backend.
 - `VITE_WS_URL` (opcional): si la defines, el frontend usará esta URL para WebSocket.
 
-## Variables del backend (latencia / impacto)
+## Variables del backend
 
 Podés tunear estos valores sin cambiar código:
 
-- `LAG_COMP_MS` (default `120`): ventana de lag compensation para impactos.
-- `MAX_AIM_DELTA_DEG` (default `95`): tolerancia angular entre aim cliente y aim autoritativo servidor.
 - `MAX_CUSTOM_ROOMS` (default `6`): máximo de salas custom `versusmatch`.
-- `VERSUS_ROOM_MAX` (default `4`): capacidad inicial máxima de una sala `versusmatch` antes de elegir `1v1`/`2v2`.
+- `MAX_PLAYERS_PER_ROOM` (default `5`): capacidad máxima por sala.
+- `FRONT_PUBLIC_DIR` (en compose ya configurada): directorio de assets para `/characters` y `/weapons`.
 
 Ejemplo para EC2 (Chile -> `us-east-2`):
 
 ```bash
-LAG_COMP_MS=160 MAX_AIM_DELTA_DEG=95 docker compose -f docker/docker-compose.yml up --build
+MAX_CUSTOM_ROOMS=6 MAX_PLAYERS_PER_ROOM=5 docker compose -f docker/docker-compose.yml up --build
 ```
 
 ## Flujo multiplayer (salas)
@@ -118,7 +116,7 @@ Clima por partida (asignado al crear sala):
 El stack productivo usa:
 - `web` (sitio estático HTML/CSS)
 - `front` (Nginx con assets estáticos + proxy interno a backend para `/ws` y API)
-- `backend` (Fastify + WebSocket)
+- `backend_v2` (Rust standalone HTTP + WS)
 - `nginx` (routing interno por `Host`)
 - `caddy` (TLS automático Let's Encrypt)
 
@@ -138,7 +136,7 @@ Servicios públicos:
 
 - Web: `https://misterrii.com`
 - Juego: `https://koketria.misterrii.com`
-- Backend interno: `backend:3000` (no expuesto directo)
+- Backend interno: `backend_v2:3001` (no expuesto directo)
 - Web PWA: habilitada solo en producción HTTPS para `misterrii.com` (dev no registra service worker).
   Si no aparece el prompt de instalación, limpia datos del sitio en Chrome móvil y recarga `https://misterrii.com` 1-2 veces.
 
@@ -159,15 +157,15 @@ Variables útiles (opcional):
 - `WEB_DOMAIN` (default `misterrii.com`): dominio de la web.
 - `GAME_DOMAIN` (default `koketria.misterrii.com`): dominio del juego.
 - `ACME_EMAIL` (recomendado): email para Let's Encrypt.
-- `LAG_COMP_MS` (default `160`): lag compensation backend.
-- `MAX_AIM_DELTA_DEG` (default `95`): tolerancia de aim backend.
+- `MAX_CUSTOM_ROOMS` (default `6`): salas custom máximas.
+- `MAX_PLAYERS_PER_ROOM` (default `5`): jugadores máximos por sala.
 
 Ejemplo:
 
 ```bash
 WEB_DOMAIN=misterrii.com GAME_DOMAIN=koketria.misterrii.com \
 ACME_EMAIL=tu-correo@dominio.com \
-LAG_COMP_MS=160 MAX_AIM_DELTA_DEG=95 \
+MAX_CUSTOM_ROOMS=6 MAX_PLAYERS_PER_ROOM=5 \
 docker compose -f docker/docker-compose.prod.yml up -d --build
 ```
 

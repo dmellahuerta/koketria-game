@@ -16,17 +16,15 @@ services:
       - "3001:3001"
     volumes:
       - ../game1/backend_v2:/app
-      - ../game1/backend:/legacy_backend
+      - ../game1/front/public:/front_public:ro
       - backend_v2_cargo_registry:/usr/local/cargo/registry
       - backend_v2_target:/app/target
-      - backend_legacy_node_modules:/legacy_backend/node_modules
     environment:
       - NODE_ENV=development
       - LISTEN_HOST=0.0.0.0
       - PORT=3001
-      - LEGACY_PORT=3000
-      - RUST_WS_ROOMS_ENABLED=${RUST_WS_ROOMS_ENABLED:-true}
       - RUST_LOG=${RUST_LOG:-debug}
+      - FRONT_PUBLIC_DIR=/front_public
 
   front:
     image: node:20-alpine
@@ -47,5 +45,4 @@ services:
 volumes:
   backend_v2_cargo_registry:
   backend_v2_target:
-  backend_legacy_node_modules:
   front_node_modules:
