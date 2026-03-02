@@ -71,7 +71,15 @@ struct ClientSession {
     combat: CombatState,
     kills: i64,
     deaths: i64,
+    latency_ms: f64,
+    state_history: Vec<StateSnapshot>,
     tx: mpsc::UnboundedSender<String>,
+}
+
+#[derive(Clone)]
+struct StateSnapshot {
+    ts: i64,
+    position: Vec3,
 }
 
 #[derive(Clone)]
@@ -168,6 +176,11 @@ const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
 const MAX_ORIGIN_DRIFT: f64 = 2.8;
 const MAX_AIM_ANGLE_DELTA_DEG: f64 = 95.0;
+const LAG_COMP_BULLET_MS: i64 = 120;
+const LAG_COMP_MAGIC_MS: i64 = 150;
+const LAG_COMP_RTT_FACTOR: f64 = 0.35;
+const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
+const STATE_HISTORY_WINDOW_MS: i64 = 1500;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -356,6 +369,11 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 combat: default_combat_state(),
                 kills: 0,
                 deaths: 0,
+                latency_ms: 0.0,
+                state_history: vec![StateSnapshot {
+                    ts: now_ms(),
+                    position: initial_state.position.clone(),
+                }],
                 tx: out_tx.clone(),
             },
         );
@@ -448,6 +466,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             );
         }
         "ping" => {
+            if let Some(rtt_ms) = message.get("rttMs").and_then(Value::as_f64) {
+                if rtt_ms.is_finite() && rtt_ms >= 0.0 {
+                    if let Some(entry) = inner.clients.get_mut(client_id) {
+                        entry.latency_ms = clamp(rtt_ms, 0.0, 450.0);
+                    }
+                }
+            }
             inner.send_to(
                 client_id,
                 json!({
@@ -791,7 +816,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             };
             let mut maybe_resources_payload: Option<Value> = None;
             let mut shot_blocked = false;
-            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>)> = None;
+            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64)> = None;
             {
                 let Some(shooter) = inner.clients.get_mut(client_id) else {
                     return;
@@ -844,7 +869,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         }
                         _ => reported_direction.clone(),
                     };
-                    prepared_shot = Some((origin, direction, shooter.character.clone()));
+                    prepared_shot = Some((
+                        origin,
+                        direction,
+                        shooter.character.clone(),
+                        shooter.latency_ms,
+                    ));
                 }
             }
             if let Some(payload) = maybe_resources_payload {
@@ -853,9 +883,19 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if shot_blocked {
                 return;
             }
-            let Some((origin, direction, character_for_shot)) = prepared_shot else {
+            let Some((origin, direction, character_for_shot, shooter_latency_ms)) = prepared_shot
+            else {
                 return;
             };
+            let is_mana = is_mana_character(character_for_shot.as_deref());
+            let base_rewind = if is_mana {
+                LAG_COMP_MAGIC_MS
+            } else {
+                LAG_COMP_BULLET_MS
+            };
+            let dynamic_extra = ((shooter_latency_ms * LAG_COMP_RTT_FACTOR).round() as i64)
+                .clamp(0, LAG_COMP_EXTRA_MAX_MS);
+            let rewind_ts = now - (base_rewind + dynamic_extra);
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
             let effective_distance = wall_hit_distance
@@ -885,6 +925,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 &origin,
                 &direction,
                 effective_distance,
+                rewind_ts,
             );
             if let Some((victim_id, headshot, _hit_dist)) = hit {
                 inner.send_to(
@@ -1245,6 +1286,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 entry.state.position = spawn;
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
+                entry.state_history.clear();
+                entry.state_history.push(StateSnapshot {
+                    ts: entry.state_ts,
+                    position: entry.state.position.clone(),
+                });
                 (
                     json!({
                       "x": entry.state.position.x,
@@ -1379,6 +1425,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if let Some(entry) = inner.clients.get_mut(client_id) {
                 entry.state = next_state.clone();
                 entry.state_ts = ts;
+                push_state_snapshot(entry, ts);
             }
 
             inner.broadcast_room(
@@ -1455,6 +1502,11 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
         client.state = default_player_state();
         client.state.position = spawn;
         client.state_ts = now_ms();
+        client.state_history.clear();
+        client.state_history.push(StateSnapshot {
+            ts: client.state_ts,
+            position: client.state.position.clone(),
+        });
     }
     if let Some(state) = inner.room_state_json(room_id) {
         inner.send_to(
@@ -1671,6 +1723,11 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
             client.state = default_player_state();
             client.state.position = spawn;
             client.state_ts = now_ms();
+            client.state_history.clear();
+            client.state_history.push(StateSnapshot {
+                ts: client.state_ts,
+                position: client.state.position.clone(),
+            });
         }
     }
 
@@ -1976,6 +2033,50 @@ fn normalize_character(character: Option<&str>) -> String {
         .replace('ñ', "n")
 }
 
+fn push_state_snapshot(client: &mut ClientSession, ts: i64) {
+    client.state_history.push(StateSnapshot {
+        ts,
+        position: client.state.position.clone(),
+    });
+    let cutoff = ts - STATE_HISTORY_WINDOW_MS;
+    while client.state_history.len() > 2 {
+        let first_ts = client.state_history.first().map(|s| s.ts).unwrap_or(ts);
+        if first_ts >= cutoff {
+            break;
+        }
+        client.state_history.remove(0);
+    }
+}
+
+fn client_position_at(client: &ClientSession, target_ts: i64) -> Vec3 {
+    if client.state_history.is_empty() {
+        return client.state.position.clone();
+    }
+    if target_ts <= client.state_history[0].ts {
+        return client.state_history[0].position.clone();
+    }
+    if let Some(last) = client.state_history.last() {
+        if target_ts >= last.ts {
+            return last.position.clone();
+        }
+    }
+    for i in 1..client.state_history.len() {
+        let prev = &client.state_history[i - 1];
+        let next = &client.state_history[i];
+        if target_ts < prev.ts || target_ts > next.ts {
+            continue;
+        }
+        let span = (next.ts - prev.ts).max(1) as f64;
+        let t = ((target_ts - prev.ts) as f64 / span).clamp(0.0, 1.0);
+        return Vec3 {
+            x: prev.position.x + (next.position.x - prev.position.x) * t,
+            y: prev.position.y + (next.position.y - prev.position.y) * t,
+            z: prev.position.z + (next.position.z - prev.position.z) * t,
+        };
+    }
+    client.state.position.clone()
+}
+
 fn is_mana_character(character: Option<&str>) -> bool {
     matches!(
         normalize_character(character).as_str(),
@@ -2115,6 +2216,7 @@ fn find_best_hit(
     origin: &Vec3,
     direction_norm: &Vec3,
     max_distance: f64,
+    rewind_ts: i64,
 ) -> Option<(String, bool, f64)> {
     let room = inner.rooms.rooms.get(room_id)?;
     let mut best: Option<(String, bool, f64)> = None;
@@ -2132,15 +2234,16 @@ fn find_best_hit(
             continue;
         }
 
+        let rewound = client_position_at(candidate, rewind_ts);
         let head_center = Vec3 {
-            x: candidate.state.position.x,
-            y: candidate.state.position.y + HEAD_CENTER_OFFSET_Y,
-            z: candidate.state.position.z,
+            x: rewound.x,
+            y: rewound.y + HEAD_CENTER_OFFSET_Y,
+            z: rewound.z,
         };
         let body_center = Vec3 {
-            x: candidate.state.position.x,
-            y: candidate.state.position.y + BODY_CENTER_OFFSET_Y,
-            z: candidate.state.position.z,
+            x: rewound.x,
+            y: rewound.y + BODY_CENTER_OFFSET_Y,
+            z: rewound.z,
         };
 
         let mut candidate_hit: Option<(bool, f64)> = None;
