@@ -871,6 +871,16 @@ const updateTeamScoreHud = () => {
   teamScoreHud.classList.remove('hidden');
 };
 
+const forceHideTeamModeUiIfNeeded = (room) => {
+  if (!room) {
+    return;
+  }
+  const roomMode = String(room.mode || 'freeforall').toLowerCase();
+  if (roomMode !== 'versusmatch' && teamScoreHud) {
+    teamScoreHud.classList.add('hidden');
+  }
+};
+
 const isInVersusWaitingLobby = () => {
   return Boolean(state.joinedRoom && isVersusRoom(state.joinedRoom.room) && state.joinedRoom.room.status === 'waiting');
 };
@@ -5209,6 +5219,7 @@ const applyRoomState = (roomState, options = {}) => {
 
   const keepMatchSceneVisible = roomState.room.status === 'in_game' || roomState.room.status === 'cooldown';
   setInRoom(keepMatchSceneVisible);
+  forceHideTeamModeUiIfNeeded(roomState.room);
   syncLobbyScreens();
   if (roomState.room.status !== 'cooldown') {
     hideWinnerOverlay();
@@ -5737,6 +5748,7 @@ const connectWebSocket = () => {
         }
         const keepMatchSceneVisible = payload.data.status === 'in_game' || payload.data.status === 'cooldown';
         setInRoom(keepMatchSceneVisible);
+        forceHideTeamModeUiIfNeeded(state.joinedRoom.room);
         syncLobbyScreens();
         updateVersusLobbyUi();
         updateHud();
