@@ -83,44 +83,6 @@ body {
   color: var(--accent);
 }
 
-.install-box {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(46, 255, 111, 0.5);
-  border-radius: 8px;
-  background: rgba(2, 24, 8, 0.72);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-
-.install-box button {
-  border: 1px solid rgba(46, 255, 111, 0.65);
-  color: var(--accent);
-  background: rgba(5, 20, 9, 0.85);
-  border-radius: 8px;
-  padding: 7px 12px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.install-box button:hover {
-  color: #041108;
-  background: var(--accent);
-  box-shadow: 0 0 12px rgba(46, 255, 111, 0.42);
-}
-
-.install-box button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
 .games {
   margin: 0;
   padding: 0;

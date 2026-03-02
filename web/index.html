@@ -24,10 +24,6 @@
 
       <section class="panel">
         <h2>Listado</h2>
-        <div id="installBox" class="install-box hidden-link">
-          <span>Instala la app para abrir misterrii network como aplicación.</span>
-          <button id="installBtn" type="button">Instalar app</button>
-        </div>
         <ul class="games">
           <li class="game-item">
             <div class="game-meta">
@@ -47,11 +43,6 @@
         var host = window.location.hostname;
         var isDev = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
         var showEnv = isDev ? 'dev' : 'prod';
-        var deferredPrompt = null;
-        var installPromptTriggered = false;
-        var installBox = document.getElementById('installBox');
-        var installBtn = document.getElementById('installBtn');
-        var installHint = installBox ? installBox.querySelector('span') : null;
         document.querySelectorAll('[data-env]').forEach(function (el) {
           if (el.getAttribute('data-env') !== showEnv) {
             el.classList.add('hidden-link');
@@ -60,81 +51,11 @@
 
         var isProdHost = /(^|\.)misterrii\.com$/i.test(host);
         var isHttps = window.location.protocol === 'https:';
-        var ua = String(navigator.userAgent || '');
-        var isMobileChrome = /android/i.test(navigator.userAgent || '')
-          && /chrome\//i.test(navigator.userAgent || '')
-          && !/edga|opr|samsungbrowser|ucbrowser|yabrowser|duckduckgo|firefox|fxios/i.test(navigator.userAgent || '');
-        var isIos = /iphone|ipad|ipod/i.test(ua);
-        var isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
         if ('serviceWorker' in navigator && isProdHost && isHttps) {
           window.addEventListener('load', function () {
-            navigator.serviceWorker.register('/sw.js').then(function () {
-              if (!navigator.serviceWorker.controller && isMobile && !sessionStorage.getItem('misterrii_pwa_sw_reload')) {
-                sessionStorage.setItem('misterrii_pwa_sw_reload', '1');
-                window.location.reload();
-              }
-            }).catch(function () {});
+            navigator.serviceWorker.register('/sw.js').catch(function () {});
           });
         }
-
-        async function promptInstallOnce() {
-          if (!deferredPrompt || installPromptTriggered) {
-            return;
-          }
-          installPromptTriggered = true;
-          deferredPrompt.prompt();
-          try {
-            await deferredPrompt.userChoice;
-          } catch (_err) {}
-          deferredPrompt = null;
-          if (installBox) {
-            installBox.classList.add('hidden-link');
-          }
-          installPromptTriggered = false;
-        }
-
-        window.addEventListener('beforeinstallprompt', function (event) {
-          if (!(isProdHost && isHttps) || !installBox || !installBtn) {
-            return;
-          }
-          event.preventDefault();
-          deferredPrompt = event;
-          installBox.classList.remove('hidden-link');
-          if (installHint) {
-            installHint.textContent = 'Listo para instalar. Toca "Instalar app".';
-          }
-        });
-
-        if (installBtn) {
-          installBtn.addEventListener('click', function () {
-            if (deferredPrompt) {
-              promptInstallOnce();
-              return;
-            }
-            if (installHint) {
-              if (isIos) {
-                installHint.textContent = 'iOS: Safari > Compartir > Añadir a pantalla de inicio.';
-              } else {
-                installHint.textContent = 'Si no aparece prompt: Chrome > menu ⋮ > Instalar app.';
-              }
-            }
-          });
-        }
-
-        if (installBox && isProdHost && isHttps && isMobile) {
-          installBox.classList.remove('hidden-link');
-          if (installHint && !deferredPrompt) {
-            installHint.textContent = 'Preparando instalación... si no aparece, recarga una vez y toca "Instalar app".';
-          }
-        }
-
-        window.addEventListener('appinstalled', function () {
-          deferredPrompt = null;
-          installPromptTriggered = true;
-          if (installBox) {
-            installBox.classList.add('hidden-link');
-          }
-        });
       })();
     </script>
   </body>

@@ -1342,12 +1342,15 @@ button:disabled {
 
 .options-card {
   width: min(92vw, 420px);
+  max-height: min(86vh, 760px);
   border: 1px solid rgba(120, 255, 120, 0.62);
   border-radius: 12px;
   background: rgba(0, 20, 0, 0.95);
   color: #b8ffbf;
   padding: 14px 14px 12px;
   box-shadow: 0 0 28px rgba(76, 222, 76, 0.28);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .options-card h2 {
@@ -1387,6 +1390,48 @@ button:disabled {
   margin: 8px 0 0;
   opacity: 0.86;
   font-size: 0.75rem;
+}
+
+@media (max-width: 720px), (max-height: 720px) {
+  #optionsScreen {
+    align-items: flex-start;
+    padding: max(10px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .options-card {
+    width: min(96vw, 520px);
+    max-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px);
+    border-radius: 10px;
+    padding: 10px 10px 9px;
+  }
+
+  .options-card h2 {
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+  }
+
+  .options-card label {
+    margin: 6px 0;
+    font-size: 0.78rem;
+  }
+
+  .options-card input[type="range"] {
+    margin: 4px 0 2px;
+  }
+
+  .options-actions {
+    margin-top: 8px;
+    gap: 6px;
+  }
+
+  .options-actions button {
+    min-height: 38px;
+  }
+
+  .options-hint {
+    margin-top: 6px;
+    font-size: 0.7rem;
+  }
 }
 
 .mobile-controls {
