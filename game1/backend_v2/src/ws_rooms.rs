@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
@@ -60,6 +64,10 @@ struct CombatState {
     last_health_regen_at: i64,
     last_mana_regen_at: i64,
     alive: bool,
+    lunar_cd_until_ms: i64,
+    silent_cd_until_ms: i64,
+    neoorphen_cd_until_ms: i64,
+    pumori_cd_until_ms: i64,
 }
 
 impl WsRoomsState {
@@ -90,6 +98,10 @@ const HEADSHOT_RADIUS: f64 = 0.5;
 const BODYSHOT_RADIUS: f64 = 0.92;
 const HEAD_CENTER_OFFSET_Y: f64 = 0.18;
 const BODY_CENTER_OFFSET_Y: f64 = -0.45;
+const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
+const SILENT_SPECIAL_COOLDOWN_MS: i64 = 15_000;
+const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
+const PUMORI_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 
 impl Inner {
     fn send_to(&self, client_id: &str, payload: Value) {
@@ -680,9 +692,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 );
 
                 let mut died = false;
-                let mut health = 0.0;
-                let mut shield = 0.0;
-                {
+                let (health, shield) = {
                     let Some(victim) = inner.clients.get_mut(&victim_id) else {
                         return;
                     };
@@ -702,9 +712,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         victim.combat.alive = false;
                         died = true;
                     }
-                    health = victim.combat.health;
-                    shield = victim.combat.shield;
-                }
+                    (victim.combat.health, victim.combat.shield)
+                };
 
                 inner.send_to(
                     &victim_id,
@@ -739,6 +748,229 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     inner.broadcast_room_state(&room_id);
                 }
             }
+        }
+        "player_special_lunar_rain" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+
+            let (origin, allow_cast, payload) = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                let now = now_ms();
+                let can_cast = now >= entry.combat.lunar_cd_until_ms;
+                if can_cast {
+                    entry.combat.lunar_cd_until_ms = now + LUNAR_SPECIAL_COOLDOWN_MS;
+                }
+                (
+                    entry.state.position.clone(),
+                    can_cast,
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                )
+            };
+            inner.send_to(client_id, payload);
+            if !allow_cast {
+                return;
+            }
+            let mut strikes = Vec::new();
+            for i in 0..8 {
+                let t = (i as f64) / 8.0;
+                let angle = t * std::f64::consts::TAU;
+                let radius = 4.0 + (i as f64 % 4.0) * 2.0;
+                let impact = Vec3 {
+                    x: origin.x + angle.cos() * radius,
+                    y: 0.2,
+                    z: origin.z + angle.sin() * radius,
+                };
+                let start = Vec3 {
+                    x: impact.x,
+                    y: 34.0 + (i as f64 % 3.0) * 4.0,
+                    z: impact.z,
+                };
+                strikes.push(json!({
+                  "start": { "x": start.x, "y": start.y, "z": start.z },
+                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
+                }));
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_lunar_rain_wave",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "strikes": strikes,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+        }
+        "player_special_silent_cone" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+
+            let (origin, allow_cast, payload) = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                let now = now_ms();
+                let can_cast = now >= entry.combat.silent_cd_until_ms;
+                if can_cast {
+                    entry.combat.silent_cd_until_ms = now + SILENT_SPECIAL_COOLDOWN_MS;
+                }
+                (
+                    entry.state.position.clone(),
+                    can_cast,
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                )
+            };
+            inner.send_to(client_id, payload);
+            if !allow_cast {
+                return;
+            }
+            let mut rays = Vec::new();
+            for i in 0..50 {
+                let t = (i as f64) / 50.0;
+                let angle = t * std::f64::consts::TAU;
+                rays.push(json!({
+                  "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
+                  "distance": 90.0
+                }));
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_silent_cone",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "character": client.character,
+                    "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+                    "rays": rays,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+        }
+        "player_special_neoorphen_meteor" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+
+            let (origin, allow_cast, payload) = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                let now = now_ms();
+                let can_cast = now >= entry.combat.neoorphen_cd_until_ms;
+                if can_cast {
+                    entry.combat.neoorphen_cd_until_ms = now + NEOORPHEN_SPECIAL_COOLDOWN_MS;
+                }
+                (
+                    entry.state.position.clone(),
+                    can_cast,
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                )
+            };
+            inner.send_to(client_id, payload);
+            if !allow_cast {
+                return;
+            }
+            let mut strikes = Vec::new();
+            for i in 0..12 {
+                let t = (i as f64) / 12.0;
+                let angle = t * std::f64::consts::TAU;
+                let radius = 5.0 + (i as f64 % 5.0) * 1.8;
+                let impact = Vec3 {
+                    x: origin.x + angle.cos() * radius,
+                    y: 0.2,
+                    z: origin.z + angle.sin() * radius,
+                };
+                let start = Vec3 {
+                    x: impact.x,
+                    y: 60.0 + (i as f64 % 4.0) * 6.0,
+                    z: impact.z,
+                };
+                strikes.push(json!({
+                  "start": { "x": start.x, "y": start.y, "z": start.z },
+                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
+                }));
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_neoorphen_meteor_wave",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "strikes": strikes,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+        }
+        "player_special_pumori_orbit" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+
+            let (allow_cast, payload) = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                let now = now_ms();
+                let can_cast = now >= entry.combat.pumori_cd_until_ms;
+                if can_cast {
+                    entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
+                }
+                (can_cast, player_resources_payload(&entry.combat, entry.character.as_deref(), now))
+            };
+            inner.send_to(client_id, payload);
+            if !allow_cast {
+                return;
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_pumori_orbit_start",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "durationMs": 10_000,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
         }
         "player_respawn" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -797,7 +1029,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 if recoverable > 0.0001 {
                     entry.combat.pending_health_regen += HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
                 }
-                player_resources_payload(&entry.combat)
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
             };
             inner.send_to(client_id, payload);
         }
@@ -807,7 +1039,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     return;
                 };
                 update_combat_regen(&mut entry.combat, now_ms());
-                player_resources_payload(&entry.combat)
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
             };
             inner.send_to(client_id, payload);
         }
@@ -999,6 +1231,10 @@ fn default_combat_state() -> CombatState {
         last_health_regen_at: now,
         last_mana_regen_at: now,
         alive: true,
+        lunar_cd_until_ms: 0,
+        silent_cd_until_ms: 0,
+        neoorphen_cd_until_ms: 0,
+        pumori_cd_until_ms: 0,
     }
 }
 
@@ -1032,7 +1268,7 @@ fn update_combat_regen(combat: &mut CombatState, now_ms_v: i64) {
     combat.shield = combat.shield.clamp(0.0, MAX_SHIELD);
 }
 
-fn player_resources_payload(combat: &CombatState) -> Value {
+fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_ms_v: i64) -> Value {
     json!({
       "type": "player_resources",
       "ok": true,
@@ -1041,9 +1277,29 @@ fn player_resources_payload(combat: &CombatState) -> Value {
         "shield": combat.shield.round() as i64,
         "mana": combat.mana.round() as i64,
         "pendingHealthRegen": combat.pending_health_regen,
-        "lunarRainCooldownMs": 0
+        "lunarRainCooldownMs": current_special_cooldown_remaining_ms(combat, character, now_ms_v)
       }
     })
+}
+
+fn current_special_cooldown_remaining_ms(combat: &CombatState, character: Option<&str>, now_ms_v: i64) -> i64 {
+    let key = normalize_character(character);
+    let until = match key.as_str() {
+        "silentman" => combat.silent_cd_until_ms,
+        "pumori" => combat.pumori_cd_until_ms,
+        "neoorphen" => combat.neoorphen_cd_until_ms,
+        "pezunalunar" => combat.lunar_cd_until_ms,
+        _ => combat.lunar_cd_until_ms,
+    };
+    (until - now_ms_v).max(0)
+}
+
+fn normalize_character(character: Option<&str>) -> String {
+    character
+        .unwrap_or("")
+        .trim()
+        .to_lowercase()
+        .replace('ñ', "n")
 }
 
 fn player_state_json(state: &PlayerState) -> Value {

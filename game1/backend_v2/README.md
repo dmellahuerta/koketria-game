@@ -76,6 +76,9 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
   - `hit_confirm`
   - `player_damage`
   - `player_death`
+- `player_special_*` (lunar/silent/neoorphen/pumori) en Rust:
+  - cooldown basico por personaje
+  - emision de eventos visuales compatibles con frontend
 
 Queda detras de feature flag por env:
 
