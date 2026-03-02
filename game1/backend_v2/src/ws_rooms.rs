@@ -26,6 +26,7 @@ struct ClientSession {
     room_id: Option<String>,
     state: PlayerState,
     state_ts: i64,
+    combat: CombatState,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -50,6 +51,17 @@ struct Rotation {
     pitch: f64,
 }
 
+#[derive(Clone)]
+struct CombatState {
+    health: f64,
+    shield: f64,
+    mana: f64,
+    pending_health_regen: f64,
+    last_health_regen_at: i64,
+    last_mana_regen_at: i64,
+    alive: bool,
+}
+
 impl WsRoomsState {
     pub fn new(max_custom_rooms: usize, max_players_per_room: usize) -> Arc<Self> {
         let mut rooms = RoomManager::new(max_custom_rooms, max_players_per_room);
@@ -63,6 +75,14 @@ impl WsRoomsState {
         })
     }
 }
+
+const MAX_HEALTH: f64 = 100.0;
+const MAX_SHIELD: f64 = 100.0;
+const START_SHIELD: f64 = 0.0;
+const MAX_MANA: f64 = 100.0;
+const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
+const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
+const MANA_REGEN_PER_SECOND: f64 = 12.0;
 
 impl Inner {
     fn send_to(&self, client_id: &str, payload: Value) {
@@ -117,12 +137,12 @@ impl Inner {
           "ready": ready,
           "kills": 0,
           "deaths": 0,
-          "health": 100,
-          "shield": 0,
-          "mana": 100,
-          "alive": true,
+          "health": client.combat.health.round() as i64,
+          "shield": client.combat.shield.round() as i64,
+          "mana": client.combat.mana.round() as i64,
+          "alive": client.combat.alive,
           "lunarRainCooldownMs": 0,
-          "pendingHealthRegen": 0,
+          "pendingHealthRegen": client.combat.pending_health_regen,
           "state": player_state_json(&client.state),
           "ts": client.state_ts
         }))
@@ -200,6 +220,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 room_id: None,
                 state: initial_state.clone(),
                 state_ts: now_ms(),
+                combat: default_combat_state(),
                 tx: out_tx.clone(),
             },
         );
@@ -635,16 +656,24 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let Some(entry) = inner.clients.get_mut(client_id) else {
-                return;
+            let (position, health, shield, mana) = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                entry.state = default_player_state();
+                entry.state_ts = now_ms();
+                entry.combat = default_combat_state();
+                (
+                    json!({
+                      "x": entry.state.position.x,
+                      "y": entry.state.position.y,
+                      "z": entry.state.position.z
+                    }),
+                    entry.combat.health.round() as i64,
+                    entry.combat.shield.round() as i64,
+                    entry.combat.mana.round() as i64,
+                )
             };
-            entry.state = default_player_state();
-            entry.state_ts = now_ms();
-            let position = json!({
-              "x": entry.state.position.x,
-              "y": entry.state.position.y,
-              "z": entry.state.position.z
-            });
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -653,15 +682,46 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "data": {
                     "playerId": client_id,
                     "position": position,
-                    "health": 100,
-                    "shield": 0,
-                    "mana": 100,
+                    "health": health,
+                    "shield": shield,
+                    "mana": mana,
                     "ts": now_ms()
                   }
                 }),
                 None,
             );
             inner.broadcast_room_state(&room_id);
+        }
+        "player_pickup_health" => {
+            let Some(_room_id) = client.room_id.clone() else {
+                return;
+            };
+            let payload = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                update_combat_regen(&mut entry.combat, now_ms());
+                if !entry.combat.alive {
+                    return;
+                }
+                let recoverable =
+                    (MAX_HEALTH - (entry.combat.health + entry.combat.pending_health_regen)).max(0.0);
+                if recoverable > 0.0001 {
+                    entry.combat.pending_health_regen += HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
+                }
+                player_resources_payload(&entry.combat)
+            };
+            inner.send_to(client_id, payload);
+        }
+        "player_resources" => {
+            let payload = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                update_combat_regen(&mut entry.combat, now_ms());
+                player_resources_payload(&entry.combat)
+            };
+            inner.send_to(client_id, payload);
         }
         "player_move" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -839,6 +899,63 @@ fn default_player_state() -> PlayerState {
         jumping: false,
         moving: false,
     }
+}
+
+fn default_combat_state() -> CombatState {
+    let now = now_ms();
+    CombatState {
+        health: MAX_HEALTH,
+        shield: START_SHIELD,
+        mana: MAX_MANA,
+        pending_health_regen: 0.0,
+        last_health_regen_at: now,
+        last_mana_regen_at: now,
+        alive: true,
+    }
+}
+
+fn update_combat_regen(combat: &mut CombatState, now_ms_v: i64) {
+    if !combat.alive {
+        return;
+    }
+    let dt_health = ((now_ms_v - combat.last_health_regen_at).max(0) as f64) / 1000.0;
+    let dt_mana = ((now_ms_v - combat.last_mana_regen_at).max(0) as f64) / 1000.0;
+    combat.last_health_regen_at = now_ms_v;
+    combat.last_mana_regen_at = now_ms_v;
+
+    if combat.pending_health_regen > 0.0001 && dt_health > 0.0 {
+        let missing = (MAX_HEALTH - combat.health).max(0.0);
+        if missing > 0.0001 {
+            let recover = (HEALTH_REGEN_PER_SECOND * dt_health)
+                .min(combat.pending_health_regen)
+                .min(missing);
+            combat.health += recover;
+            combat.pending_health_regen = (combat.pending_health_regen - recover).max(0.0);
+        } else {
+            combat.pending_health_regen = 0.0;
+        }
+    }
+
+    if dt_mana > 0.0 {
+        combat.mana = (combat.mana + MANA_REGEN_PER_SECOND * dt_mana).min(MAX_MANA);
+    }
+
+    combat.health = combat.health.clamp(0.0, MAX_HEALTH);
+    combat.shield = combat.shield.clamp(0.0, MAX_SHIELD);
+}
+
+fn player_resources_payload(combat: &CombatState) -> Value {
+    json!({
+      "type": "player_resources",
+      "ok": true,
+      "data": {
+        "health": combat.health,
+        "shield": combat.shield.round() as i64,
+        "mana": combat.mana.round() as i64,
+        "pendingHealthRegen": combat.pending_health_regen,
+        "lunarRainCooldownMs": 0
+      }
+    })
 }
 
 fn player_state_json(state: &PlayerState) -> Value {

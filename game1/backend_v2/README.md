@@ -71,6 +71,7 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
 - `player_shoot` (relay validado en Rust)
 - `player_funny`
 - `player_respawn` -> `player_respawned` basico
+- `player_pickup_health` + `player_resources` (vida/mana/regeneracion basica en Rust)
 
 Queda detras de feature flag por env:
 
