@@ -187,9 +187,19 @@ app.innerHTML = `
       </div>
     </div>
     <div class="mobile-right">
-      <button id="mobileJumpBtn" type="button" class="mobile-btn">Saltar</button>
-      <button id="mobileSpecialBtn" type="button" class="mobile-btn">Especial</button>
+      <button id="mobileJumpBtn" type="button" class="mobile-btn jump">Saltar</button>
+      <button id="mobileSpecialBtn" type="button" class="mobile-btn special">Especial</button>
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
+    </div>
+  </div>
+  <div id="mobileFullscreenPrompt" class="mobile-fullscreen-prompt hidden">
+    <div class="mobile-fullscreen-card">
+      <h3>Modo Pantalla Completa</h3>
+      <p>Para jugar mejor en celular, activa pantalla completa en horizontal.</p>
+      <div class="mobile-fullscreen-actions">
+        <button id="mobileFsAcceptBtn" type="button">Pantalla completa</button>
+        <button id="mobileFsSkipBtn" type="button" class="secondary">Ahora no</button>
+      </div>
     </div>
   </div>
 
@@ -340,6 +350,9 @@ const mobileJoystickThumb = document.querySelector('#mobileJoystickThumb');
 const mobileFireBtn = document.querySelector('#mobileFireBtn');
 const mobileSpecialBtn = document.querySelector('#mobileSpecialBtn');
 const mobileJumpBtn = document.querySelector('#mobileJumpBtn');
+const mobileFullscreenPrompt = document.querySelector('#mobileFullscreenPrompt');
+const mobileFsAcceptBtn = document.querySelector('#mobileFsAcceptBtn');
+const mobileFsSkipBtn = document.querySelector('#mobileFsSkipBtn');
 const teamAimIndicator = document.querySelector('#teamAimIndicator');
 const teamMiniMap = document.querySelector('#teamMiniMap');
 const optionsScreen = document.querySelector('#optionsScreen');
@@ -405,6 +418,7 @@ const mobileInput = {
   lookLastX: 0,
   lookLastY: 0,
 };
+let mobileFullscreenPromptDismissed = false;
 
 const clearMovementKeys = () => {
   keys.KeyW = false;
@@ -440,6 +454,63 @@ const detectMobileControlsEnabled = () => {
   return !hasFineHoverPointer && (coarsePointer || hasTouchApi || mobileUserAgent);
 };
 
+const isFullscreenActive = () => {
+  return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+};
+
+const hideMobileFullscreenPrompt = () => {
+  if (mobileFullscreenPrompt) {
+    mobileFullscreenPrompt.classList.add('hidden');
+  }
+};
+
+const lockLandscapeIfPossible = async () => {
+  try {
+    if (screen.orientation?.lock) {
+      await screen.orientation.lock('landscape');
+    }
+  } catch {
+    // orientation lock depends on browser permissions/fullscreen support
+  }
+};
+
+const requestMobileFullscreen = async () => {
+  const target = renderer?.domElement || app;
+  if (!target || isFullscreenActive()) {
+    await lockLandscapeIfPossible();
+    return true;
+  }
+
+  try {
+    if (target.requestFullscreen) {
+      await target.requestFullscreen({ navigationUI: 'hide' });
+    } else if (target.webkitRequestFullscreen) {
+      target.webkitRequestFullscreen();
+    } else {
+      return false;
+    }
+    await lockLandscapeIfPossible();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const syncMobileFullscreenPrompt = () => {
+  if (!mobileFullscreenPrompt) {
+    return;
+  }
+
+  const shouldShow = mobileInput.enabled
+    && Boolean(state.joinedRoom)
+    && canPlay()
+    && !isInVersusWaitingLobby()
+    && !isFullscreenActive()
+    && !mobileFullscreenPromptDismissed;
+
+  mobileFullscreenPrompt.classList.toggle('hidden', !shouldShow);
+};
+
 const syncMobileControlsVisibility = () => {
   const wasActive = mobileInput.active;
   mobileInput.enabled = detectMobileControlsEnabled();
@@ -453,6 +524,7 @@ const syncMobileControlsVisibility = () => {
   if (!canShow && wasActive) {
     resetMobileInput();
   }
+  syncMobileFullscreenPrompt();
 };
 
 const renderChat = () => {
@@ -614,6 +686,8 @@ const setInRoom = (value) => {
     closeChatInput();
     chatFeed.classList.remove('open');
     resetMobileInput();
+    mobileFullscreenPromptDismissed = false;
+    hideMobileFullscreenPrompt();
   }
   syncMobileControlsVisibility();
 };
@@ -6006,6 +6080,17 @@ optLeaveLobbyBtn.addEventListener('click', () => {
   sendWs({ type: 'leave_room' });
 });
 
+mobileFsAcceptBtn?.addEventListener('click', async () => {
+  mobileFullscreenPromptDismissed = true;
+  hideMobileFullscreenPrompt();
+  await requestMobileFullscreen();
+});
+
+mobileFsSkipBtn?.addEventListener('click', () => {
+  mobileFullscreenPromptDismissed = true;
+  hideMobileFullscreenPrompt();
+});
+
 optMouseSensitivity.addEventListener('input', () => {
   settings.mouseSensitivity = clampSetting(optMouseSensitivity.value, 0.4, 2.5, settings.mouseSensitivity);
   optMouseSensitivityValue.textContent = settings.mouseSensitivity.toFixed(2);
@@ -8146,6 +8231,7 @@ window.addEventListener('resize', () => {
   syncMobileControlsVisibility();
 });
 window.addEventListener('orientationchange', syncMobileControlsVisibility);
+document.addEventListener('fullscreenchange', syncMobileFullscreenPrompt);
 
 loadSettings();
 syncOptionsUi();

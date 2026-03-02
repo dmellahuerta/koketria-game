@@ -1297,9 +1297,8 @@ button:disabled {
 
 .mobile-right {
   right: max(14px, env(safe-area-inset-right));
-  display: grid;
-  grid-template-columns: repeat(2, minmax(64px, 88px));
-  gap: 8px;
+  width: 190px;
+  height: 190px;
 }
 
 .mobile-joystick {
@@ -1332,9 +1331,10 @@ button:disabled {
 
 .mobile-btn {
   pointer-events: auto;
-  width: 100%;
-  height: 58px;
-  border-radius: 12px;
+  position: absolute;
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
   border: 1px solid rgba(123, 255, 123, 0.45);
   background: rgba(0, 23, 0, 0.82);
   color: #d5ffd5;
@@ -1343,11 +1343,74 @@ button:disabled {
 }
 
 .mobile-btn.fire {
-  grid-column: span 2;
-  height: 64px;
+  width: 88px;
+  height: 88px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   border-color: rgba(255, 153, 153, 0.5);
   background: rgba(62, 12, 12, 0.84);
   color: #ffd7d7;
+}
+
+.mobile-btn.jump {
+  left: 12px;
+  bottom: 24px;
+}
+
+.mobile-btn.special {
+  right: 12px;
+  top: 24px;
+}
+
+.mobile-fullscreen-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 8, 0, 0.72);
+  padding: 16px;
+}
+
+.mobile-fullscreen-card {
+  width: min(92vw, 360px);
+  border: 1px solid rgba(112, 255, 112, 0.45);
+  border-radius: 14px;
+  background: rgba(0, 20, 0, 0.92);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.38);
+  padding: 14px;
+}
+
+.mobile-fullscreen-card h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.mobile-fullscreen-card p {
+  margin: 0;
+  opacity: 0.9;
+  font-size: 0.86rem;
+}
+
+.mobile-fullscreen-actions {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-fullscreen-actions button {
+  border-radius: 10px;
+  border: 1px solid rgba(112, 255, 112, 0.5);
+  background: rgba(12, 56, 12, 0.86);
+  color: #deffde;
+  height: 38px;
+}
+
+.mobile-fullscreen-actions button.secondary {
+  border-color: rgba(140, 180, 140, 0.34);
+  background: rgba(10, 25, 10, 0.82);
 }
 
 @media (hover: hover) and (pointer: fine) {
