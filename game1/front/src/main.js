@@ -548,6 +548,7 @@ const syncMobileControlsVisibility = () => {
   mobileInput.enabled = detectMobileControlsEnabled();
   const canShow = mobileInput.enabled
     && Boolean(state.joinedRoom)
+    && app.classList.contains('in-room')
     && !isInVersusWaitingLobby()
     && !isOptionsOpen;
   mobileInput.active = canShow;
@@ -6608,6 +6609,7 @@ const bindMobileTouchControls = () => {
     return;
   }
   const canUseMobileControls = () => mobileInput.active && canPlay();
+  let optionsTapLockUntil = 0;
 
   mobileJoystick.addEventListener('touchstart', (event) => {
     if (!canUseMobileControls() || mobileInput.moveTouchId !== null) {
@@ -6744,10 +6746,14 @@ const bindMobileTouchControls = () => {
     if (!mobileInput.enabled || !state.joinedRoom || isInVersusWaitingLobby()) {
       return;
     }
+    const now = performance.now();
+    if (now < optionsTapLockUntil) {
+      return;
+    }
+    optionsTapLockUntil = now + 350;
     toggleOptionsMenu();
   };
   mobileOptionsBtn?.addEventListener('touchstart', toggleMobileOptions, { passive: false });
-  mobileOptionsBtn?.addEventListener('click', toggleMobileOptions);
 
   mobileJoystick.addEventListener('pointerdown', (event) => {
     if (!canUseMobileControls() || mobileInput.movePointerId !== null) {

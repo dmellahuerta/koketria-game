@@ -115,6 +115,12 @@ body {
   box-shadow: 0 0 12px rgba(46, 255, 111, 0.42);
 }
 
+.install-box button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .games {
   margin: 0;
   padding: 0;
