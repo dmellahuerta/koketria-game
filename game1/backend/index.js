@@ -229,6 +229,50 @@ const getTeamPlayerCount = (room, team) => {
   return total;
 };
 
+const getPlayerReadyState = (room, playerId) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return false;
+  }
+  if (!room.ready) {
+    room.ready = new Map();
+  }
+  return Boolean(room.ready.get(playerId));
+};
+
+const setPlayerReadyState = (room, playerId, ready) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return;
+  }
+  if (!room.ready) {
+    room.ready = new Map();
+  }
+  room.ready.set(playerId, Boolean(ready));
+};
+
+const setAllPlayersReadyState = (room, ready) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return;
+  }
+  room.players.forEach((playerId) => {
+    setPlayerReadyState(room, playerId, ready);
+  });
+};
+
+const areAllVersusPlayersReady = (room) => {
+  if (!room || room.mode !== 'versusmatch') {
+    return false;
+  }
+  if (room.players.size <= 0) {
+    return false;
+  }
+  for (const playerId of room.players) {
+    if (!getPlayerReadyState(room, playerId)) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const rebalanceVersusTeams = (room) => {
   if (!room) {
     return;
@@ -288,6 +332,7 @@ const createVersusRoom = (hostClient, roomName = '') => {
     isServerManaged: false,
     players: new Set(),
     teams: new Map(),
+    ready: new Map(),
     stats: new Map(),
     combat: new Map(),
     mapCollision: null,
@@ -321,6 +366,7 @@ const ensureServerRoom = () => {
     isServerManaged: true,
     players: new Set(),
     teams: new Map(),
+    ready: new Map(),
     stats: new Map(),
     combat: new Map(),
     mapCollision: null,
@@ -2147,6 +2193,7 @@ const serializePlayerForRoom = (room, client) => {
   return {
     ...serializePlayer(client),
     team: getPlayerTeam(room, client.id),
+    ready: getPlayerReadyState(room, client.id),
   };
 };
 
@@ -2239,6 +2286,7 @@ const leaveCurrentRoom = (client) => {
   const leavingTeam = getPlayerTeam(room, client.id);
   room.players.delete(client.id);
   room.teams?.delete(client.id);
+  room.ready?.delete(client.id);
   room.stats.delete(client.id);
   room.combat.delete(client.id);
 
@@ -2274,6 +2322,7 @@ const leaveCurrentRoom = (client) => {
   if (room.mode === 'versusmatch') {
     if (room.status === 'waiting') {
       rebalanceVersusTeams(room);
+      setAllPlayersReadyState(room, false);
     }
     if (room.status === 'in_game' && !room.roundResetTimer) {
       const redCount = getTeamPlayerCount(room, 'red');
@@ -2351,7 +2400,9 @@ const joinRoom = (client, room) => {
   room.players.add(client.id);
   if (room.mode === 'versusmatch' && room.status === 'waiting') {
     rebalanceVersusTeams(room);
+    setAllPlayersReadyState(room, false);
   }
+  setPlayerReadyState(room, client.id, false);
   if (!room.stats.has(client.id)) {
     room.stats.set(client.id, { kills: 0, deaths: 0 });
   }
@@ -2661,8 +2712,119 @@ const start = async () => {
           room.requiredPlayers = requirements.requiredPlayers;
           room.maxPlayers = requirements.maxPlayers;
           rebalanceVersusTeams(room);
+          setAllPlayersReadyState(room, false);
           broadcastRoomState(room);
           broadcastRoomList();
+          return;
+        }
+
+        if (message.type === 'versus_set_ready') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.mode !== 'versusmatch') {
+            return;
+          }
+          if (room.status !== 'waiting') {
+            return;
+          }
+          setPlayerReadyState(room, current.id, Boolean(message.ready));
+          broadcastRoomState(room);
+          return;
+        }
+
+        if (message.type === 'versus_switch_team') {
+          if (!current.roomId) {
+            return;
+          }
+          const room = rooms.get(current.roomId);
+          if (!room || room.mode !== 'versusmatch') {
+            return;
+          }
+          if (room.status !== 'waiting') {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'MATCH_ALREADY_STARTED',
+                message: 'No puedes cambiar equipo con la partida iniciada',
+              }),
+            });
+            return;
+          }
+          const requirements = getVersusRequirements(room.versusType);
+          if (!requirements) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'INVALID_VERSUS_TYPE',
+                message: 'Debes elegir modalidad para cambiar equipo',
+              }),
+            });
+            return;
+          }
+          if (!room.players.has(current.id)) {
+            return;
+          }
+
+          if (!room.teams) {
+            room.teams = new Map();
+          }
+          const currentTeam = getPlayerTeam(room, current.id);
+          if (!currentTeam) {
+            rebalanceVersusTeams(room);
+          }
+          const sourceTeam = getPlayerTeam(room, current.id);
+          if (!sourceTeam) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'TEAM_ASSIGNMENT_ERROR',
+                message: 'No se pudo resolver tu equipo actual',
+              }),
+            });
+            return;
+          }
+          const explicitTarget = normalizePlayerTeamId(message.team);
+          const targetTeam = explicitTarget || (sourceTeam === 'red' ? 'blue' : 'red');
+          if (targetTeam === sourceTeam) {
+            return;
+          }
+
+          const teamSize = requirements.versusType === '2v2' ? 2 : 1;
+          const targetCount = getTeamPlayerCount(room, targetTeam);
+          if (targetCount < teamSize) {
+            room.teams.set(current.id, targetTeam);
+            setPlayerReadyState(room, current.id, false);
+            broadcastRoomState(room);
+            return;
+          }
+
+          let swapCandidateId = null;
+          room.players.forEach((playerId) => {
+            if (swapCandidateId || playerId === current.id) {
+              return;
+            }
+            if (getPlayerTeam(room, playerId) === targetTeam) {
+              swapCandidateId = playerId;
+            }
+          });
+          if (!swapCandidateId) {
+            send(ws, {
+              type: 'error',
+              ...json(false, null, {
+                code: 'TEAM_FULL',
+                message: `El equipo ${targetTeam} esta lleno`,
+              }),
+            });
+            return;
+          }
+
+          room.teams.set(current.id, targetTeam);
+          room.teams.set(swapCandidateId, sourceTeam);
+          setPlayerReadyState(room, current.id, false);
+          setPlayerReadyState(room, swapCandidateId, false);
+          broadcastRoomState(room);
           return;
         }
 
@@ -2712,6 +2874,16 @@ const start = async () => {
                 ...json(false, null, {
                   code: 'NOT_ENOUGH_PLAYERS',
                   message: `Jugadores requeridos: ${room.requiredPlayers} (actual: ${room.players.size})`,
+                }),
+              });
+              return;
+            }
+            if (!areAllVersusPlayersReady(room)) {
+              send(ws, {
+                type: 'error',
+                ...json(false, null, {
+                  code: 'NOT_ALL_READY',
+                  message: 'Todos los jugadores deben estar Ready',
                 }),
               });
               return;

@@ -67,8 +67,16 @@ app.innerHTML = `
         </div>
       </div>
       <div class="lobby-actions">
+        <button id="versusReadyBtn" type="button">Ready: OFF</button>
         <button id="versusStartBtn" type="button">Iniciar partida</button>
         <button id="versusLeaveBtn" type="button">Volver al lobby</button>
+      </div>
+      <div class="versus-chat-box">
+        <div id="versusChatLog" class="versus-chat-log"></div>
+        <div class="versus-chat-input">
+          <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
+          <button id="versusChatSendBtn" type="button">Enviar</button>
+        </div>
       </div>
       <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
     </div>
@@ -247,8 +255,13 @@ const versusTypeSelect = document.querySelector('#versusTypeSelect');
 const versusWaitingInfo = document.querySelector('#versusWaitingInfo');
 const versusLeftPlayers = document.querySelector('#versusLeftPlayers');
 const versusRightPlayers = document.querySelector('#versusRightPlayers');
+const versusHint = document.querySelector('#versusHint');
+const versusReadyBtn = document.querySelector('#versusReadyBtn');
 const versusStartBtn = document.querySelector('#versusStartBtn');
 const versusLeaveBtn = document.querySelector('#versusLeaveBtn');
+const versusChatLog = document.querySelector('#versusChatLog');
+const versusChatInput = document.querySelector('#versusChatInput');
+const versusChatSendBtn = document.querySelector('#versusChatSendBtn');
 const matchInfo = document.querySelector('#matchInfo');
 const respawnScreen = document.querySelector('#respawnScreen');
 const respawnCounter = document.querySelector('#respawnCounter');
@@ -340,6 +353,8 @@ const renderPerfStats = {
 const chatMessages = [];
 const maxChatMessages = 40;
 const chatMessageTtlMs = 8000;
+const versusChatMessages = [];
+const maxVersusChatMessages = 60;
 let isChatTyping = false;
 let isOptionsOpen = false;
 const settingsStorageKey = 'koketria_settings_v1';
@@ -395,6 +410,35 @@ const pushChatMessage = (playerName, text) => {
     chatMessages.splice(0, chatMessages.length - maxChatMessages);
   }
   renderChat();
+};
+
+const renderVersusChat = () => {
+  if (!versusChatLog) {
+    return;
+  }
+  const recent = versusChatMessages.slice(-12);
+  versusChatLog.innerHTML = recent.map((msg) => {
+    const selfTag = msg.isSelf ? ' (Tú)' : '';
+    return `<p><strong>${msg.playerName}${selfTag}:</strong> ${msg.text}</p>`;
+  }).join('');
+  versusChatLog.scrollTop = versusChatLog.scrollHeight;
+};
+
+const pushVersusChatMessage = (playerName, text) => {
+  if (!text) {
+    return;
+  }
+  const isSelf = Boolean(state.self && String(playerName || '') === String(state.self.name || ''));
+  versusChatMessages.push({
+    playerName: String(playerName || 'Player'),
+    text: String(text || ''),
+    isSelf,
+    ts: Date.now(),
+  });
+  if (versusChatMessages.length > maxVersusChatMessages) {
+    versusChatMessages.splice(0, versusChatMessages.length - maxVersusChatMessages);
+  }
+  renderVersusChat();
 };
 
 setInterval(() => {
@@ -960,7 +1004,7 @@ const renderVersusSlots = (container, players, slotCount, containerKey) => {
   for (let i = 0; i < slots; i += 1) {
     const player = safePlayers[i];
     if (player) {
-      renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}|${normalizePlayerTeam(player.team) || ''}`);
+      renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}|${normalizePlayerTeam(player.team) || ''}|${Boolean(player.ready)}`);
     } else {
       renderKeyParts.push('empty');
     }
@@ -975,11 +1019,17 @@ const renderVersusSlots = (container, players, slotCount, containerKey) => {
     if (player) {
       const name = String(player.name || `Player ${i + 1}`);
       const character = getCharacterLabel(player.character || '-');
+      const ready = Boolean(player.ready);
+      const me = state.self && player.id === state.self.id;
+      const team = normalizePlayerTeam(player.team);
+      const switchLabel = team === 'red' ? 'Cambiar a Azul' : 'Cambiar a Rojo';
       rows.push(`
         <div class="versus-player">
           <div class="versus-player-model" data-preview-key="${container.id}-${i}" data-character="${String(player.character || '')}"></div>
           <strong>${name}</strong>
           <span>${character}</span>
+          <span class="versus-ready ${ready ? 'on' : 'off'}">${ready ? 'Ready' : 'No Ready'}</span>
+          ${me ? `<button class="versus-team-switch-btn" type="button" data-action="switch-team" data-player-id="${player.id}">${switchLabel}</button>` : ''}
         </div>
       `);
     } else {
@@ -994,6 +1044,12 @@ const renderVersusSlots = (container, players, slotCount, containerKey) => {
   }
   container.innerHTML = rows.join('');
   container.dataset.renderKey = renderKey;
+  const switchButtons = container.querySelectorAll('[data-action="switch-team"]');
+  switchButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      sendWs({ type: 'versus_switch_team' });
+    });
+  });
   return true;
 };
 
@@ -1030,12 +1086,16 @@ const updateVersusLobbyUi = () => {
   rightPlayers = rightPlayers.slice(0, teamSize);
   const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}`;
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
+  const readyPlayers = players.filter((player) => Boolean(player.ready)).length;
+  const allReady = enoughPlayers && players.every((player) => Boolean(player.ready));
+  const selfPlayer = state.self ? players.find((player) => player.id === state.self.id) : null;
+  const selfReady = Boolean(selfPlayer?.ready);
   versusLobby.classList.remove('hidden');
   versusRoomInfo.textContent = `Sala: ${room.name} (${room.id})`;
   versusTypeSelect.value = hasType ? versusType : '';
   versusTypeSelect.disabled = !isHostPlayer;
   versusWaitingInfo.textContent = hasType
-    ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType})`
+    ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType}) | Ready: ${readyPlayers}/${requiredPlayers}`
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
   const leftChanged = renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize, 'left');
   const rightChanged = renderVersusSlots(versusRightPlayers, rightPlayers, teamSize, 'right');
@@ -1043,7 +1103,17 @@ const updateVersusLobbyUi = () => {
     syncVersusPlayerPreviews();
     lastVersusLobbyLayoutKey = layoutKey;
   }
-  versusStartBtn.disabled = !isHostPlayer || !enoughPlayers;
+  versusReadyBtn.disabled = !selfPlayer;
+  versusReadyBtn.textContent = selfReady ? 'Ready: ON' : 'Ready: OFF';
+  versusStartBtn.disabled = !isHostPlayer || !allReady;
+  if (enoughPlayers && !allReady) {
+    versusHint.textContent = 'Faltan jugadores por marcar Ready para iniciar.';
+  } else if (allReady) {
+    versusHint.textContent = 'Todos listos. El host puede iniciar la partida.';
+  } else {
+    versusHint.textContent = 'Las partidas versus aparecen en estado waiting hasta completar jugadores.';
+  }
+  renderVersusChat();
 };
 
 const renderRooms = () => {
@@ -5169,6 +5239,8 @@ const connectWebSocket = () => {
       hideWinnerOverlay();
       localAvatar.team = null;
       ensureLocalTeamOutline();
+      versusChatMessages.length = 0;
+      renderVersusChat();
       updateHud();
       syncLobbyScreens();
       updateVersusLobbyUi();
@@ -5553,6 +5625,7 @@ const connectWebSocket = () => {
         return;
       }
       pushChatMessage(playerName, text);
+      pushVersusChatMessage(playerName, text);
       chatFeed.classList.add('open');
       return;
     }
@@ -5656,6 +5729,8 @@ const connectWebSocket = () => {
     hideWinnerOverlay();
     localAvatar.team = null;
     ensureLocalTeamOutline();
+    versusChatMessages.length = 0;
+    renderVersusChat();
     updateHud();
     syncLobbyScreens();
     updateVersusLobbyUi();
@@ -5706,6 +5781,15 @@ versusTypeSelect.addEventListener('change', () => {
   sendWs({ type: 'room_set_versus_type', versusType });
 });
 
+versusReadyBtn.addEventListener('click', () => {
+  if (!isInVersusWaitingLobby() || !state.self || !state.joinedRoom) {
+    return;
+  }
+  const selfPlayer = (state.joinedRoom.players || []).find((player) => player.id === state.self.id);
+  const nextReady = !Boolean(selfPlayer?.ready);
+  sendWs({ type: 'versus_set_ready', ready: nextReady });
+});
+
 versusStartBtn.addEventListener('click', () => {
   if (!isInVersusWaitingLobby()) {
     return;
@@ -5715,6 +5799,31 @@ versusStartBtn.addEventListener('click', () => {
 
 versusLeaveBtn.addEventListener('click', () => {
   sendWs({ type: 'leave_room' });
+});
+
+const sendVersusChatMessage = () => {
+  if (!isInVersusWaitingLobby()) {
+    return;
+  }
+  const text = String(versusChatInput.value || '').trim();
+  if (!text) {
+    return;
+  }
+  sendWs({ type: 'chat_message', text });
+  versusChatInput.value = '';
+  versusChatInput.focus();
+};
+
+versusChatSendBtn.addEventListener('click', () => {
+  sendVersusChatMessage();
+});
+
+versusChatInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') {
+    return;
+  }
+  event.preventDefault();
+  sendVersusChatMessage();
 });
 
 leaveRoomHudBtn.addEventListener('click', () => {
@@ -6201,6 +6310,14 @@ window.addEventListener('keydown', (event) => {
   if (event.code === 'Enter') {
     event.preventDefault();
     if (!state.joinedRoom) {
+      return;
+    }
+    if (isInVersusWaitingLobby()) {
+      if (document.activeElement === versusChatInput) {
+        sendVersusChatMessage();
+      } else {
+        versusChatInput.focus();
+      }
       return;
     }
     if (!isChatTyping) {

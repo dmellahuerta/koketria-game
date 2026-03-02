@@ -240,6 +240,88 @@ canvas {
   opacity: 0.92;
 }
 
+.versus-ready {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.versus-ready.on {
+  color: #9affac;
+}
+
+.versus-ready.off {
+  color: #ffd18f;
+}
+
+.versus-team-switch-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(132, 182, 255, 0.5);
+  background: rgba(14, 26, 54, 0.72);
+  color: #c8deff;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.versus-team-switch-btn:hover {
+  border-color: rgba(151, 200, 255, 0.82);
+  color: #e6f1ff;
+}
+
+.versus-chat-box {
+  margin-top: 8px;
+  border: 1px solid rgba(122, 255, 122, 0.35);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(1, 20, 1, 0.58);
+}
+
+.versus-chat-log {
+  max-height: 120px;
+  overflow: auto;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #beffca;
+  padding-right: 4px;
+}
+
+.versus-chat-log p {
+  margin: 0 0 4px;
+}
+
+.versus-chat-log p:last-child {
+  margin-bottom: 0;
+}
+
+.versus-chat-input {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.versus-chat-input input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 255, 122, 0.45);
+  background: rgba(2, 26, 2, 0.88);
+  color: #c7ffd2;
+}
+
+.versus-chat-input button {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 255, 122, 0.52);
+  background: rgba(9, 44, 9, 0.86);
+  color: #d7ffdf;
+  cursor: pointer;
+}
+
 .versus-player.empty strong,
 .versus-player.empty span {
   opacity: 0.66;
