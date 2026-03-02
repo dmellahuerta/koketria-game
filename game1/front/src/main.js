@@ -178,6 +178,22 @@ app.innerHTML = `
   <div id="damageOverlay"></div>
   <div id="damageIndicator"></div>
 
+  <div id="mobileControls" class="mobile-controls hidden">
+    <div id="mobileLookZone" class="mobile-look-zone"></div>
+    <div class="mobile-left">
+      <div id="mobileJoystick" class="mobile-joystick">
+        <div class="mobile-joystick-base"></div>
+        <div id="mobileJoystickThumb" class="mobile-joystick-thumb"></div>
+      </div>
+    </div>
+    <div class="mobile-right">
+      <button id="mobileJumpBtn" type="button" class="mobile-btn">Saltar</button>
+      <button id="mobileSpecialBtn" type="button" class="mobile-btn">Especial</button>
+      <button id="mobileReloadBtn" type="button" class="mobile-btn">Recargar</button>
+      <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
+    </div>
+  </div>
+
   <div id="scoreboard" class="hidden">
     <div class="scoreboard-card">
       <h2>Jugadores conectados</h2>
@@ -318,6 +334,14 @@ const chatLog = document.querySelector('#chatLog');
 const chatInputWrap = document.querySelector('#chatInputWrap');
 const chatInput = document.querySelector('#chatInput');
 const crosshair = document.querySelector('#crosshair');
+const mobileControls = document.querySelector('#mobileControls');
+const mobileLookZone = document.querySelector('#mobileLookZone');
+const mobileJoystick = document.querySelector('#mobileJoystick');
+const mobileJoystickThumb = document.querySelector('#mobileJoystickThumb');
+const mobileFireBtn = document.querySelector('#mobileFireBtn');
+const mobileSpecialBtn = document.querySelector('#mobileSpecialBtn');
+const mobileJumpBtn = document.querySelector('#mobileJumpBtn');
+const mobileReloadBtn = document.querySelector('#mobileReloadBtn');
 const teamAimIndicator = document.querySelector('#teamAimIndicator');
 const teamMiniMap = document.querySelector('#teamMiniMap');
 const optionsScreen = document.querySelector('#optionsScreen');
@@ -373,6 +397,16 @@ const settings = {
   showPerfByDefault: false,
 };
 const battleThemeIds = ['battle1', 'battle2', 'battle3'];
+const mobileInput = {
+  enabled: false,
+  active: false,
+  moveTouchId: null,
+  lookTouchId: null,
+  moveX: 0,
+  moveY: 0,
+  lookLastX: 0,
+  lookLastY: 0,
+};
 
 const clearMovementKeys = () => {
   keys.KeyW = false;
@@ -380,6 +414,39 @@ const clearMovementKeys = () => {
   keys.KeyS = false;
   keys.KeyD = false;
   keys.Space = false;
+};
+
+const resetMobileInput = () => {
+  mobileInput.moveTouchId = null;
+  mobileInput.lookTouchId = null;
+  mobileInput.moveX = 0;
+  mobileInput.moveY = 0;
+  isFiring = false;
+  keys.KeyW = false;
+  keys.KeyA = false;
+  keys.KeyS = false;
+  keys.KeyD = false;
+  if (mobileJoystickThumb) {
+    mobileJoystickThumb.style.transform = 'translate(-50%, -50%)';
+  }
+};
+
+const detectMobileControlsEnabled = () => {
+  return window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 980;
+};
+
+const syncMobileControlsVisibility = () => {
+  mobileInput.enabled = detectMobileControlsEnabled();
+  const canShow = mobileInput.enabled && canPlay() && !isInVersusWaitingLobby() && !isOptionsOpen;
+  mobileInput.active = canShow;
+  if (!mobileControls) {
+    return;
+  }
+  mobileControls.classList.toggle('hidden', !canShow);
+  app.classList.toggle('mobile-input', canShow);
+  if (!canShow) {
+    resetMobileInput();
+  }
 };
 
 const renderChat = () => {
@@ -540,7 +607,9 @@ const setInRoom = (value) => {
     renderChat();
     closeChatInput();
     chatFeed.classList.remove('open');
+    resetMobileInput();
   }
+  syncMobileControlsVisibility();
 };
 
 const syncInfoVisibility = () => {
@@ -2542,6 +2611,7 @@ const syncOptionsUi = () => {
 const closeOptionsMenu = () => {
   isOptionsOpen = false;
   optionsScreen.classList.add('hidden');
+  syncMobileControlsVisibility();
 };
 
 const openOptionsMenu = () => {
@@ -2555,6 +2625,7 @@ const openOptionsMenu = () => {
   if (document.pointerLockElement) {
     document.exitPointerLock();
   }
+  syncMobileControlsVisibility();
 };
 
 const toggleOptionsMenu = () => {
@@ -3950,6 +4021,15 @@ const triggerCharacterSpecial = () => {
     return true;
   }
   return true;
+};
+
+const triggerMobileJump = () => {
+  cancelLocalFunnyAnimation();
+  if (canPlay() && !isJumping && camera.position.y <= (playerGroundY + 0.001)) {
+    isJumping = true;
+    jumpVelocity = jumpInitialVelocity;
+    sendLocalPlayerState(true);
+  }
 };
 
 const respawnPlayer = () => {
@@ -6303,7 +6383,7 @@ const constrainPlayerToWorld = () => {
 };
 
 renderer.domElement.addEventListener('click', () => {
-  if (!isLocked && state.joinedRoom) {
+  if (!mobileInput.enabled && !isLocked && state.joinedRoom) {
     renderer.domElement.requestPointerLock();
   }
 });
@@ -6317,6 +6397,7 @@ document.addEventListener('pointerlockchange', () => {
       openOptionsMenu();
     }
   }
+  syncMobileControlsVisibility();
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -6343,6 +6424,178 @@ window.addEventListener('mouseup', (event) => {
     isFiring = false;
   }
 });
+
+const applyMobileLookDelta = (dx, dy) => {
+  if (!mobileInput.active || !canPlay()) {
+    return;
+  }
+  const sensitivity = 0.0024 * settings.mouseSensitivity;
+  yaw -= dx * sensitivity;
+  pitch -= dy * sensitivity;
+  pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+  updateLook();
+  sendLocalPlayerState();
+};
+
+const updateMobileJoystickFromTouch = (touch) => {
+  if (!mobileJoystick || !mobileJoystickThumb || !touch) {
+    return;
+  }
+  const rect = mobileJoystick.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = touch.clientX - cx;
+  const dy = touch.clientY - cy;
+  const maxRadius = Math.max(28, Math.min(rect.width, rect.height) * 0.36);
+  const dist = Math.sqrt((dx * dx) + (dy * dy));
+  const clamped = dist > maxRadius && dist > 0
+    ? { x: (dx / dist) * maxRadius, y: (dy / dist) * maxRadius }
+    : { x: dx, y: dy };
+  mobileInput.moveX = maxRadius > 0 ? clamped.x / maxRadius : 0;
+  mobileInput.moveY = maxRadius > 0 ? clamped.y / maxRadius : 0;
+  mobileJoystickThumb.style.transform = `translate(calc(-50% + ${clamped.x}px), calc(-50% + ${clamped.y}px))`;
+};
+
+const bindMobileTouchControls = () => {
+  if (!mobileControls || !mobileJoystick || !mobileLookZone) {
+    return;
+  }
+
+  mobileJoystick.addEventListener('touchstart', (event) => {
+    if (!mobileInput.active || mobileInput.moveTouchId !== null) {
+      return;
+    }
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      return;
+    }
+    mobileInput.moveTouchId = touch.identifier;
+    updateMobileJoystickFromTouch(touch);
+    event.preventDefault();
+  }, { passive: false });
+
+  mobileJoystick.addEventListener('touchmove', (event) => {
+    if (!mobileInput.active || mobileInput.moveTouchId === null) {
+      return;
+    }
+    for (let i = 0; i < event.changedTouches.length; i += 1) {
+      const touch = event.changedTouches[i];
+      if (touch.identifier === mobileInput.moveTouchId) {
+        updateMobileJoystickFromTouch(touch);
+        event.preventDefault();
+        break;
+      }
+    }
+  }, { passive: false });
+
+  const releaseMoveTouch = (event) => {
+    if (mobileInput.moveTouchId === null) {
+      return;
+    }
+    for (let i = 0; i < event.changedTouches.length; i += 1) {
+      const touch = event.changedTouches[i];
+      if (touch.identifier === mobileInput.moveTouchId) {
+        mobileInput.moveTouchId = null;
+        mobileInput.moveX = 0;
+        mobileInput.moveY = 0;
+        if (mobileJoystickThumb) {
+          mobileJoystickThumb.style.transform = 'translate(-50%, -50%)';
+        }
+        event.preventDefault();
+        break;
+      }
+    }
+  };
+  mobileJoystick.addEventListener('touchend', releaseMoveTouch, { passive: false });
+  mobileJoystick.addEventListener('touchcancel', releaseMoveTouch, { passive: false });
+
+  mobileLookZone.addEventListener('touchstart', (event) => {
+    if (!mobileInput.active || mobileInput.lookTouchId !== null) {
+      return;
+    }
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      return;
+    }
+    mobileInput.lookTouchId = touch.identifier;
+    mobileInput.lookLastX = touch.clientX;
+    mobileInput.lookLastY = touch.clientY;
+    event.preventDefault();
+  }, { passive: false });
+
+  mobileLookZone.addEventListener('touchmove', (event) => {
+    if (!mobileInput.active || mobileInput.lookTouchId === null) {
+      return;
+    }
+    for (let i = 0; i < event.changedTouches.length; i += 1) {
+      const touch = event.changedTouches[i];
+      if (touch.identifier === mobileInput.lookTouchId) {
+        const dx = touch.clientX - mobileInput.lookLastX;
+        const dy = touch.clientY - mobileInput.lookLastY;
+        mobileInput.lookLastX = touch.clientX;
+        mobileInput.lookLastY = touch.clientY;
+        applyMobileLookDelta(dx, dy);
+        event.preventDefault();
+        break;
+      }
+    }
+  }, { passive: false });
+
+  const releaseLookTouch = (event) => {
+    if (mobileInput.lookTouchId === null) {
+      return;
+    }
+    for (let i = 0; i < event.changedTouches.length; i += 1) {
+      const touch = event.changedTouches[i];
+      if (touch.identifier === mobileInput.lookTouchId) {
+        mobileInput.lookTouchId = null;
+        event.preventDefault();
+        break;
+      }
+    }
+  };
+  mobileLookZone.addEventListener('touchend', releaseLookTouch, { passive: false });
+  mobileLookZone.addEventListener('touchcancel', releaseLookTouch, { passive: false });
+
+  const holdFireStart = (event) => {
+    if (!mobileInput.active || !canPlay()) {
+      return;
+    }
+    cancelLocalFunnyAnimation();
+    isFiring = true;
+    event.preventDefault();
+  };
+  const holdFireEnd = (event) => {
+    isFiring = false;
+    event.preventDefault();
+  };
+  mobileFireBtn?.addEventListener('touchstart', holdFireStart, { passive: false });
+  mobileFireBtn?.addEventListener('touchend', holdFireEnd, { passive: false });
+  mobileFireBtn?.addEventListener('touchcancel', holdFireEnd, { passive: false });
+
+  mobileSpecialBtn?.addEventListener('touchstart', (event) => {
+    if (mobileInput.active) {
+      cancelLocalFunnyAnimation();
+      triggerCharacterSpecial();
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  mobileJumpBtn?.addEventListener('touchstart', (event) => {
+    if (mobileInput.active) {
+      triggerMobileJump();
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  mobileReloadBtn?.addEventListener('touchstart', (event) => {
+    if (mobileInput.active) {
+      cancelLocalFunnyAnimation();
+      reloadWeapon();
+      event.preventDefault();
+    }
+  }, { passive: false });
+};
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Escape' && !isChatTyping) {
@@ -6467,6 +6720,23 @@ window.addEventListener('keyup', (event) => {
     keys[event.code] = false;
   }
 });
+
+const applyMobileMoveKeys = () => {
+  if (!mobileInput.active || !canPlay() || isChatTyping) {
+    if (mobileInput.active) {
+      keys.KeyW = false;
+      keys.KeyA = false;
+      keys.KeyS = false;
+      keys.KeyD = false;
+    }
+    return;
+  }
+  const deadZone = 0.18;
+  keys.KeyW = mobileInput.moveY < -deadZone;
+  keys.KeyS = mobileInput.moveY > deadZone;
+  keys.KeyA = mobileInput.moveX < -deadZone;
+  keys.KeyD = mobileInput.moveX > deadZone;
+};
 
 const shoot = () => {
   const usingHoly = isSilentmanCharacter(activeCharacter);
@@ -7721,7 +7991,7 @@ const updateShooting = (delta) => {
     isFiring = false;
     return;
   }
-  if (isLocked && isFiring && cooldown <= 0 && !isReloading) {
+  if ((isLocked || mobileInput.active) && isFiring && cooldown <= 0 && !isReloading) {
     shoot();
     cooldown = getCurrentAttackIntervalSeconds();
 
@@ -7789,7 +8059,9 @@ const shouldRenderVersusPreviews = () => {
 const animate = () => {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
+  syncMobileControlsVisibility();
   updatePerfMetrics();
+  applyMobileMoveKeys();
   updateMovement(delta);
   updateJump(delta);
   updateHealthRegen(delta);
@@ -7872,7 +8144,9 @@ window.addEventListener('resize', () => {
   if (previewState.renderer && previewState.camera) {
     resizeCharacterPreview();
   }
+  syncMobileControlsVisibility();
 });
+window.addEventListener('orientationchange', syncMobileControlsVisibility);
 
 loadSettings();
 syncOptionsUi();
@@ -7880,6 +8154,8 @@ applyGameSettings();
 setInRoom(false);
 applyWeather('night');
 setupCharacterPreview();
+bindMobileTouchControls();
+syncMobileControlsVisibility();
 updateRespawnOverlay();
 updateHud();
 renderRooms();

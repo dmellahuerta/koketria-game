@@ -1270,8 +1270,98 @@ button:disabled {
   font-size: 0.75rem;
 }
 
+.mobile-controls {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.mobile-look-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+
+.mobile-left,
+.mobile-right {
+  position: absolute;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  pointer-events: auto;
+}
+
+.mobile-left {
+  left: max(14px, env(safe-area-inset-left));
+}
+
+.mobile-right {
+  right: max(14px, env(safe-area-inset-right));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(64px, 88px));
+  gap: 8px;
+}
+
+.mobile-joystick {
+  position: relative;
+  width: 132px;
+  height: 132px;
+}
+
+.mobile-joystick-base {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(136, 255, 136, 0.45);
+  background: rgba(0, 20, 0, 0.52);
+  backdrop-filter: blur(2px);
+}
+
+.mobile-joystick-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 1px solid rgba(160, 255, 160, 0.58);
+  background: rgba(17, 110, 17, 0.76);
+  box-shadow: 0 0 14px rgba(83, 255, 83, 0.25);
+}
+
+.mobile-btn {
+  pointer-events: auto;
+  width: 100%;
+  height: 58px;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 255, 123, 0.45);
+  background: rgba(0, 23, 0, 0.82);
+  color: #d5ffd5;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.mobile-btn.fire {
+  grid-column: span 2;
+  height: 64px;
+  border-color: rgba(255, 153, 153, 0.5);
+  background: rgba(62, 12, 12, 0.84);
+  color: #ffd7d7;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mobile-controls {
+    display: none !important;
+  }
+}
+
 #app:not(.in-room) .chat-panel,
 #app:not(.in-room) .chat-feed {
+  display: none;
+}
+
+#app:not(.mobile-input) .mobile-controls {
   display: none;
 }
 
