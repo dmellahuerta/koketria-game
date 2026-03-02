@@ -12,11 +12,9 @@ Responsable de Dockerfiles, docker-compose y flujos locales reproducibles.
 ## Objetivo local
 Levantar todo con un comando:
 - Frontend en 5173
-- Backend en 3000
+- Backend v2 en 3001
 
 ## Archivos típicos
-- docker/Dockerfile.backend
-- docker/Dockerfile.frontend
 - docker/docker-compose.yml
 
 ## Checklist antes de terminar

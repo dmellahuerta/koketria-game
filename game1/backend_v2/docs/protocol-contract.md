@@ -1,7 +1,7 @@
 # Protocol Contract (Freeze v1)
 
 Fecha de congelamiento: 2026-03-02  
-Objetivo: mantener compatibilidad 1:1 entre `backend` legacy y `backend_v2` durante la migracion.
+Objetivo: mantener un contrato estable 1:1 con el frontend durante la evolucion de `backend_v2` standalone.
 
 ## Envelope comun
 
@@ -124,4 +124,3 @@ El smoke de contrato valida:
    - `connected.data.rooms` (array)
    - `room_joined.data.room.id`
    - `room_joined.data.players` (array)
-
