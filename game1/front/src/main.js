@@ -449,11 +449,17 @@ const resetMobileInput = () => {
 };
 
 const detectMobileControlsEnabled = () => {
+  const userAgent = String(navigator.userAgent || '');
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches
     || window.matchMedia('(any-pointer: coarse)').matches;
   const hasFineHoverPointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-  const mobileUserAgent = /android|iphone|ipad|ipod|mobile/i.test(String(navigator.userAgent || ''));
-  return !hasFineHoverPointer && (coarsePointer || mobileUserAgent);
+  const mobileUserAgent = /android|iphone|ipad|ipod|mobile/i.test(userAgent);
+  const touchPoints = Number(navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0);
+  const smallScreen = Math.min(window.innerWidth, window.innerHeight) <= 1024;
+  if (mobileUserAgent) {
+    return true;
+  }
+  return !hasFineHoverPointer && coarsePointer && touchPoints > 0 && smallScreen;
 };
 
 const isFullscreenActive = () => {
