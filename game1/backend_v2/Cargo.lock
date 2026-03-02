@@ -87,6 +87,7 @@ dependencies = [
  "futures-util",
  "http",
  "reqwest",
+ "serde_json",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tracing",

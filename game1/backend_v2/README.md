@@ -20,3 +20,22 @@ cargo run
 ```
 
 Por defecto queda escuchando en `http://127.0.0.1:3001` y reenviando a `http://127.0.0.1:3000`.
+
+## Contrato congelado (fase 1)
+
+Documentacion de contrato:
+
+- `docs/protocol-contract.md`
+- `contract/golden/core_flow.json`
+
+Smoke de contrato (HTTP + WS):
+
+```bash
+cargo run --release --bin contract_smoke
+```
+
+Variables opcionales:
+
+- `BASE_URL` (default `http://127.0.0.1:3001`)
+- `WS_URL` (default derivada de `BASE_URL`)
+- `GOLDEN_PATH` (default `contract/golden/core_flow.json`)

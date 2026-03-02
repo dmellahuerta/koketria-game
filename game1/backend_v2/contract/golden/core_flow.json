@@ -1,0 +1,28 @@
+{
+  "http": [
+    { "path": "/_v2/health", "status": 200, "body_equals": "ok" },
+    { "path": "/health", "status": 200, "json_path_equals": { "ok": true, "data.status": "up" } },
+    { "path": "/characters", "status": 200, "json_path_equals": { "ok": true }, "json_path_type": { "data": "array" } }
+  ],
+  "ws": {
+    "required_events": [
+      "connected",
+      "rooms_list",
+      "room_joined",
+      "pong",
+      "chat_message",
+      "left_room"
+    ],
+    "required_paths": {
+      "connected": [
+        "data.player.id",
+        "data.player.name",
+        "data.rooms"
+      ],
+      "room_joined": [
+        "data.room.id",
+        "data.players"
+      ]
+    }
+  }
+}

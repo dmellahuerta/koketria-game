@@ -19,4 +19,4 @@ trap cleanup EXIT INT TERM
 echo "[backend_v2] starting rust gateway on :${PORT:-3001}"
 cd /app
 export BACKEND_V1_URL="http://127.0.0.1:${LEGACY_PORT}"
-cargo run --release
+cargo run --release --bin backend_v2
