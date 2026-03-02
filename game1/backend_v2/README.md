@@ -39,3 +39,19 @@ Variables opcionales:
 - `BASE_URL` (default `http://127.0.0.1:3001`)
 - `WS_URL` (default derivada de `BASE_URL`)
 - `GOLDEN_PATH` (default `contract/golden/core_flow.json`)
+
+## Progreso fase 2 (salas en Rust)
+
+Se agrego el dominio de salas/versus en:
+
+- `src/rooms.rs`
+
+Incluye reglas de:
+- `create_versus_room`
+- `join/leave`
+- `set_versus_type`
+- `set_ready`
+- `switch_team`
+- validacion de `start` para `1v1` / `2v2`
+
+Con tests unitarios en el mismo archivo. En este commit todavia no esta conectado al runtime WS principal (siguiente paso de integracion).

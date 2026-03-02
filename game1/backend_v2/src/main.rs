@@ -1,3 +1,5 @@
+mod rooms;
+
 use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};
