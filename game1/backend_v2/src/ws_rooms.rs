@@ -566,6 +566,103 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None,
             );
         }
+        "player_funny" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"player_funny",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "ts": now_ms()
+                  }
+                }),
+                Some(client_id),
+            );
+        }
+        "player_shoot" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+            let origin = message.get("origin");
+            let direction = message.get("direction");
+            let (
+                Some(ox),
+                Some(oy),
+                Some(oz),
+                Some(dx),
+                Some(dy),
+                Some(dz),
+            ) = (
+                origin.and_then(|v| v.get("x")).and_then(Value::as_f64),
+                origin.and_then(|v| v.get("y")).and_then(Value::as_f64),
+                origin.and_then(|v| v.get("z")).and_then(Value::as_f64),
+                direction.and_then(|v| v.get("x")).and_then(Value::as_f64),
+                direction.and_then(|v| v.get("y")).and_then(Value::as_f64),
+                direction.and_then(|v| v.get("z")).and_then(Value::as_f64),
+            ) else {
+                return;
+            };
+            let distance = message.get("distance").and_then(Value::as_f64).unwrap_or(100.0);
+            let distance = clamp(distance, 0.0, 300.0);
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"player_shoot",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "character": client.character,
+                    "origin": { "x": ox, "y": oy, "z": oz },
+                    "direction": { "x": dx, "y": dy, "z": dz },
+                    "distance": distance,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+        }
+        "player_respawn" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(entry) = inner.clients.get_mut(client_id) else {
+                return;
+            };
+            entry.state = default_player_state();
+            entry.state_ts = now_ms();
+            let position = json!({
+              "x": entry.state.position.x,
+              "y": entry.state.position.y,
+              "z": entry.state.position.z
+            });
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"player_respawned",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "position": position,
+                    "health": 100,
+                    "shield": 0,
+                    "mana": 100,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+            inner.broadcast_room_state(&room_id);
+        }
         "player_move" => {
             let Some(room_id) = client.room_id.clone() else {
                 return;

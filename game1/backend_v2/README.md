@@ -68,6 +68,9 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
 - `ping`/`pong`
 - `chat_message`
 - `player_move` (autoritativo en Rust con validacion y clamp)
+- `player_shoot` (relay validado en Rust)
+- `player_funny`
+- `player_respawn` -> `player_respawned` basico
 
 Queda detras de feature flag por env:
 
