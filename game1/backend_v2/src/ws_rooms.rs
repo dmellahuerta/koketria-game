@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
-use crate::rooms::{JoinError, RoomManager, StartValidationError, Team, VersusType};
+use crate::rooms::{JoinError, RoomManager, RoomMode, StartValidationError, Team, VersusType};
 
 pub struct WsRoomsState {
     inner: Mutex<Inner>,
@@ -83,6 +83,13 @@ const MAX_MANA: f64 = 100.0;
 const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
 const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
+const HIT_DAMAGE: f64 = 34.0;
+const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
+const SHIELD_DAMAGE_COST_FACTOR: f64 = 0.85;
+const HEADSHOT_RADIUS: f64 = 0.5;
+const BODYSHOT_RADIUS: f64 = 0.92;
+const HEAD_CENTER_OFFSET_Y: f64 = 0.18;
+const BODY_CENTER_OFFSET_Y: f64 = -0.45;
 
 impl Inner {
     fn send_to(&self, client_id: &str, payload: Value) {
@@ -635,6 +642,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             };
             let distance = message.get("distance").and_then(Value::as_f64).unwrap_or(100.0);
             let distance = clamp(distance, 0.0, 300.0);
+            let origin = Vec3 { x: ox, y: oy, z: oz };
+            let direction = normalize_vec3(Vec3 { x: dx, y: dy, z: dz });
+            let Some(direction) = direction else {
+                return;
+            };
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -651,6 +663,82 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
                 None,
             );
+
+            let hit = find_best_hit(&inner, &room_id, client_id, &origin, &direction, distance);
+            if let Some((victim_id, headshot, _hit_dist)) = hit {
+                inner.send_to(
+                    client_id,
+                    json!({
+                      "type":"hit_confirm",
+                      "ok": true,
+                      "data": {
+                        "victimId": victim_id,
+                        "headshot": headshot,
+                        "ts": now_ms()
+                      }
+                    }),
+                );
+
+                let mut died = false;
+                let mut health = 0.0;
+                let mut shield = 0.0;
+                {
+                    let Some(victim) = inner.clients.get_mut(&victim_id) else {
+                        return;
+                    };
+                    if !victim.combat.alive {
+                        return;
+                    }
+                    if victim.combat.shield > 0.0 {
+                        let reduced = (HIT_DAMAGE * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
+                        let shield_cost = (HIT_DAMAGE * SHIELD_DAMAGE_COST_FACTOR).ceil();
+                        victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
+                        victim.combat.health = (victim.combat.health - reduced).max(0.0);
+                    } else {
+                        victim.combat.health = (victim.combat.health - HIT_DAMAGE).max(0.0);
+                    }
+                    victim.combat.pending_health_regen = 0.0;
+                    if victim.combat.health <= 0.0 {
+                        victim.combat.alive = false;
+                        died = true;
+                    }
+                    health = victim.combat.health;
+                    shield = victim.combat.shield;
+                }
+
+                inner.send_to(
+                    &victim_id,
+                    json!({
+                      "type":"player_damage",
+                      "ok": true,
+                      "data": {
+                        "fromPlayerId": client_id,
+                        "headshot": headshot,
+                        "health": health,
+                        "shield": shield,
+                        "ts": now_ms()
+                      }
+                    }),
+                );
+
+                if died {
+                    inner.broadcast_room(
+                        &room_id,
+                        json!({
+                          "type":"player_death",
+                          "ok": true,
+                          "data": {
+                            "playerId": victim_id,
+                            "killerId": client_id,
+                            "headshot": headshot,
+                            "ts": now_ms()
+                          }
+                        }),
+                        None,
+                    );
+                    inner.broadcast_room_state(&room_id);
+                }
+            }
         }
         "player_respawn" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -976,6 +1064,129 @@ fn player_state_json(state: &PlayerState) -> Value {
 
 fn clamp(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
+}
+
+fn normalize_vec3(v: Vec3) -> Option<Vec3> {
+    let len_sq = v.x * v.x + v.y * v.y + v.z * v.z;
+    if len_sq <= 1e-8 {
+        return None;
+    }
+    let inv = len_sq.sqrt().recip();
+    Some(Vec3 {
+        x: v.x * inv,
+        y: v.y * inv,
+        z: v.z * inv,
+    })
+}
+
+fn dot(a: &Vec3, b: &Vec3) -> f64 {
+    a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+fn sub(a: &Vec3, b: &Vec3) -> Vec3 {
+    Vec3 {
+        x: a.x - b.x,
+        y: a.y - b.y,
+        z: a.z - b.z,
+    }
+}
+
+fn distance_sq(a: &Vec3, b: &Vec3) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    let dz = a.z - b.z;
+    dx * dx + dy * dy + dz * dz
+}
+
+fn ray_hit_sphere(origin: &Vec3, direction_norm: &Vec3, center: &Vec3, radius: f64, max_distance: f64) -> Option<f64> {
+    let to_center = sub(center, origin);
+    let projection = dot(&to_center, direction_norm);
+    if projection < 0.0 || projection > max_distance {
+        return None;
+    }
+    let projected = Vec3 {
+        x: origin.x + direction_norm.x * projection,
+        y: origin.y + direction_norm.y * projection,
+        z: origin.z + direction_norm.z * projection,
+    };
+    if distance_sq(&projected, center) <= radius * radius {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
+fn is_friendly_fire_blocked(inner: &Inner, room_id: &str, attacker_id: &str, victim_id: &str) -> bool {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return false;
+    };
+    if room.mode != RoomMode::VersusMatch || room.versus_type != Some(VersusType::TwoVsTwo) {
+        return false;
+    }
+    let attacker_team = room.teams.get(attacker_id).copied();
+    let victim_team = room.teams.get(victim_id).copied();
+    matches!((attacker_team, victim_team), (Some(a), Some(v)) if a == v)
+}
+
+fn find_best_hit(
+    inner: &Inner,
+    room_id: &str,
+    shooter_id: &str,
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    max_distance: f64,
+) -> Option<(String, bool, f64)> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    let mut best: Option<(String, bool, f64)> = None;
+    for candidate_id in &room.players {
+        if candidate_id == shooter_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, shooter_id, candidate_id) {
+            continue;
+        }
+        let Some(candidate) = inner.clients.get(candidate_id) else {
+            continue;
+        };
+        if !candidate.combat.alive {
+            continue;
+        }
+
+        let head_center = Vec3 {
+            x: candidate.state.position.x,
+            y: candidate.state.position.y + HEAD_CENTER_OFFSET_Y,
+            z: candidate.state.position.z,
+        };
+        let body_center = Vec3 {
+            x: candidate.state.position.x,
+            y: candidate.state.position.y + BODY_CENTER_OFFSET_Y,
+            z: candidate.state.position.z,
+        };
+
+        let mut candidate_hit: Option<(bool, f64)> = None;
+        if let Some(head_dist) = ray_hit_sphere(origin, direction_norm, &head_center, HEADSHOT_RADIUS, max_distance) {
+            candidate_hit = Some((true, head_dist));
+        }
+        if let Some(body_dist) = ray_hit_sphere(origin, direction_norm, &body_center, BODYSHOT_RADIUS, max_distance) {
+            match candidate_hit {
+                Some((_is_head, cur)) if body_dist < cur => {
+                    candidate_hit = Some((false, body_dist));
+                }
+                None => {
+                    candidate_hit = Some((false, body_dist));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some((is_headshot, dist)) = candidate_hit {
+            match &best {
+                Some((_id, _h, best_dist)) if dist >= *best_dist => {}
+                _ => best = Some((candidate_id.clone(), is_headshot, dist)),
+            }
+        }
+    }
+    best
 }
 
 fn now_ms() -> i64 {

@@ -72,6 +72,10 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
 - `player_funny`
 - `player_respawn` -> `player_respawned` basico
 - `player_pickup_health` + `player_resources` (vida/mana/regeneracion basica en Rust)
+- hitreg basico en Rust sobre `player_shoot` con eventos:
+  - `hit_confirm`
+  - `player_damage`
+  - `player_death`
 
 Queda detras de feature flag por env:
 
