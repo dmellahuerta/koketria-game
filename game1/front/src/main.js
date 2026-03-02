@@ -35,6 +35,7 @@ app.innerHTML = `
         <div class="lobby-actions">
           <button id="refreshRoomsBtn" type="button">Refrescar</button>
           <button id="createVersusBtn" type="button">Crear Versusmatch</button>
+          <a id="mainPortalLink" class="lobby-link-btn" href="https://misterrii.com">Web principal</a>
         </div>
         <h2>Salas activas</h2>
         <div id="roomList" class="room-list"></div>
@@ -279,6 +280,7 @@ const characterSelect = document.querySelector('#characterSelect');
 const characterPreview = document.querySelector('#characterPreview');
 const refreshRoomsBtn = document.querySelector('#refreshRoomsBtn');
 const createVersusBtn = document.querySelector('#createVersusBtn');
+const mainPortalLink = document.querySelector('#mainPortalLink');
 const roomList = document.querySelector('#roomList');
 const lobbyError = document.querySelector('#lobbyError');
 const versusLobby = document.querySelector('#versusLobby');
@@ -2254,6 +2256,20 @@ const fetchCharactersCatalog = async () => {
   return ['silentman', 'pumori', 'neoorphen', 'pezunalunar'];
 };
 
+const resolveMainPortalUrl = () => {
+  const host = String(window.location.hostname || '').toLowerCase();
+  if (!host || host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) {
+    return 'http://localhost';
+  }
+  if (host === 'koketria.misterrii.com') {
+    return 'https://misterrii.com';
+  }
+  if (host.startsWith('koketria.')) {
+    return `https://${host.slice('koketria.'.length)}`;
+  }
+  return 'https://misterrii.com';
+};
+
 const preloadedAudioSources = new Set();
 
 const preloadAudioSource = (src, timeoutMs = 6000) => {
@@ -2323,14 +2339,21 @@ const bootLobbyLoader = async () => {
     + 2
     + 3
     + 1;
+  const preloadWarnings = [];
   let done = 0;
   const tick = (label) => {
     done += 1;
     updateBootLoader(done, totalTasks, label);
   };
+  const markWarning = (label) => {
+    preloadWarnings.push(label);
+    console.warn('[boot-loader][warn]', label);
+  };
 
   updateBootLoader(0, totalTasks, 'Cargando tema pre-lobby...');
-  await preloadAudioSource(preLobbyTrackPath, 10000);
+  if (!(await preloadAudioSource(preLobbyTrackPath, 10000))) {
+    markWarning(`audio: ${preLobbyTrackPath}`);
+  }
   tick('Tema pre-lobby cargado');
   refreshBackgroundMusic();
 
@@ -2349,26 +2372,46 @@ const bootLobbyLoader = async () => {
     const character = charList[i];
     // eslint-disable-next-line no-await-in-loop
     await preloadCharacterAttackSound(character);
+    // eslint-disable-next-line no-await-in-loop
+    const attackSrc = await resolveCharacterAttackSoundUrl(character);
+    if (!preloadedAudioSources.has(attackSrc)) {
+      markWarning(`attack_sound: ${character}`);
+    }
     tick(`Audio ataque: ${getCharacterLabel(character)}`);
   }
 
-  await preloadAudioSource(defaultAttackSoundUrl, 6000);
+  if (!(await preloadAudioSource(defaultAttackSoundUrl, 6000))) {
+    markWarning(`audio: ${defaultAttackSoundUrl}`);
+  }
   tick('Audio base cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
+    const themePath = getBattleThemeTrackPath(themeId);
     // eslint-disable-next-line no-await-in-loop
-    await preloadAudioSource(getBattleThemeTrackPath(themeId), 10000);
+    if (!(await preloadAudioSource(themePath, 10000))) {
+      markWarning(`audio: ${themePath}`);
+    }
     tick(`Tema batalla: ${themeId}`);
   }
-  await preloadAudioSource(lobbyTrackPath, 10000);
+  if (!(await preloadAudioSource(lobbyTrackPath, 10000))) {
+    markWarning(`audio: ${lobbyTrackPath}`);
+  }
   tick('Audio lobby cargado');
-  await preloadAudioSource(versusLobbyTrackPath, 10000);
+  if (!(await preloadAudioSource(versusLobbyTrackPath, 10000))) {
+    markWarning(`audio: ${versusLobbyTrackPath}`);
+  }
   tick('Audio lobby2 cargado');
-  await loadPickupModelTemplate('mana');
+  if (!(await loadPickupModelTemplate('mana'))) {
+    markWarning('item: mana.glb');
+  }
   tick('Item mana cargado');
-  await loadPickupModelTemplate('defensa');
+  if (!(await loadPickupModelTemplate('defensa'))) {
+    markWarning('item: defensa.glb');
+  }
   tick('Item defensa cargado');
-  await loadPickupModelTemplate('vida');
+  if (!(await loadPickupModelTemplate('vida'))) {
+    markWarning('item: vida.glb');
+  }
   tick('Item vida cargado');
 
   await ensureLocalAvatar();
@@ -2383,6 +2426,9 @@ const bootLobbyLoader = async () => {
   }
   if (lobbySection) {
     lobbySection.classList.remove('hidden');
+  }
+  if (preloadWarnings.length > 0) {
+    updateBootLoader(done, totalTasks, `Cargado con advertencias (${preloadWarnings.length})`);
   }
   refreshBackgroundMusic();
 };
@@ -8406,6 +8452,9 @@ syncMobileControlsVisibility();
 updateRespawnOverlay();
 updateHud();
 renderRooms();
+if (mainPortalLink) {
+  mainPortalLink.href = resolveMainPortalUrl();
+}
 updateLook();
 animate();
 connectWebSocket();
