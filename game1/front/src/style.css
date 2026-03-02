@@ -91,7 +91,7 @@ canvas {
   left: 50%;
   width: min(96vw, 980px);
   max-height: 92vh;
-  overflow: hidden;
+  overflow: auto;
   transform: translate(-50%, -50%);
   z-index: 20;
   border: 1px solid rgba(112, 255, 112, 0.5);
@@ -110,7 +110,7 @@ canvas {
   max-height: 94vh;
   transform: translate(-50%, -50%);
   z-index: 24;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .versus-card {
@@ -425,7 +425,8 @@ canvas {
 #lobby .lobby-main {
   min-width: 0;
   max-height: calc(92vh - 56px);
-  overflow: hidden;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 #lobby h1,
@@ -487,6 +488,124 @@ canvas {
 @media (max-width: 880px) {
   #lobby {
     width: min(96vw, 640px);
+  }
+}
+
+@media (max-width: 900px), (max-height: 760px) {
+  #lobby {
+    top: env(safe-area-inset-top, 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(98vw, 760px);
+    max-height: calc(100vh - env(safe-area-inset-top, 8px) - env(safe-area-inset-bottom, 8px) - 10px);
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  #lobby .lobby-main {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .character-preview {
+    min-height: 130px;
+    max-height: 24vh;
+  }
+
+  .lobby-actions {
+    flex-wrap: wrap;
+  }
+
+  .lobby-actions button {
+    flex: 1 1 160px;
+  }
+
+  .room-list {
+    max-height: 28vh;
+  }
+}
+
+@media (max-width: 520px) {
+  #lobby h1 {
+    font-size: 1rem;
+  }
+
+  #lobby h2 {
+    font-size: 0.9rem;
+  }
+
+  #lobby label {
+    font-size: 0.82rem;
+  }
+
+  #lobby input,
+  #lobby select {
+    padding: 7px;
+    font-size: 0.9rem;
+  }
+
+  .room-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 980px), (max-height: 760px) {
+  #versusLobby {
+    top: env(safe-area-inset-top, 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(99vw, 980px);
+    max-height: calc(100vh - env(safe-area-inset-top, 8px) - env(safe-area-inset-bottom, 8px) - 8px);
+  }
+
+  .versus-card {
+    max-height: none;
+    overflow: visible;
+    padding: 10px;
+  }
+
+  .versus-layout {
+    max-height: none;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .versus-main {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .versus-chat-side {
+    max-height: 30vh;
+    min-height: 130px;
+  }
+
+  .versus-chat-log {
+    min-height: 90px;
+    max-height: 20vh;
+  }
+
+  .versus-teams {
+    gap: 10px;
+  }
+
+  .versus-actions {
+    flex-wrap: wrap;
+  }
+
+  .versus-actions button {
+    flex: 1 1 140px;
+  }
+
+  .versus-chat-input {
+    grid-template-columns: 1fr;
+  }
+
+  .versus-chat-input button {
+    width: 100%;
   }
 }
 
