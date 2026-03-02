@@ -6,34 +6,25 @@ services:
     volumes:
       - ../web:/usr/share/nginx/html:ro
 
-  backend:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm ci && node index.js"
-    expose:
-      - "3000"
-    volumes:
-      - ../game1/backend:/app
-      - backend_node_modules:/app/node_modules
-    environment:
-      - NODE_ENV=development
-
   backend_v2:
-    image: rust:1.86
+    build:
+      context: ../game1/backend_v2
+      dockerfile: Dockerfile.dev
     working_dir: /app
-    command: sh -c "cargo run --release"
+    command: sh -c "chmod +x /app/scripts/dev-run.sh && /app/scripts/dev-run.sh"
     ports:
       - "3001:3001"
     volumes:
       - ../game1/backend_v2:/app
+      - ../game1/backend:/legacy_backend
       - backend_v2_cargo_registry:/usr/local/cargo/registry
       - backend_v2_target:/app/target
+      - backend_legacy_node_modules:/legacy_backend/node_modules
     environment:
+      - NODE_ENV=development
       - LISTEN_HOST=0.0.0.0
       - PORT=3001
-      - BACKEND_V1_URL=http://backend:3000
-    depends_on:
-      - backend
+      - LEGACY_PORT=3000
 
   front:
     image: node:20-alpine
@@ -49,11 +40,10 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - VITE_API_BASE_URL=http://localhost:3001
     depends_on:
-      - backend
       - backend_v2
 
 volumes:
-  backend_node_modules:
   backend_v2_cargo_registry:
   backend_v2_target:
+  backend_legacy_node_modules:
   front_node_modules:

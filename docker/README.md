@@ -27,7 +27,8 @@ Servicios expuestos:
 - Health backend v2: `http://localhost:3001/_v2/health`
 
 Nota:
-- `backend` (Node legacy) queda interno en la red de Docker (sin puerto publicado en host) para compatibilidad temporal de `backend_v2`.
+- En dev no existe servicio `backend` separado.
+- `backend_v2` levanta internamente el backend legacy solo como dependencia temporal de compatibilidad.
 
 ## Detener servicios
 
@@ -51,7 +52,6 @@ Logs por servicio:
 
 ```bash
 docker compose -f docker/docker-compose.yml logs -f front
-docker compose -f docker/docker-compose.yml logs -f backend
 docker compose -f docker/docker-compose.yml logs -f backend_v2
 ```
 
