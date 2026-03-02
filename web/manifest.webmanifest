@@ -5,7 +5,8 @@
   "description": "Portal de juegos disponibles en la red misterrii.",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#030603",
   "theme_color": "#030603",
   "icons": [

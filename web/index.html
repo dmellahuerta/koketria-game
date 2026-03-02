@@ -51,10 +51,30 @@
 
         var isProdHost = /(^|\.)misterrii\.com$/i.test(host);
         var isHttps = window.location.protocol === 'https:';
+        var ua = String(navigator.userAgent || '');
+        var isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
         if ('serviceWorker' in navigator && isProdHost && isHttps) {
           window.addEventListener('load', function () {
             navigator.serviceWorker.register('/sw.js').catch(function () {});
           });
+        }
+
+        function requestDocumentFullscreen() {
+          if (!document.documentElement || document.fullscreenElement || !document.documentElement.requestFullscreen) {
+            return;
+          }
+          document.documentElement.requestFullscreen().catch(function () {});
+        }
+
+        if (isProdHost && isHttps && isMobile && !isStandalone) {
+          var triggerFullscreen = function () {
+            window.removeEventListener('touchend', triggerFullscreen);
+            window.removeEventListener('click', triggerFullscreen);
+            requestDocumentFullscreen();
+          };
+          window.addEventListener('touchend', triggerFullscreen, { once: true });
+          window.addEventListener('click', triggerFullscreen, { once: true });
         }
       })();
     </script>
