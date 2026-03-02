@@ -31,6 +31,31 @@ struct RoomMeta {
     weather: String,
     battle_theme: String,
     map_seed: i64,
+    map_profile: MapProfile,
+    map_collision: Vec<MapBox>,
+}
+
+#[derive(Clone)]
+struct MapProfile {
+    axis_x: f64,
+    axis_z: f64,
+    amp1: f64,
+    amp2: f64,
+    amp3: f64,
+    freq1: f64,
+    freq2: f64,
+    freq3: f64,
+    phase1: f64,
+    phase2: f64,
+    phase3: f64,
+}
+
+#[derive(Clone)]
+struct MapBox {
+    min_x: f64,
+    max_x: f64,
+    min_z: f64,
+    max_z: f64,
 }
 
 #[derive(Clone)]
@@ -128,14 +153,25 @@ const SPAWN_BASE_Y: f64 = 1.7;
 const SPAWN_INNER_RADIUS: f64 = 22.0;
 const SPAWN_OUTER_RADIUS: f64 = 44.0;
 const SPAWN_POINT_COUNT: usize = 20;
+const MAP_PILLAR_COUNT: usize = 220;
+const MAP_AXIS_X_BASE: f64 = 118.0;
+const MAP_AXIS_Z_BASE: f64 = 96.0;
+const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
+const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
+const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
         let seed = room_seed(room_id, now_ms());
+        let map_seed = positive_seed(seed);
+        let map_profile = create_map_profile(map_seed as u64);
+        let map_collision = create_map_collision(map_seed as u64);
         Self {
             weather: pick_from(WEATHER_TYPES, seed, None).to_string(),
             battle_theme: pick_from(BATTLE_THEMES, seed ^ 0x9E37_79B9, None).to_string(),
-            map_seed: positive_seed(seed),
+            map_seed,
+            map_profile,
+            map_collision,
         }
     }
 
@@ -1216,11 +1252,24 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
 
+            let (next_x, next_z) = if let Some(current_entry) = inner.clients.get(client_id) {
+                resolve_player_position(
+                    &inner,
+                    &room_id,
+                    current_entry.state.position.x,
+                    current_entry.state.position.z,
+                    clamp(px, -200.0, 200.0),
+                    clamp(pz, -200.0, 200.0),
+                )
+            } else {
+                (clamp(px, -200.0, 200.0), clamp(pz, -200.0, 200.0))
+            };
+
             let next_state = PlayerState {
                 position: Vec3 {
-                    x: clamp(px, -200.0, 200.0),
+                    x: next_x,
                     y: clamp(py, 0.5, 4.0),
-                    z: clamp(pz, -200.0, 200.0),
+                    z: next_z,
                 },
                 rotation: Rotation {
                     yaw: clamp(
@@ -2016,6 +2065,9 @@ fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&
         .get(room_id)
         .map(|m| m.map_seed as u64)
         .unwrap_or_else(|| hash_room_id(room_id));
+    let meta = inner.room_meta.get(room_id);
+    let now_salt = (now_ms() as u64) & 0xffff;
+    let mut rng = SeededRng::new(seed ^ now_salt ^ 0xA5A5_1F1F);
 
     let mut best = Vec3 {
         x: 0.0,
@@ -2026,17 +2078,19 @@ fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&
 
     for i in 0..SPAWN_POINT_COUNT {
         let angle = ((i as f64) / (SPAWN_POINT_COUNT as f64)) * std::f64::consts::TAU
-            + ((seed % 628) as f64 / 100.0);
-        let ring = if ((seed >> (i % 16)) & 1) == 0 {
-            SPAWN_INNER_RADIUS
-        } else {
-            SPAWN_OUTER_RADIUS
-        };
+            + (rng.next_f64() * 0.7);
+        let ring =
+            SPAWN_INNER_RADIUS + (rng.next_f64() * (SPAWN_OUTER_RADIUS - SPAWN_INNER_RADIUS));
         let candidate = Vec3 {
             x: angle.cos() * ring,
             y: SPAWN_BASE_Y,
             z: angle.sin() * ring,
         };
+        if let Some(room_meta) = meta {
+            if !is_valid_player_position(room_meta, candidate.x, candidate.z) {
+                continue;
+            }
+        }
         let mut min_dist_sq = f64::MAX;
         for player_id in &room.players {
             if Some(player_id.as_str()) == exclude_player_id {
@@ -2057,6 +2111,134 @@ fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&
     }
 
     best
+}
+
+fn resolve_player_position(
+    inner: &Inner,
+    room_id: &str,
+    prev_x: f64,
+    prev_z: f64,
+    desired_x: f64,
+    desired_z: f64,
+) -> (f64, f64) {
+    let Some(meta) = inner.room_meta.get(room_id) else {
+        return (desired_x, desired_z);
+    };
+
+    if is_valid_player_position(meta, desired_x, desired_z) {
+        return (desired_x, desired_z);
+    }
+    if is_valid_player_position(meta, prev_x, prev_z) {
+        return (prev_x, prev_z);
+    }
+
+    let mut last_valid = (prev_x, prev_z);
+    for i in 1..=10 {
+        let t = (i as f64) / 10.0;
+        let x = prev_x + (desired_x - prev_x) * t;
+        let z = prev_z + (desired_z - prev_z) * t;
+        if is_valid_player_position(meta, x, z) {
+            last_valid = (x, z);
+        } else {
+            break;
+        }
+    }
+    last_valid
+}
+
+fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64) -> bool {
+    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS + 0.05)
+        && !collides_with_map_box(meta, x, z, PLAYER_COLLISION_RADIUS)
+}
+
+fn collides_with_map_box(meta: &RoomMeta, x: f64, z: f64, radius: f64) -> bool {
+    for b in &meta.map_collision {
+        if x + radius > b.min_x
+            && x - radius < b.max_x
+            && z + radius > b.min_z
+            && z - radius < b.max_z
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn create_map_profile(seed: u64) -> MapProfile {
+    let mut rng = SeededRng::new(seed ^ 0x5f35_6495);
+    MapProfile {
+        axis_x: MAP_AXIS_X_BASE * (0.94 + rng.next_f64() * 0.1),
+        axis_z: MAP_AXIS_Z_BASE * (0.94 + rng.next_f64() * 0.1),
+        amp1: 0.1 + rng.next_f64() * 0.09,
+        amp2: 0.07 + rng.next_f64() * 0.07,
+        amp3: 0.05 + rng.next_f64() * 0.06,
+        freq1: (2 + ((rng.next_f64() * 3.0).floor() as i64)) as f64,
+        freq2: (3 + ((rng.next_f64() * 3.0).floor() as i64)) as f64,
+        freq3: (5 + ((rng.next_f64() * 4.0).floor() as i64)) as f64,
+        phase1: rng.next_f64() * std::f64::consts::TAU,
+        phase2: rng.next_f64() * std::f64::consts::TAU,
+        phase3: rng.next_f64() * std::f64::consts::TAU,
+    }
+}
+
+fn create_map_collision(seed: u64) -> Vec<MapBox> {
+    let mut boxes = Vec::with_capacity(MAP_PILLAR_COUNT);
+    let mut rng = SeededRng::new(seed ^ 0x9E37_79B9);
+    for _ in 0..MAP_PILLAR_COUNT {
+        let w = 1.0 + rng.next_f64() * 3.0;
+        let d = 1.0 + rng.next_f64() * 3.0;
+        let x = (rng.next_f64() - 0.5) * 220.0;
+        let z = (rng.next_f64() - 0.5) * 220.0;
+        boxes.push(MapBox {
+            min_x: x - (w / 2.0),
+            max_x: x + (w / 2.0),
+            min_z: z - (d / 2.0),
+            max_z: z + (d / 2.0),
+        });
+    }
+    boxes
+}
+
+fn map_boundary_radius(profile: &MapProfile, theta: f64) -> f64 {
+    let wave_a = ((theta * profile.freq1) + profile.phase1).sin() * profile.amp1;
+    let wave_b = ((theta * profile.freq2) + profile.phase2).sin() * profile.amp2;
+    let wave_c = ((theta * profile.freq3) + profile.phase3).cos() * profile.amp3;
+    clamp(
+        1.0 + wave_a + wave_b + wave_c,
+        MAP_BOUNDARY_MIN_RADIUS,
+        MAP_BOUNDARY_MAX_RADIUS,
+    )
+}
+
+fn is_inside_map_bounds(profile: &MapProfile, x: f64, z: f64, padding: f64) -> bool {
+    let theta = (z / profile.axis_z.max(1.0)).atan2(x / profile.axis_x.max(1.0));
+    let boundary = map_boundary_radius(profile, theta);
+    let norm = ((x * x) / (profile.axis_x * profile.axis_x)
+        + (z * z) / (profile.axis_z * profile.axis_z))
+        .sqrt();
+    let normalized_padding = padding / profile.axis_x.min(profile.axis_z).max(1.0);
+    norm <= (boundary - normalized_padding)
+}
+
+struct SeededRng {
+    state: u64,
+}
+
+impl SeededRng {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed ^ 0xD1B5_4A32_D192_ED03,
+        }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (self.state >> 32) as u32
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u32() as f64) / (u32::MAX as f64)
+    }
 }
 
 fn positive_seed(seed: u64) -> i64 {
