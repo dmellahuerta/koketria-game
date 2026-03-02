@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -181,6 +181,10 @@ const LAG_COMP_MAGIC_MS: i64 = 150;
 const LAG_COMP_RTT_FACTOR: f64 = 0.35;
 const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
+const SPECIAL_HIT_DAMAGE: f64 = 17.0;
+const LUNAR_STRIKE_AOE_RADIUS: f64 = 4.2;
+const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 4.2;
+const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -940,110 +944,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       }
                     }),
                 );
-
-                let mut died = false;
-                let (health, shield) = {
-                    let Some(victim) = inner.clients.get_mut(&victim_id) else {
-                        return;
-                    };
-                    if !victim.combat.alive {
-                        return;
-                    }
-                    if victim.combat.shield > 0.0 {
-                        let reduced = (HIT_DAMAGE * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
-                        let shield_cost = (HIT_DAMAGE * SHIELD_DAMAGE_COST_FACTOR).ceil();
-                        victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
-                        victim.combat.health = (victim.combat.health - reduced).max(0.0);
-                    } else {
-                        victim.combat.health = (victim.combat.health - HIT_DAMAGE).max(0.0);
-                    }
-                    victim.combat.pending_health_regen = 0.0;
-                    if victim.combat.health <= 0.0 {
-                        victim.combat.alive = false;
-                        died = true;
-                    }
-                    (victim.combat.health, victim.combat.shield)
-                };
-
-                inner.send_to(
-                    &victim_id,
-                    json!({
-                      "type":"player_damage",
-                      "ok": true,
-                      "data": {
-                        "fromPlayerId": client_id,
-                        "headshot": headshot,
-                        "health": health,
-                        "shield": shield,
-                        "ts": now_ms()
-                      }
-                    }),
+                let winner = apply_hit_and_emit(
+                    &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
                 );
-
-                if died {
-                    if let Some(victim) = inner.clients.get_mut(&victim_id) {
-                        victim.deaths += 1;
-                    }
-                    let mut killer_kills = 0;
-                    if let Some(killer) = inner.clients.get_mut(client_id) {
-                        killer.kills += 1;
-                        killer_kills = killer.kills;
-                    }
-
-                    inner.broadcast_room(
-                        &room_id,
-                        json!({
-                          "type":"player_death",
-                          "ok": true,
-                          "data": {
-                            "playerId": victim_id,
-                            "killerId": client_id,
-                            "headshot": headshot,
-                            "ts": now_ms()
-                          }
-                        }),
-                        None,
-                    );
-                    if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
-                        maybe_resolve_match_winner(&inner, &room_id, client_id, killer_kills)
-                    {
-                        if let Some(room) = inner.rooms.rooms.get_mut(&room_id) {
-                            room.status = RoomStatus::Cooldown;
-                        }
-                        inner.broadcast_room(
-                            &room_id,
-                            json!({
-                              "type":"game_state",
-                              "ok": true,
-                              "data": game_state_payload(&inner, &room_id)
-                            }),
-                            None,
-                        );
-                        inner.broadcast_room(
-                            &room_id,
-                            json!({
-                              "type":"match_winner",
-                              "ok": true,
-                              "data": {
-                                "winner": winner_payload,
-                                "winnerTeam": winner_team,
-                                "winnerScore": winner_score,
-                                "killsToWin": kills_to_win,
-                                "countdownSeconds": ROUND_RESET_SECONDS
-                              }
-                            }),
-                            None,
-                        );
-                        inner.broadcast_room_state(&room_id);
-                        inner.broadcast_rooms_list_all();
-                        tokio::spawn(schedule_match_reset(
-                            Arc::clone(state),
-                            room_id.clone(),
-                            ROUND_RESET_SECONDS as u64,
-                        ));
-                    } else {
-                        inner.broadcast_room_state(&room_id);
-                    }
+                if winner {
+                    tokio::spawn(schedule_match_reset(
+                        Arc::clone(state),
+                        room_id.clone(),
+                        ROUND_RESET_SECONDS as u64,
+                    ));
                 }
             }
         }
@@ -1078,6 +987,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let mut strikes = Vec::new();
+            let mut impacts = Vec::new();
             for i in 0..8 {
                 let t = (i as f64) / 8.0;
                 let angle = t * std::f64::consts::TAU;
@@ -1096,6 +1006,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "start": { "x": start.x, "y": start.y, "z": start.z },
                   "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
                 }));
+                impacts.push(impact);
             }
             inner.broadcast_room(
                 &room_id,
@@ -1110,6 +1021,54 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
                 None,
             );
+            let mut hit_once = HashSet::new();
+            let mut winner = false;
+            let room_players: Vec<String> = inner
+                .rooms
+                .rooms
+                .get(&room_id)
+                .map(|r| r.players.iter().cloned().collect())
+                .unwrap_or_default();
+            for impact in &impacts {
+                for victim_id in &room_players {
+                    if victim_id == client_id || hit_once.contains(victim_id) {
+                        continue;
+                    }
+                    if is_friendly_fire_blocked(&inner, &room_id, client_id, victim_id) {
+                        continue;
+                    }
+                    let Some(victim) = inner.clients.get(victim_id) else {
+                        continue;
+                    };
+                    if !victim.combat.alive {
+                        continue;
+                    }
+                    let dx = victim.state.position.x - impact.x;
+                    let dz = victim.state.position.z - impact.z;
+                    if (dx * dx + dz * dz).sqrt() > LUNAR_STRIKE_AOE_RADIUS {
+                        continue;
+                    }
+                    hit_once.insert(victim_id.clone());
+                    if apply_hit_and_emit(
+                        &mut inner,
+                        &room_id,
+                        client_id,
+                        victim_id,
+                        false,
+                        SPECIAL_HIT_DAMAGE,
+                        now_ms(),
+                    ) {
+                        winner = true;
+                    }
+                }
+            }
+            if winner {
+                tokio::spawn(schedule_match_reset(
+                    Arc::clone(state),
+                    room_id.clone(),
+                    ROUND_RESET_SECONDS as u64,
+                ));
+            }
         }
         "player_special_silent_cone" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1165,6 +1124,58 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
                 None,
             );
+            let mut hit_once = HashSet::new();
+            let now_hit = now_ms();
+            for ray in &rays {
+                let dir = ray.get("direction");
+                let Some(direction) = normalize_vec3(Vec3 {
+                    x: dir
+                        .and_then(|v| v.get("x"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    y: dir
+                        .and_then(|v| v.get("y"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    z: dir
+                        .and_then(|v| v.get("z"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                }) else {
+                    continue;
+                };
+                let Some((victim_id, _headshot, _dist)) = find_best_hit(
+                    &inner,
+                    &room_id,
+                    client_id,
+                    &origin,
+                    &direction,
+                    SILENT_SPECIAL_MAX_DISTANCE,
+                    now_hit - LAG_COMP_MAGIC_MS,
+                ) else {
+                    continue;
+                };
+                if hit_once.contains(&victim_id) {
+                    continue;
+                }
+                hit_once.insert(victim_id.clone());
+                if apply_hit_and_emit(
+                    &mut inner,
+                    &room_id,
+                    client_id,
+                    &victim_id,
+                    false,
+                    SPECIAL_HIT_DAMAGE,
+                    now_hit,
+                ) {
+                    tokio::spawn(schedule_match_reset(
+                        Arc::clone(state),
+                        room_id.clone(),
+                        ROUND_RESET_SECONDS as u64,
+                    ));
+                    break;
+                }
+            }
         }
         "player_special_neoorphen_meteor" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1197,6 +1208,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let mut strikes = Vec::new();
+            let mut impacts = Vec::new();
             for i in 0..12 {
                 let t = (i as f64) / 12.0;
                 let angle = t * std::f64::consts::TAU;
@@ -1215,6 +1227,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "start": { "x": start.x, "y": start.y, "z": start.z },
                   "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
                 }));
+                impacts.push(impact);
             }
             inner.broadcast_room(
                 &room_id,
@@ -1229,6 +1242,54 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
                 None,
             );
+            let mut hit_once = HashSet::new();
+            let mut winner = false;
+            let room_players: Vec<String> = inner
+                .rooms
+                .rooms
+                .get(&room_id)
+                .map(|r| r.players.iter().cloned().collect())
+                .unwrap_or_default();
+            for impact in &impacts {
+                for victim_id in &room_players {
+                    if victim_id == client_id || hit_once.contains(victim_id) {
+                        continue;
+                    }
+                    if is_friendly_fire_blocked(&inner, &room_id, client_id, victim_id) {
+                        continue;
+                    }
+                    let Some(victim) = inner.clients.get(victim_id) else {
+                        continue;
+                    };
+                    if !victim.combat.alive {
+                        continue;
+                    }
+                    let dx = victim.state.position.x - impact.x;
+                    let dz = victim.state.position.z - impact.z;
+                    if (dx * dx + dz * dz).sqrt() > NEOORPHEN_STRIKE_AOE_RADIUS {
+                        continue;
+                    }
+                    hit_once.insert(victim_id.clone());
+                    if apply_hit_and_emit(
+                        &mut inner,
+                        &room_id,
+                        client_id,
+                        victim_id,
+                        false,
+                        SPECIAL_HIT_DAMAGE,
+                        now_ms(),
+                    ) {
+                        winner = true;
+                    }
+                }
+            }
+            if winner {
+                tokio::spawn(schedule_match_reset(
+                    Arc::clone(state),
+                    room_id.clone(),
+                    ROUND_RESET_SECONDS as u64,
+                ));
+            }
         }
         "player_special_pumori_orbit" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1689,6 +1750,124 @@ fn maybe_resolve_match_winner(
             ))
         }
     }
+}
+
+fn apply_hit_and_emit(
+    inner: &mut Inner,
+    room_id: &str,
+    attacker_id: &str,
+    victim_id: &str,
+    headshot: bool,
+    base_damage: f64,
+    ts: i64,
+) -> bool {
+    let mut died = false;
+    let (health, shield) = {
+        let Some(victim) = inner.clients.get_mut(victim_id) else {
+            return false;
+        };
+        if !victim.combat.alive {
+            return false;
+        }
+        if headshot {
+            victim.combat.health = 0.0;
+        } else if victim.combat.shield > 0.0 {
+            let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
+            let shield_cost = (base_damage * SHIELD_DAMAGE_COST_FACTOR).ceil();
+            victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
+            victim.combat.health = (victim.combat.health - reduced).max(0.0);
+        } else {
+            victim.combat.health = (victim.combat.health - base_damage).max(0.0);
+        }
+        victim.combat.pending_health_regen = 0.0;
+        if victim.combat.health <= 0.0 {
+            victim.combat.alive = false;
+            died = true;
+        }
+        (victim.combat.health, victim.combat.shield)
+    };
+
+    inner.send_to(
+        victim_id,
+        json!({
+          "type":"player_damage",
+          "ok": true,
+          "data": {
+            "fromPlayerId": attacker_id,
+            "headshot": headshot,
+            "health": health,
+            "shield": shield,
+            "ts": ts
+          }
+        }),
+    );
+
+    if !died {
+        inner.broadcast_room_state(room_id);
+        return false;
+    }
+
+    if let Some(victim) = inner.clients.get_mut(victim_id) {
+        victim.deaths += 1;
+    }
+    let mut killer_kills = 0;
+    if let Some(killer) = inner.clients.get_mut(attacker_id) {
+        killer.kills += 1;
+        killer_kills = killer.kills;
+    }
+
+    inner.broadcast_room(
+        room_id,
+        json!({
+          "type":"player_death",
+          "ok": true,
+          "data": {
+            "playerId": victim_id,
+            "killerId": attacker_id,
+            "headshot": headshot,
+            "ts": ts
+          }
+        }),
+        None,
+    );
+
+    if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
+        maybe_resolve_match_winner(inner, room_id, attacker_id, killer_kills)
+    {
+        if let Some(room) = inner.rooms.rooms.get_mut(room_id) {
+            room.status = RoomStatus::Cooldown;
+        }
+        inner.broadcast_room(
+            room_id,
+            json!({
+              "type":"game_state",
+              "ok": true,
+              "data": game_state_payload(inner, room_id)
+            }),
+            None,
+        );
+        inner.broadcast_room(
+            room_id,
+            json!({
+              "type":"match_winner",
+              "ok": true,
+              "data": {
+                "winner": winner_payload,
+                "winnerTeam": winner_team,
+                "winnerScore": winner_score,
+                "killsToWin": kills_to_win,
+                "countdownSeconds": ROUND_RESET_SECONDS
+              }
+            }),
+            None,
+        );
+        inner.broadcast_room_state(room_id);
+        inner.broadcast_rooms_list_all();
+        return true;
+    }
+
+    inner.broadcast_room_state(room_id);
+    false
 }
 
 async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
