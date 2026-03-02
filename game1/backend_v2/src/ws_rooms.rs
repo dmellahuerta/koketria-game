@@ -6,11 +6,14 @@ use std::{
 
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
-use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, mpsc};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, info, warn};
 
-use crate::rooms::{JoinError, RoomManager, RoomMode, StartValidationError, Team, VersusType};
+use crate::rooms::{
+    JoinError, RoomManager, RoomMode, RoomStatus, StartValidationError, Team, VersusType,
+};
 
 pub struct WsRoomsState {
     inner: Mutex<Inner>,
@@ -31,6 +34,8 @@ struct ClientSession {
     state: PlayerState,
     state_ts: i64,
     combat: CombatState,
+    kills: i64,
+    deaths: i64,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -102,6 +107,10 @@ const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const SILENT_SPECIAL_COOLDOWN_MS: i64 = 15_000;
 const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const PUMORI_SPECIAL_COOLDOWN_MS: i64 = 30_000;
+const FFA_KILLS_TO_WIN: i64 = 20;
+const VERSUS_1V1_KILLS_TO_WIN: i64 = 10;
+const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
+const ROUND_RESET_SECONDS: i64 = 10;
 
 impl Inner {
     fn send_to(&self, client_id: &str, payload: Value) {
@@ -154,13 +163,17 @@ impl Inner {
           "character": client.character,
           "team": team,
           "ready": ready,
-          "kills": 0,
-          "deaths": 0,
+          "kills": client.kills,
+          "deaths": client.deaths,
           "health": client.combat.health.round() as i64,
           "shield": client.combat.shield.round() as i64,
           "mana": client.combat.mana.round() as i64,
           "alive": client.combat.alive,
-          "lunarRainCooldownMs": 0,
+          "lunarRainCooldownMs": current_special_cooldown_remaining_ms(
+            &client.combat,
+            client.character.as_deref(),
+            now_ms()
+          ),
           "pendingHealthRegen": client.combat.pending_health_regen,
           "state": player_state_json(&client.state),
           "ts": client.state_ts
@@ -240,6 +253,8 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 state: initial_state.clone(),
                 state_ts: now_ms(),
                 combat: default_combat_state(),
+                kills: 0,
+                deaths: 0,
                 tx: out_tx.clone(),
             },
         );
@@ -291,7 +306,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             }
         };
         if let Some(event_type) = parsed.get("type").and_then(Value::as_str) {
-            debug!("[ws_rooms] recv client_id={} event={}", client_id, event_type);
+            debug!(
+                "[ws_rooms] recv client_id={} event={}",
+                client_id, event_type
+            );
         }
         process_message(&state, &client_id, parsed).await;
     }
@@ -477,7 +495,10 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let ready = message.get("ready").and_then(Value::as_bool).unwrap_or(false);
+            let ready = message
+                .get("ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if inner.rooms.set_ready(&room_id, client_id, ready) {
                 inner.broadcast_room_state(&room_id);
             }
@@ -520,9 +541,10 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     Ok(()) => {}
                     Err(err) => {
                         let (code, message) = match err {
-                            StartValidationError::MissingVersusType => {
-                                ("VERSUS_TYPE_REQUIRED", "Debes elegir 1v1 o 2v2 antes de iniciar")
-                            }
+                            StartValidationError::MissingVersusType => (
+                                "VERSUS_TYPE_REQUIRED",
+                                "Debes elegir 1v1 o 2v2 antes de iniciar",
+                            ),
                             StartValidationError::NotEnoughPlayers => {
                                 ("NOT_ENOUGH_PLAYERS", "No hay suficientes jugadores")
                             }
@@ -547,9 +569,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             }
             if let Some(room) = inner.rooms.rooms.get_mut(&room_id) {
                 room.status = if event_type == "start_game" {
-                    crate::rooms::RoomStatus::InGame
+                    RoomStatus::InGame
                 } else {
-                    crate::rooms::RoomStatus::Finished
+                    RoomStatus::Finished
                 };
             }
             if let Some(summary) = inner.room_summary_json(&room_id) {
@@ -635,14 +657,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             }
             let origin = message.get("origin");
             let direction = message.get("direction");
-            let (
-                Some(ox),
-                Some(oy),
-                Some(oz),
-                Some(dx),
-                Some(dy),
-                Some(dz),
-            ) = (
+            let (Some(ox), Some(oy), Some(oz), Some(dx), Some(dy), Some(dz)) = (
                 origin.and_then(|v| v.get("x")).and_then(Value::as_f64),
                 origin.and_then(|v| v.get("y")).and_then(Value::as_f64),
                 origin.and_then(|v| v.get("z")).and_then(Value::as_f64),
@@ -652,10 +667,21 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             ) else {
                 return;
             };
-            let distance = message.get("distance").and_then(Value::as_f64).unwrap_or(100.0);
+            let distance = message
+                .get("distance")
+                .and_then(Value::as_f64)
+                .unwrap_or(100.0);
             let distance = clamp(distance, 0.0, 300.0);
-            let origin = Vec3 { x: ox, y: oy, z: oz };
-            let direction = normalize_vec3(Vec3 { x: dx, y: dy, z: dz });
+            let origin = Vec3 {
+                x: ox,
+                y: oy,
+                z: oz,
+            };
+            let direction = normalize_vec3(Vec3 {
+                x: dx,
+                y: dy,
+                z: dz,
+            });
             let Some(direction) = direction else {
                 return;
             };
@@ -731,6 +757,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 );
 
                 if died {
+                    if let Some(victim) = inner.clients.get_mut(&victim_id) {
+                        victim.deaths += 1;
+                    }
+                    let mut killer_kills = 0;
+                    if let Some(killer) = inner.clients.get_mut(client_id) {
+                        killer.kills += 1;
+                        killer_kills = killer.kills;
+                    }
+
                     inner.broadcast_room(
                         &room_id,
                         json!({
@@ -745,7 +780,46 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         }),
                         None,
                     );
-                    inner.broadcast_room_state(&room_id);
+                    if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
+                        maybe_resolve_match_winner(&inner, &room_id, client_id, killer_kills)
+                    {
+                        if let Some(room) = inner.rooms.rooms.get_mut(&room_id) {
+                            room.status = RoomStatus::Cooldown;
+                        }
+                        inner.broadcast_room(
+                            &room_id,
+                            json!({
+                              "type":"game_state",
+                              "ok": true,
+                              "data": game_state_payload(&inner, &room_id)
+                            }),
+                            None,
+                        );
+                        inner.broadcast_room(
+                            &room_id,
+                            json!({
+                              "type":"match_winner",
+                              "ok": true,
+                              "data": {
+                                "winner": winner_payload,
+                                "winnerTeam": winner_team,
+                                "winnerScore": winner_score,
+                                "killsToWin": kills_to_win,
+                                "countdownSeconds": ROUND_RESET_SECONDS
+                              }
+                            }),
+                            None,
+                        );
+                        inner.broadcast_room_state(&room_id);
+                        inner.broadcast_rooms_list_all();
+                        tokio::spawn(schedule_match_reset(
+                            Arc::clone(state),
+                            room_id.clone(),
+                            ROUND_RESET_SECONDS as u64,
+                        ));
+                    } else {
+                        inner.broadcast_room_state(&room_id);
+                    }
                 }
             }
         }
@@ -952,7 +1026,10 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 if can_cast {
                     entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
                 }
-                (can_cast, player_resources_payload(&entry.combat, entry.character.as_deref(), now))
+                (
+                    can_cast,
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                )
             };
             inner.send_to(client_id, payload);
             if !allow_cast {
@@ -1024,10 +1101,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 if !entry.combat.alive {
                     return;
                 }
-                let recoverable =
-                    (MAX_HEALTH - (entry.combat.health + entry.combat.pending_health_regen)).max(0.0);
+                let recoverable = (MAX_HEALTH
+                    - (entry.combat.health + entry.combat.pending_health_regen))
+                    .max(0.0);
                 if recoverable > 0.0001 {
-                    entry.combat.pending_health_regen += HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
+                    entry.combat.pending_health_regen +=
+                        HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
                 }
                 player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
             };
@@ -1056,24 +1135,26 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
 
             let position = message.get("position");
             let rotation = message.get("rotation");
-            let (
-                Some(px),
-                Some(py),
-                Some(pz),
-                Some(yaw),
-                Some(pitch),
-            ) = (
+            let (Some(px), Some(py), Some(pz), Some(yaw), Some(pitch)) = (
                 position.and_then(|v| v.get("x")).and_then(Value::as_f64),
                 position.and_then(|v| v.get("y")).and_then(Value::as_f64),
                 position.and_then(|v| v.get("z")).and_then(Value::as_f64),
                 rotation.and_then(|v| v.get("yaw")).and_then(Value::as_f64),
-                rotation.and_then(|v| v.get("pitch")).and_then(Value::as_f64),
+                rotation
+                    .and_then(|v| v.get("pitch"))
+                    .and_then(Value::as_f64),
             ) else {
                 return;
             };
 
-            let jumping = message.get("jumping").and_then(Value::as_bool).unwrap_or(false);
-            let moving = message.get("moving").and_then(Value::as_bool).unwrap_or(false);
+            let jumping = message
+                .get("jumping")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let moving = message
+                .get("moving")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
 
             let next_state = PlayerState {
                 position: Vec3 {
@@ -1082,7 +1163,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     z: clamp(pz, -200.0, 200.0),
                 },
                 rotation: Rotation {
-                    yaw: clamp(yaw, -std::f64::consts::PI * 100.0, std::f64::consts::PI * 100.0),
+                    yaw: clamp(
+                        yaw,
+                        -std::f64::consts::PI * 100.0,
+                        std::f64::consts::PI * 100.0,
+                    ),
                     pitch: clamp(
                         pitch,
                         -std::f64::consts::FRAC_PI_2,
@@ -1147,7 +1232,9 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
             let (code, message) = match err {
                 JoinError::RoomNotFound => ("ROOM_NOT_FOUND", "Sala no encontrada"),
                 JoinError::RoomFull => ("ROOM_FULL", "La sala alcanzo el maximo de jugadores"),
-                JoinError::MatchAlreadyStarted => ("MATCH_ALREADY_STARTED", "La partida versus ya inicio"),
+                JoinError::MatchAlreadyStarted => {
+                    ("MATCH_ALREADY_STARTED", "La partida versus ya inicio")
+                }
             };
             inner.send_to(
                 client_id,
@@ -1162,9 +1249,15 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     }
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = Some(room_id.to_string());
+        client.kills = 0;
+        client.deaths = 0;
+        client.combat = default_combat_state();
     }
     if let Some(state) = inner.room_state_json(room_id) {
-        inner.send_to(client_id, json!({ "type": "room_joined", "ok": true, "data": state }));
+        inner.send_to(
+            client_id,
+            json!({ "type": "room_joined", "ok": true, "data": state }),
+        );
     }
     if let Some(player) = inner.player_json(room_id, client_id) {
         inner.broadcast_room(
@@ -1184,7 +1277,10 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
 fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool) {
     let Some(room_id) = inner.clients.get(client_id).and_then(|c| c.room_id.clone()) else {
         if send_left_room {
-            inner.send_to(client_id, json!({ "type": "left_room", "ok": true, "data": Value::Null }));
+            inner.send_to(
+                client_id,
+                json!({ "type": "left_room", "ok": true, "data": Value::Null }),
+            );
         }
         return;
     };
@@ -1204,8 +1300,172 @@ fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool)
     inner.broadcast_room_state(&room_id);
     inner.broadcast_rooms_list_all();
     if send_left_room {
-        inner.send_to(client_id, json!({ "type": "left_room", "ok": true, "data": Value::Null }));
+        inner.send_to(
+            client_id,
+            json!({ "type": "left_room", "ok": true, "data": Value::Null }),
+        );
     }
+}
+
+fn game_state_payload(inner: &Inner, room_id: &str) -> Value {
+    if let Some(summary) = inner.room_summary_json(room_id) {
+        return json!({
+          "roomId": summary.get("id").cloned().unwrap_or(Value::Null),
+          "status": summary.get("status").cloned().unwrap_or(Value::Null),
+          "hostId": summary.get("hostId").cloned().unwrap_or(Value::Null),
+          "mode": summary.get("mode").cloned().unwrap_or(Value::Null),
+          "versusType": summary.get("versusType").cloned().unwrap_or(Value::Null),
+          "requiredPlayers": summary.get("requiredPlayers").cloned().unwrap_or(Value::Null),
+          "maxPlayers": summary.get("maxPlayers").cloned().unwrap_or(Value::Null),
+          "weather": summary.get("weather").cloned().unwrap_or(Value::Null),
+          "battleTheme": summary.get("battleTheme").cloned().unwrap_or(Value::Null)
+        });
+    }
+    json!({
+      "roomId": room_id,
+      "status": "waiting",
+      "hostId": Value::Null,
+      "mode": "freeforall",
+      "versusType": Value::Null,
+      "requiredPlayers": 0,
+      "maxPlayers": 0,
+      "weather": "night",
+      "battleTheme": "battle1"
+    })
+}
+
+fn kills_to_win_for_room(inner: &Inner, room_id: &str) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return FFA_KILLS_TO_WIN;
+    };
+    match (room.mode, room.versus_type) {
+        (RoomMode::VersusMatch, Some(VersusType::OneVsOne)) => VERSUS_1V1_KILLS_TO_WIN,
+        (RoomMode::VersusMatch, Some(VersusType::TwoVsTwo)) => VERSUS_2V2_KILLS_TO_WIN,
+        _ => FFA_KILLS_TO_WIN,
+    }
+}
+
+fn team_kills(inner: &Inner, room_id: &str, team: Team) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return 0;
+    };
+    let mut total = 0;
+    for player_id in &room.players {
+        if room.teams.get(player_id).copied() != Some(team) {
+            continue;
+        }
+        if let Some(client) = inner.clients.get(player_id) {
+            total += client.kills;
+        }
+    }
+    total
+}
+
+fn maybe_resolve_match_winner(
+    inner: &Inner,
+    room_id: &str,
+    killer_id: &str,
+    killer_kills: i64,
+) -> Option<(Value, Value, i64, i64)> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    let kills_to_win = kills_to_win_for_room(inner, room_id);
+    let killer = inner.clients.get(killer_id);
+
+    match room.mode {
+        RoomMode::FreeForAll => {
+            if killer_kills < kills_to_win {
+                return None;
+            }
+            let winner = if let Some(c) = killer {
+                json!({
+                  "id": c.id,
+                  "name": c.name,
+                  "character": c.character
+                })
+            } else {
+                json!({
+                  "id": killer_id,
+                  "name": "Desconocido",
+                  "character": Value::Null
+                })
+            };
+            Some((winner, Value::Null, killer_kills, kills_to_win))
+        }
+        RoomMode::VersusMatch => {
+            let Some(winner_team) = room.teams.get(killer_id).copied() else {
+                return None;
+            };
+            let winner_score = team_kills(inner, room_id, winner_team);
+            if winner_score < kills_to_win {
+                return None;
+            }
+            let winner = if let Some(c) = killer {
+                json!({
+                  "id": c.id,
+                  "name": c.name,
+                  "character": c.character,
+                  "team": winner_team.as_wire()
+                })
+            } else {
+                json!({
+                  "id": killer_id,
+                  "name": "Desconocido",
+                  "character": Value::Null,
+                  "team": winner_team.as_wire()
+                })
+            };
+            Some((
+                winner,
+                json!(winner_team.as_wire()),
+                winner_score,
+                kills_to_win,
+            ))
+        }
+    }
+}
+
+async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
+    sleep(Duration::from_secs(seconds)).await;
+
+    let mut inner = state.inner.lock().await;
+    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+        return;
+    };
+    if room.status != RoomStatus::Cooldown {
+        return;
+    }
+    let player_ids: Vec<String> = room.players.iter().cloned().collect();
+    if let Some(room_mut) = inner.rooms.rooms.get_mut(&room_id) {
+        room_mut.status = RoomStatus::InGame;
+    }
+    for player_id in player_ids {
+        if let Some(client) = inner.clients.get_mut(&player_id) {
+            client.kills = 0;
+            client.deaths = 0;
+            client.combat = default_combat_state();
+        }
+    }
+
+    inner.broadcast_room(
+        &room_id,
+        json!({
+          "type":"game_state",
+          "ok": true,
+          "data": game_state_payload(&inner, &room_id)
+        }),
+        None,
+    );
+    inner.broadcast_room(
+        &room_id,
+        json!({
+          "type":"match_reset",
+          "ok": true,
+          "data": { "roomId": room_id }
+        }),
+        None,
+    );
+    inner.broadcast_room_state(&room_id);
+    inner.broadcast_rooms_list_all();
 }
 
 fn default_player_state() -> PlayerState {
@@ -1215,7 +1475,10 @@ fn default_player_state() -> PlayerState {
             y: 1.7,
             z: 0.0,
         },
-        rotation: Rotation { yaw: 0.0, pitch: 0.0 },
+        rotation: Rotation {
+            yaw: 0.0,
+            pitch: 0.0,
+        },
         jumping: false,
         moving: false,
     }
@@ -1282,7 +1545,11 @@ fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_m
     })
 }
 
-fn current_special_cooldown_remaining_ms(combat: &CombatState, character: Option<&str>, now_ms_v: i64) -> i64 {
+fn current_special_cooldown_remaining_ms(
+    combat: &CombatState,
+    character: Option<&str>,
+    now_ms_v: i64,
+) -> i64 {
     let key = normalize_character(character);
     let until = match key.as_str() {
         "silentman" => combat.silent_cd_until_ms,
@@ -1354,7 +1621,13 @@ fn distance_sq(a: &Vec3, b: &Vec3) -> f64 {
     dx * dx + dy * dy + dz * dz
 }
 
-fn ray_hit_sphere(origin: &Vec3, direction_norm: &Vec3, center: &Vec3, radius: f64, max_distance: f64) -> Option<f64> {
+fn ray_hit_sphere(
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    center: &Vec3,
+    radius: f64,
+    max_distance: f64,
+) -> Option<f64> {
     let to_center = sub(center, origin);
     let projection = dot(&to_center, direction_norm);
     if projection < 0.0 || projection > max_distance {
@@ -1372,7 +1645,12 @@ fn ray_hit_sphere(origin: &Vec3, direction_norm: &Vec3, center: &Vec3, radius: f
     }
 }
 
-fn is_friendly_fire_blocked(inner: &Inner, room_id: &str, attacker_id: &str, victim_id: &str) -> bool {
+fn is_friendly_fire_blocked(
+    inner: &Inner,
+    room_id: &str,
+    attacker_id: &str,
+    victim_id: &str,
+) -> bool {
     let Some(room) = inner.rooms.rooms.get(room_id) else {
         return false;
     };
@@ -1420,10 +1698,22 @@ fn find_best_hit(
         };
 
         let mut candidate_hit: Option<(bool, f64)> = None;
-        if let Some(head_dist) = ray_hit_sphere(origin, direction_norm, &head_center, HEADSHOT_RADIUS, max_distance) {
+        if let Some(head_dist) = ray_hit_sphere(
+            origin,
+            direction_norm,
+            &head_center,
+            HEADSHOT_RADIUS,
+            max_distance,
+        ) {
             candidate_hit = Some((true, head_dist));
         }
-        if let Some(body_dist) = ray_hit_sphere(origin, direction_norm, &body_center, BODYSHOT_RADIUS, max_distance) {
+        if let Some(body_dist) = ray_hit_sphere(
+            origin,
+            direction_norm,
+            &body_center,
+            BODYSHOT_RADIUS,
+            max_distance,
+        ) {
             match candidate_hit {
                 Some((_is_head, cur)) if body_dist < cur => {
                     candidate_hit = Some((false, body_dist));
