@@ -1496,6 +1496,10 @@ button:disabled {
   padding: 16px;
 }
 
+.mobile-fullscreen-prompt.hidden {
+  display: none;
+}
+
 .mobile-fullscreen-card {
   width: min(92vw, 360px);
   border: 1px solid rgba(112, 255, 112, 0.45);
