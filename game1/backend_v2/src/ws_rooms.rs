@@ -103,6 +103,7 @@ struct CombatState {
     pending_health_regen: f64,
     last_health_regen_at: i64,
     last_mana_regen_at: i64,
+    last_shot_at: i64,
     alive: bool,
     lunar_cd_until_ms: i64,
     silent_cd_until_ms: i64,
@@ -162,6 +163,11 @@ const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
+const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
+const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
+const MANA_COST_PER_SHOT: f64 = 34.0;
+const MAX_ORIGIN_DRIFT: f64 = 2.8;
+const MAX_AIM_ANGLE_DELTA_DEG: f64 = 95.0;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -752,6 +758,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if room.status.as_wire() != "in_game" {
                 return;
             }
+            let now = now_ms();
             let origin = message.get("origin");
             let direction = message.get("direction");
             let (Some(ox), Some(oy), Some(oz), Some(dx), Some(dy), Some(dz)) = (
@@ -769,17 +776,84 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .and_then(Value::as_f64)
                 .unwrap_or(100.0);
             let distance = clamp(distance, 0.0, 300.0);
-            let origin = Vec3 {
-                x: ox,
-                y: oy,
-                z: oz,
+            let reported_origin = Vec3 {
+                x: clamp(ox, -250.0, 250.0),
+                y: clamp(oy, 0.0, 10.0),
+                z: clamp(oz, -250.0, 250.0),
             };
-            let direction = normalize_vec3(Vec3 {
-                x: dx,
-                y: dy,
-                z: dz,
+            let reported_direction = normalize_vec3(Vec3 {
+                x: clamp(dx, -1.0, 1.0),
+                y: clamp(dy, -1.0, 1.0),
+                z: clamp(dz, -1.0, 1.0),
             });
-            let Some(direction) = direction else {
+            let Some(reported_direction) = reported_direction else {
+                return;
+            };
+            let mut maybe_resources_payload: Option<Value> = None;
+            let mut shot_blocked = false;
+            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>)> = None;
+            {
+                let Some(shooter) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                update_combat_regen(&mut shooter.combat, now);
+                if !shooter.combat.alive {
+                    return;
+                }
+                let shot_interval = get_shot_interval_ms(shooter.character.as_deref());
+                let elapsed = now - shooter.combat.last_shot_at;
+                if elapsed < shot_interval {
+                    return;
+                }
+                let is_mana = is_mana_character(shooter.character.as_deref());
+                if is_mana {
+                    if shooter.combat.mana + 0.0001 < MANA_COST_PER_SHOT {
+                        maybe_resources_payload = Some(player_resources_payload(
+                            &shooter.combat,
+                            shooter.character.as_deref(),
+                            now,
+                        ));
+                        shot_blocked = true;
+                    } else {
+                        shooter.combat.mana = (shooter.combat.mana - MANA_COST_PER_SHOT).max(0.0);
+                        maybe_resources_payload = Some(player_resources_payload(
+                            &shooter.combat,
+                            shooter.character.as_deref(),
+                            now,
+                        ));
+                    }
+                }
+                if !shot_blocked {
+                    shooter.combat.last_shot_at = now;
+                    let server_origin = server_eye_origin_from_state(&shooter.state);
+                    let origin = if distance_sq(&reported_origin, &server_origin).sqrt()
+                        <= MAX_ORIGIN_DRIFT
+                    {
+                        reported_origin.clone()
+                    } else {
+                        server_origin
+                    };
+                    let server_direction =
+                        server_aim_direction_from_rotation(&shooter.state.rotation);
+                    let direction = match server_direction {
+                        Some(server_dir)
+                            if angle_between_degrees(&reported_direction, &server_dir)
+                                > MAX_AIM_ANGLE_DELTA_DEG =>
+                        {
+                            server_dir
+                        }
+                        _ => reported_direction.clone(),
+                    };
+                    prepared_shot = Some((origin, direction, shooter.character.clone()));
+                }
+            }
+            if let Some(payload) = maybe_resources_payload {
+                inner.send_to(client_id, payload);
+            }
+            if shot_blocked {
+                return;
+            }
+            let Some((origin, direction, character_for_shot)) = prepared_shot else {
                 return;
             };
             let wall_hit_distance =
@@ -794,11 +868,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "ok": true,
                   "data": {
                     "playerId": client_id,
-                    "character": client.character,
-                    "origin": { "x": ox, "y": oy, "z": oz },
-                    "direction": { "x": dx, "y": dy, "z": dz },
+                    "character": character_for_shot,
+                    "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+                    "direction": { "x": direction.x, "y": direction.y, "z": direction.z },
                     "distance": effective_distance,
-                    "ts": now_ms()
+                    "ts": now
                   }
                 }),
                 None,
@@ -821,7 +895,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       "data": {
                         "victimId": victim_id,
                         "headshot": headshot,
-                        "ts": now_ms()
+                        "ts": now
                       }
                     }),
                 );
@@ -1825,6 +1899,7 @@ fn default_combat_state() -> CombatState {
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
+        last_shot_at: 0,
         alive: true,
         lunar_cd_until_ms: 0,
         silent_cd_until_ms: 0,
@@ -1899,6 +1974,45 @@ fn normalize_character(character: Option<&str>) -> String {
         .trim()
         .to_lowercase()
         .replace('ñ', "n")
+}
+
+fn is_mana_character(character: Option<&str>) -> bool {
+    matches!(
+        normalize_character(character).as_str(),
+        "silentman" | "silenmant" | "pumori" | "neoorphen" | "pezunalunar" | "pezuanalunar"
+    )
+}
+
+fn get_shot_interval_ms(character: Option<&str>) -> i64 {
+    if is_mana_character(character) {
+        MAGIC_ATTACK_INTERVAL_MS
+    } else {
+        BULLET_ATTACK_INTERVAL_MS
+    }
+}
+
+fn server_eye_origin_from_state(state: &PlayerState) -> Vec3 {
+    Vec3 {
+        x: clamp(state.position.x, -250.0, 250.0),
+        y: clamp(state.position.y, 0.5, 4.0),
+        z: clamp(state.position.z, -250.0, 250.0),
+    }
+}
+
+fn server_aim_direction_from_rotation(rotation: &Rotation) -> Option<Vec3> {
+    let yaw = rotation.yaw;
+    let pitch = rotation.pitch;
+    let cos_pitch = pitch.cos();
+    normalize_vec3(Vec3 {
+        x: -yaw.sin() * cos_pitch,
+        y: pitch.sin(),
+        z: -yaw.cos() * cos_pitch,
+    })
+}
+
+fn angle_between_degrees(a: &Vec3, b: &Vec3) -> f64 {
+    let d = clamp(dot(a, b), -1.0, 1.0);
+    d.acos().to_degrees()
 }
 
 fn player_state_json(state: &PlayerState) -> Value {
