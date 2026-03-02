@@ -54,6 +54,8 @@ struct MapProfile {
 struct MapBox {
     min_x: f64,
     max_x: f64,
+    min_y: f64,
+    max_y: f64,
     min_z: f64,
     max_z: f64,
 }
@@ -159,6 +161,7 @@ const MAP_AXIS_Z_BASE: f64 = 96.0;
 const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
+const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -779,6 +782,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(direction) = direction else {
                 return;
             };
+            let wall_hit_distance =
+                resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
+            let effective_distance = wall_hit_distance
+                .map(|d| d.min(distance))
+                .unwrap_or(distance);
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -789,14 +797,21 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "character": client.character,
                     "origin": { "x": ox, "y": oy, "z": oz },
                     "direction": { "x": dx, "y": dy, "z": dz },
-                    "distance": distance,
+                    "distance": effective_distance,
                     "ts": now_ms()
                   }
                 }),
                 None,
             );
 
-            let hit = find_best_hit(&inner, &room_id, client_id, &origin, &direction, distance);
+            let hit = find_best_hit(
+                &inner,
+                &room_id,
+                client_id,
+                &origin,
+                &direction,
+                effective_distance,
+            );
             if let Some((victim_id, headshot, _hit_dist)) = hit {
                 inner.send_to(
                     client_id,
@@ -2052,6 +2067,83 @@ fn find_best_hit(
     best
 }
 
+fn ray_aabb_intersection_t(
+    origin: &Vec3,
+    dir: &Vec3,
+    aabb: &MapBox,
+    max_distance: f64,
+) -> Option<f64> {
+    let mut tmin = 0.0;
+    let mut tmax = max_distance;
+    let epsilon = 1e-6;
+
+    let axes = [
+        (origin.x, dir.x, aabb.min_x, aabb.max_x),
+        (origin.y, dir.y, aabb.min_y, aabb.max_y),
+        (origin.z, dir.z, aabb.min_z, aabb.max_z),
+    ];
+
+    for (o, d, min, max) in axes {
+        if d.abs() < epsilon {
+            if o < min || o > max {
+                return None;
+            }
+            continue;
+        }
+
+        let inv_d = 1.0 / d;
+        let mut t1 = (min - o) * inv_d;
+        let mut t2 = (max - o) * inv_d;
+        if t1 > t2 {
+            std::mem::swap(&mut t1, &mut t2);
+        }
+        if t1 > tmin {
+            tmin = t1;
+        }
+        if t2 < tmax {
+            tmax = t2;
+        }
+        if tmax < tmin {
+            return None;
+        }
+    }
+
+    if tmin > max_distance {
+        return None;
+    }
+    if tmin >= 0.0 {
+        Some(tmin)
+    } else if tmax >= 0.0 {
+        Some(0.0)
+    } else {
+        None
+    }
+}
+
+fn resolve_wall_hit_distance(
+    inner: &Inner,
+    room_id: &str,
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    max_distance: f64,
+) -> Option<f64> {
+    let meta = inner.room_meta.get(room_id)?;
+    let mut best: Option<f64> = None;
+    for box3 in &meta.map_collision {
+        let Some(t) = ray_aabb_intersection_t(origin, direction_norm, box3, max_distance) else {
+            continue;
+        };
+        if t < MIN_WALL_HIT_DISTANCE {
+            continue;
+        }
+        match best {
+            Some(current) if t >= current => {}
+            _ => best = Some(t),
+        }
+    }
+    best
+}
+
 fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
     let Some(room) = inner.rooms.rooms.get(room_id) else {
         return Vec3 {
@@ -2187,11 +2279,14 @@ fn create_map_collision(seed: u64) -> Vec<MapBox> {
     for _ in 0..MAP_PILLAR_COUNT {
         let w = 1.0 + rng.next_f64() * 3.0;
         let d = 1.0 + rng.next_f64() * 3.0;
+        let h = 3.0 + rng.next_f64() * 24.0;
         let x = (rng.next_f64() - 0.5) * 220.0;
         let z = (rng.next_f64() - 0.5) * 220.0;
         boxes.push(MapBox {
             min_x: x - (w / 2.0),
             max_x: x + (w / 2.0),
+            min_y: 0.0,
+            max_y: h,
             min_z: z - (d / 2.0),
             max_z: z + (d / 2.0),
         });
