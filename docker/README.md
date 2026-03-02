@@ -133,6 +133,7 @@ Servicios públicos:
 - Web: `https://misterrii.com`
 - Juego: `https://koketria.misterrii.com`
 - Backend interno: `backend:3000` (no expuesto directo)
+- Web PWA: habilitada solo en producción HTTPS para `misterrii.com` (dev no registra service worker).
 
 Cache de navegador en producción:
 

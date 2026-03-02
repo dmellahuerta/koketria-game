@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>misterrii network</title>
+    <meta name="theme-color" content="#030603" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="misterrii network" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon-192.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.svg" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -41,6 +48,14 @@
             el.classList.add('hidden-link');
           }
         });
+
+        var isProdHost = /(^|\.)misterrii\.com$/i.test(host);
+        var isHttps = window.location.protocol === 'https:';
+        if ('serviceWorker' in navigator && isProdHost && isHttps) {
+          window.addEventListener('load', function () {
+            navigator.serviceWorker.register('/sw.js').catch(function () {});
+          });
+        }
       })();
     </script>
   </body>

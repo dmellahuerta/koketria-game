@@ -1,0 +1,24 @@
+{
+  "name": "misterrii network",
+  "short_name": "misterrii",
+  "description": "Portal de juegos disponibles en la red misterrii.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#030603",
+  "theme_color": "#030603",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
