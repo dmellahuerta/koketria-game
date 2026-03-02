@@ -52,9 +52,6 @@
         var installBox = document.getElementById('installBox');
         var installBtn = document.getElementById('installBtn');
         var installHint = installBox ? installBox.querySelector('span') : null;
-        if (installBtn) {
-          installBtn.disabled = true;
-        }
         document.querySelectorAll('[data-env]').forEach(function (el) {
           if (el.getAttribute('data-env') !== showEnv) {
             el.classList.add('hidden-link');
@@ -63,13 +60,16 @@
 
         var isProdHost = /(^|\.)misterrii\.com$/i.test(host);
         var isHttps = window.location.protocol === 'https:';
+        var ua = String(navigator.userAgent || '');
         var isMobileChrome = /android/i.test(navigator.userAgent || '')
           && /chrome\//i.test(navigator.userAgent || '')
           && !/edga|opr|samsungbrowser|ucbrowser|yabrowser|duckduckgo|firefox|fxios/i.test(navigator.userAgent || '');
+        var isIos = /iphone|ipad|ipod/i.test(ua);
+        var isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
         if ('serviceWorker' in navigator && isProdHost && isHttps) {
           window.addEventListener('load', function () {
             navigator.serviceWorker.register('/sw.js').then(function () {
-              if (!navigator.serviceWorker.controller && isMobileChrome && !sessionStorage.getItem('misterrii_pwa_sw_reload')) {
+              if (!navigator.serviceWorker.controller && isMobile && !sessionStorage.getItem('misterrii_pwa_sw_reload')) {
                 sessionStorage.setItem('misterrii_pwa_sw_reload', '1');
                 window.location.reload();
               }
@@ -90,9 +90,7 @@
           if (installBox) {
             installBox.classList.add('hidden-link');
           }
-          if (installBtn) {
-            installBtn.disabled = true;
-          }
+          installPromptTriggered = false;
         }
 
         window.addEventListener('beforeinstallprompt', function (event) {
@@ -102,32 +100,31 @@
           event.preventDefault();
           deferredPrompt = event;
           installBox.classList.remove('hidden-link');
-          if (installBtn) {
-            installBtn.disabled = false;
-          }
           if (installHint) {
-            installHint.textContent = 'Instala la app para abrir misterrii network como aplicación.';
+            installHint.textContent = 'Listo para instalar. Toca "Instalar app".';
           }
-
-          var onFirstGesture = function () {
-            window.removeEventListener('touchend', onFirstGesture);
-            window.removeEventListener('click', onFirstGesture);
-            promptInstallOnce();
-          };
-          window.addEventListener('touchend', onFirstGesture, { once: true });
-          window.addEventListener('click', onFirstGesture, { once: true });
         });
 
         if (installBtn) {
           installBtn.addEventListener('click', function () {
-            promptInstallOnce();
+            if (deferredPrompt) {
+              promptInstallOnce();
+              return;
+            }
+            if (installHint) {
+              if (isIos) {
+                installHint.textContent = 'iOS: Safari > Compartir > Añadir a pantalla de inicio.';
+              } else {
+                installHint.textContent = 'Si no aparece prompt: Chrome > menu ⋮ > Instalar app.';
+              }
+            }
           });
         }
 
-        if (installBox && isProdHost && isHttps && isMobileChrome) {
+        if (installBox && isProdHost && isHttps && isMobile) {
           installBox.classList.remove('hidden-link');
           if (installHint && !deferredPrompt) {
-            installHint.textContent = 'Preparando instalación... si no aparece, recarga una vez.';
+            installHint.textContent = 'Preparando instalación... si no aparece, recarga una vez y toca "Instalar app".';
           }
         }
 
@@ -136,9 +133,6 @@
           installPromptTriggered = true;
           if (installBox) {
             installBox.classList.add('hidden-link');
-          }
-          if (installBtn) {
-            installBtn.disabled = true;
           }
         });
       })();

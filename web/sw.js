@@ -1,4 +1,4 @@
-const CACHE_NAME = 'misterrii-web-v1';
+const CACHE_NAME = 'misterrii-web-v2';
 const PRECACHE_URLS = [
   '/',
   '/index.html',

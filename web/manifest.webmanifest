@@ -1,6 +1,7 @@
 {
   "name": "misterrii network",
   "short_name": "misterrii",
+  "id": "/",
   "description": "Portal de juegos disponibles en la red misterrii.",
   "start_url": "/",
   "scope": "/",
