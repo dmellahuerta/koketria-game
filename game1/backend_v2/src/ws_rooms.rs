@@ -4,7 +4,7 @@ use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Mutex};
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::rooms::{JoinError, RoomManager, StartValidationError, Team, VersusType};
 
@@ -203,6 +203,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         });
         (client_id, connected_payload)
     };
+    info!("[ws_rooms] connected client_id={}", client_id);
     let _ = out_tx.send(connected_payload.to_string());
 
     while let Some(next) = ws_rx.next().await {
@@ -233,6 +234,9 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 continue;
             }
         };
+        if let Some(event_type) = parsed.get("type").and_then(Value::as_str) {
+            debug!("[ws_rooms] recv client_id={} event={}", client_id, event_type);
+        }
         process_message(&state, &client_id, parsed).await;
     }
 
@@ -255,6 +259,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     }
     inner.clients.remove(&client_id);
     drop(inner);
+    info!("[ws_rooms] disconnected client_id={}", client_id);
     write_task.abort();
 }
 
@@ -546,13 +551,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             );
         }
         _ => {
-            inner.send_to(
-                client_id,
-                json!({
-                  "type":"error",
-                  "ok": false,
-                  "error": { "code":"UNKNOWN_EVENT", "message":"Evento no soportado por ws_rooms_rust" }
-                }),
+            // During incremental migration we ignore unsupported events
+            // so the frontend does not surface noisy errors.
+            debug!(
+                "[ws_rooms] unsupported event ignored client_id={} event={}",
+                client_id, event_type
             );
         }
     }

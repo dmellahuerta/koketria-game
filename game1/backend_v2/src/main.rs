@@ -131,14 +131,17 @@ async fn proxy_ws_upgrade(
     if state.rust_ws_rooms_enabled {
         let ws_state = state.ws_rooms_state.clone();
         ws.on_upgrade(move |socket| async move {
-            debug!("ws local rooms mode enabled for {}", addr);
+            info!("ws connected (rust rooms mode) from {}", addr);
             ws_rooms::handle_connection(socket, ws_state).await;
+            info!("ws disconnected (rust rooms mode) from {}", addr);
         })
     } else {
         ws.on_upgrade(move |socket| async move {
+            info!("ws connected (proxy mode) from {}", addr);
             if let Err(err) = proxy_ws(socket, state, addr).await {
                 error!("ws proxy error from {}: {err:#}", addr);
             }
+            info!("ws disconnected (proxy mode) from {}", addr);
         })
     }
 }
