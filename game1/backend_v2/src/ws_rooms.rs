@@ -22,7 +22,15 @@ pub struct WsRoomsState {
 struct Inner {
     rooms: RoomManager,
     clients: HashMap<String, ClientSession>,
+    room_meta: HashMap<String, RoomMeta>,
     client_seq: u64,
+}
+
+#[derive(Clone)]
+struct RoomMeta {
+    weather: String,
+    battle_theme: String,
+    map_seed: i64,
 }
 
 #[derive(Clone)]
@@ -79,10 +87,13 @@ impl WsRoomsState {
     pub fn new(max_custom_rooms: usize, max_players_per_room: usize) -> Arc<Self> {
         let mut rooms = RoomManager::new(max_custom_rooms, max_players_per_room);
         rooms.ensure_server_room("main", "Main");
+        let mut room_meta = HashMap::new();
+        room_meta.insert("main".to_string(), RoomMeta::random_for("main"));
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 rooms,
                 clients: HashMap::new(),
+                room_meta,
                 client_seq: 0,
             }),
         })
@@ -111,8 +122,45 @@ const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 10;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
+const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
+const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
+
+impl RoomMeta {
+    fn random_for(room_id: &str) -> Self {
+        let seed = room_seed(room_id, now_ms());
+        Self {
+            weather: pick_from(WEATHER_TYPES, seed, None).to_string(),
+            battle_theme: pick_from(BATTLE_THEMES, seed ^ 0x9E37_79B9, None).to_string(),
+            map_seed: positive_seed(seed),
+        }
+    }
+
+    fn rotate(&mut self, room_id: &str) {
+        let seed = room_seed(room_id, now_ms());
+        self.weather = pick_from(WEATHER_TYPES, seed, Some(self.weather.as_str())).to_string();
+        self.battle_theme = pick_from(
+            BATTLE_THEMES,
+            seed ^ 0x85EB_CA6B,
+            Some(self.battle_theme.as_str()),
+        )
+        .to_string();
+    }
+}
 
 impl Inner {
+    fn ensure_room_meta(&mut self, room_id: &str) {
+        if self.room_meta.contains_key(room_id) {
+            return;
+        }
+        self.room_meta
+            .insert(room_id.to_string(), RoomMeta::random_for(room_id));
+    }
+
+    fn cleanup_removed_room_meta(&mut self) {
+        self.room_meta
+            .retain(|room_id, _| self.rooms.rooms.contains_key(room_id));
+    }
+
     fn send_to(&self, client_id: &str, payload: Value) {
         if let Some(client) = self.clients.get(client_id) {
             let _ = client.tx.send(payload.to_string());
@@ -136,6 +184,7 @@ impl Inner {
 
     fn room_summary_json(&self, room_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
+        let meta = self.room_meta.get(room_id);
         Some(json!({
           "id": room.id,
           "name": room.name,
@@ -146,9 +195,9 @@ impl Inner {
           "versusType": room.versus_type.map(|v| v.as_wire()),
           "requiredPlayers": room.required_players,
           "maxPlayers": room.max_players,
-          "weather": "night",
-          "battleTheme": "battle1",
-          "mapSeed": 1
+          "weather": meta.map(|m| m.weather.clone()).unwrap_or_else(|| "night".to_string()),
+          "battleTheme": meta.map(|m| m.battle_theme.clone()).unwrap_or_else(|| "battle1".to_string()),
+          "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1)
         }))
     }
 
@@ -393,6 +442,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 );
                 return;
             };
+            inner.ensure_room_meta(&room_id);
             if let Some(name) = message.get("playerName").and_then(Value::as_str) {
                 if let Some(entry) = inner.clients.get_mut(client_id) {
                     entry.name = name.trim().chars().take(24).collect();
@@ -1251,6 +1301,7 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
             return;
         }
     }
+    inner.ensure_room_meta(room_id);
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = Some(room_id.to_string());
         client.kills = 0;
@@ -1298,6 +1349,7 @@ fn leave_room_internal(
         .get(&room_id)
         .and_then(|room| room.teams.get(client_id).copied());
     inner.rooms.leave_room(&room_id, client_id);
+    inner.cleanup_removed_room_meta();
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = None;
     }
@@ -1443,15 +1495,24 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     sleep(Duration::from_secs(seconds)).await;
 
     let mut inner = state.inner.lock().await;
-    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+    let Some(status) = inner.rooms.rooms.get(&room_id).map(|r| r.status) else {
         return;
     };
-    if room.status != RoomStatus::Cooldown {
+    if status != RoomStatus::Cooldown {
         return;
     }
-    let player_ids: Vec<String> = room.players.iter().cloned().collect();
+    inner.ensure_room_meta(&room_id);
+    let player_ids: Vec<String> = inner
+        .rooms
+        .rooms
+        .get(&room_id)
+        .map(|r| r.players.iter().cloned().collect())
+        .unwrap_or_default();
     if let Some(room_mut) = inner.rooms.rooms.get_mut(&room_id) {
         room_mut.status = RoomStatus::InGame;
+    }
+    if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+        meta.rotate(&room_id);
     }
     for player_id in player_ids {
         if let Some(client) = inner.clients.get_mut(&player_id) {
@@ -1657,6 +1718,7 @@ async fn start_versus_room_deletion_countdown(
         );
     }
     inner.rooms.rooms.remove(&room_id);
+    inner.cleanup_removed_room_meta();
     inner.broadcast_rooms_list_all();
 }
 
@@ -1925,6 +1987,39 @@ fn find_best_hit(
         }
     }
     best
+}
+
+fn positive_seed(seed: u64) -> i64 {
+    ((seed & 0x7fff_ffff) as i64).max(1)
+}
+
+fn hash_room_id(room_id: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in room_id.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
+}
+
+fn room_seed(room_id: &str, now_ms_v: i64) -> u64 {
+    hash_room_id(room_id) ^ (now_ms_v as u64) ^ 0x9E37_79B9_7F4A_7C15
+}
+
+fn pick_from<'a>(choices: &'a [&'a str], seed: u64, avoid: Option<&str>) -> &'a str {
+    if choices.is_empty() {
+        return "";
+    }
+    if choices.len() == 1 {
+        return choices[0];
+    }
+    let index = (seed as usize) % choices.len();
+    let picked = choices[index];
+    if avoid == Some(picked) {
+        choices[(index + 1) % choices.len()]
+    } else {
+        picked
+    }
 }
 
 fn now_ms() -> i64 {
