@@ -124,6 +124,10 @@ const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
 const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
 const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
+const SPAWN_BASE_Y: f64 = 1.7;
+const SPAWN_INNER_RADIUS: f64 = 22.0;
+const SPAWN_OUTER_RADIUS: f64 = 44.0;
+const SPAWN_POINT_COUNT: usize = 20;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -1107,11 +1111,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(room_id) = client.room_id.clone() else {
                 return;
             };
+            let spawn = pick_spawn_position(&inner, &room_id, Some(client_id));
             let (position, health, shield, mana) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
                 entry.state = default_player_state();
+                entry.state.position = spawn;
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
                 (
@@ -1302,11 +1308,15 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
         }
     }
     inner.ensure_room_meta(room_id);
+    let spawn = pick_spawn_position(inner, room_id, Some(client_id));
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = Some(room_id.to_string());
         client.kills = 0;
         client.deaths = 0;
         client.combat = default_combat_state();
+        client.state = default_player_state();
+        client.state.position = spawn;
+        client.state_ts = now_ms();
     }
     if let Some(state) = inner.room_state_json(room_id) {
         inner.send_to(
@@ -1515,10 +1525,14 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
         meta.rotate(&room_id);
     }
     for player_id in player_ids {
+        let spawn = pick_spawn_position(&inner, &room_id, Some(&player_id));
         if let Some(client) = inner.clients.get_mut(&player_id) {
             client.kills = 0;
             client.deaths = 0;
             client.combat = default_combat_state();
+            client.state = default_player_state();
+            client.state.position = spawn;
+            client.state_ts = now_ms();
         }
     }
 
@@ -1986,6 +2000,62 @@ fn find_best_hit(
             }
         }
     }
+    best
+}
+
+fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return Vec3 {
+            x: 0.0,
+            y: SPAWN_BASE_Y,
+            z: 0.0,
+        };
+    };
+    let seed = inner
+        .room_meta
+        .get(room_id)
+        .map(|m| m.map_seed as u64)
+        .unwrap_or_else(|| hash_room_id(room_id));
+
+    let mut best = Vec3 {
+        x: 0.0,
+        y: SPAWN_BASE_Y,
+        z: 0.0,
+    };
+    let mut best_min_dist_sq = -1.0_f64;
+
+    for i in 0..SPAWN_POINT_COUNT {
+        let angle = ((i as f64) / (SPAWN_POINT_COUNT as f64)) * std::f64::consts::TAU
+            + ((seed % 628) as f64 / 100.0);
+        let ring = if ((seed >> (i % 16)) & 1) == 0 {
+            SPAWN_INNER_RADIUS
+        } else {
+            SPAWN_OUTER_RADIUS
+        };
+        let candidate = Vec3 {
+            x: angle.cos() * ring,
+            y: SPAWN_BASE_Y,
+            z: angle.sin() * ring,
+        };
+        let mut min_dist_sq = f64::MAX;
+        for player_id in &room.players {
+            if Some(player_id.as_str()) == exclude_player_id {
+                continue;
+            }
+            let Some(other) = inner.clients.get(player_id) else {
+                continue;
+            };
+            let d2 = distance_sq(&candidate, &other.state.position);
+            if d2 < min_dist_sq {
+                min_dist_sq = d2;
+            }
+        }
+        if min_dist_sq.is_finite() && min_dist_sq > best_min_dist_sq {
+            best = candidate;
+            best_min_dist_sq = min_dist_sq;
+        }
+    }
+
     best
 }
 
