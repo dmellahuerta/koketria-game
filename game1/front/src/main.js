@@ -881,6 +881,12 @@ const forceHideTeamModeUiIfNeeded = (room) => {
   }
 };
 
+const syncModeUiClass = () => {
+  const room = state.joinedRoom?.room;
+  const isVersusMode = Boolean(room && isVersusRoom(room));
+  app.classList.toggle('versus-mode', isVersusMode);
+};
+
 const isInVersusWaitingLobby = () => {
   return Boolean(state.joinedRoom && isVersusRoom(state.joinedRoom.room) && state.joinedRoom.room.status === 'waiting');
 };
@@ -5219,6 +5225,7 @@ const applyRoomState = (roomState, options = {}) => {
 
   const keepMatchSceneVisible = roomState.room.status === 'in_game' || roomState.room.status === 'cooldown';
   setInRoom(keepMatchSceneVisible);
+  syncModeUiClass();
   forceHideTeamModeUiIfNeeded(roomState.room);
   syncLobbyScreens();
   if (roomState.room.status !== 'cooldown') {
@@ -5294,6 +5301,7 @@ const connectWebSocket = () => {
       state.latencyMs = null;
       clearRemotePlayers();
       setInRoom(false);
+      syncModeUiClass();
       stopRemoteShootSound();
       applyWeather('night');
       setBattleTheme('battle1');
@@ -5748,6 +5756,7 @@ const connectWebSocket = () => {
         }
         const keepMatchSceneVisible = payload.data.status === 'in_game' || payload.data.status === 'cooldown';
         setInRoom(keepMatchSceneVisible);
+        syncModeUiClass();
         forceHideTeamModeUiIfNeeded(state.joinedRoom.room);
         syncLobbyScreens();
         updateVersusLobbyUi();
@@ -5785,6 +5794,7 @@ const connectWebSocket = () => {
     state.latencyMs = null;
     clearRemotePlayers();
     setInRoom(false);
+    syncModeUiClass();
     stopRemoteShootSound();
     applyWeather('night');
     setBattleTheme('battle1');

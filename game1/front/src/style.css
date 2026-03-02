@@ -1182,6 +1182,10 @@ button:disabled {
   display: none;
 }
 
+#app:not(.versus-mode) #teamScoreHud {
+  display: none !important;
+}
+
 #app:not(.in-room) #damageOverlay {
   display: none;
 }
