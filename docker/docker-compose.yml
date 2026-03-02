@@ -25,7 +25,8 @@ services:
       - LISTEN_HOST=0.0.0.0
       - PORT=3001
       - LEGACY_PORT=3000
-      - RUST_WS_ROOMS_ENABLED=${RUST_WS_ROOMS_ENABLED:-false}
+      - RUST_WS_ROOMS_ENABLED=${RUST_WS_ROOMS_ENABLED:-true}
+      - RUST_LOG=${RUST_LOG:-debug}
 
   front:
     image: node:20-alpine
