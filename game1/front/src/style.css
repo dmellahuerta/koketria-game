@@ -136,6 +136,7 @@ canvas {
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
+  padding-bottom: 10px;
 }
 
 .versus-chat-side {
@@ -321,10 +322,14 @@ canvas {
 
 .versus-chat-box {
   margin-top: 8px;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
   border: 1px solid rgba(122, 255, 122, 0.35);
   border-radius: 10px;
   padding: 8px;
-  background: rgba(1, 20, 1, 0.58);
+  background: rgba(1, 20, 1, 0.9);
+  box-shadow: 0 -10px 20px rgba(0, 0, 0, 0.28);
 }
 
 .versus-chat-log {
