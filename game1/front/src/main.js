@@ -432,7 +432,10 @@ const resetMobileInput = () => {
 };
 
 const detectMobileControlsEnabled = () => {
-  return window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 980;
+  const coarsePointer = window.matchMedia('(pointer: coarse)').matches
+    || window.matchMedia('(any-pointer: coarse)').matches;
+  const hasTouch = (navigator.maxTouchPoints || 0) > 0;
+  return coarsePointer && hasTouch;
 };
 
 const syncMobileControlsVisibility = () => {
