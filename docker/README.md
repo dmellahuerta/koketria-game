@@ -23,10 +23,11 @@ Servicios expuestos:
 
 - Web (HTML/CSS estática): `http://localhost:80`
 - Frontend juego (Vite dev): `http://localhost:5173`
-- Backend: `http://localhost:3000`
-- WebSocket salas: `ws://localhost:3000/ws`
-- Backend v2 (Rust, proxy compat): `http://localhost:3001`
+- Backend v2 (Rust, endpoint dev expuesto): `http://localhost:3001`
 - Health backend v2: `http://localhost:3001/_v2/health`
+
+Nota:
+- `backend` (Node legacy) queda interno en la red de Docker (sin puerto publicado en host) para compatibilidad temporal de `backend_v2`.
 
 ## Detener servicios
 

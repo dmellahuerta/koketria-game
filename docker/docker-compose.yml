@@ -10,8 +10,8 @@ services:
     image: node:20-alpine
     working_dir: /app
     command: sh -c "npm ci && node index.js"
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     volumes:
       - ../game1/backend:/app
       - backend_node_modules:/app/node_modules
