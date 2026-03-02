@@ -180,7 +180,7 @@ app.innerHTML = `
 
   <div id="mobileControls" class="mobile-controls hidden">
     <div id="mobileLookZone" class="mobile-look-zone"></div>
-    <button id="mobileOptionsBtn" type="button" class="mobile-menu-btn">Menu</button>
+    <button id="mobileOptionsBtn" type="button" class="mobile-menu-btn">ESC</button>
     <div class="mobile-left">
       <div id="mobileJoystick" class="mobile-joystick">
         <div class="mobile-joystick-base"></div>
@@ -461,7 +461,7 @@ const detectMobileControlsEnabled = () => {
   if (mobileUserAgent) {
     return true;
   }
-  return !hasFineHoverPointer && coarsePointer && touchPoints > 0 && smallScreen;
+  return !hasFineHoverPointer && smallScreen && (coarsePointer || touchPoints > 0);
 };
 
 const isMobileChromeForFullscreen = () => {

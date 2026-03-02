@@ -48,6 +48,7 @@
         var isDev = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
         var showEnv = isDev ? 'dev' : 'prod';
         var deferredPrompt = null;
+        var installPromptTriggered = false;
         var installBox = document.getElementById('installBox');
         var installBtn = document.getElementById('installBtn');
         document.querySelectorAll('[data-env]').forEach(function (el) {
@@ -64,6 +65,21 @@
           });
         }
 
+        async function promptInstallOnce() {
+          if (!deferredPrompt || installPromptTriggered) {
+            return;
+          }
+          installPromptTriggered = true;
+          deferredPrompt.prompt();
+          try {
+            await deferredPrompt.userChoice;
+          } catch (_err) {}
+          deferredPrompt = null;
+          if (installBox) {
+            installBox.classList.add('hidden-link');
+          }
+        }
+
         window.addEventListener('beforeinstallprompt', function (event) {
           if (!(isProdHost && isHttps) || !installBox || !installBtn) {
             return;
@@ -71,26 +87,25 @@
           event.preventDefault();
           deferredPrompt = event;
           installBox.classList.remove('hidden-link');
+
+          var onFirstGesture = function () {
+            window.removeEventListener('touchend', onFirstGesture);
+            window.removeEventListener('click', onFirstGesture);
+            promptInstallOnce();
+          };
+          window.addEventListener('touchend', onFirstGesture, { once: true });
+          window.addEventListener('click', onFirstGesture, { once: true });
         });
 
         if (installBtn) {
-          installBtn.addEventListener('click', async function () {
-            if (!deferredPrompt) {
-              return;
-            }
-            deferredPrompt.prompt();
-            try {
-              await deferredPrompt.userChoice;
-            } catch (_err) {}
-            deferredPrompt = null;
-            if (installBox) {
-              installBox.classList.add('hidden-link');
-            }
+          installBtn.addEventListener('click', function () {
+            promptInstallOnce();
           });
         }
 
         window.addEventListener('appinstalled', function () {
           deferredPrompt = null;
+          installPromptTriggered = true;
           if (installBox) {
             installBox.classList.add('hidden-link');
           }
