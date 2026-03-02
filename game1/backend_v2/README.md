@@ -67,6 +67,7 @@ Se agrego `src/ws_rooms.rs` con soporte WS local para:
 - `start_game`, `end_game`
 - `ping`/`pong`
 - `chat_message`
+- `player_move` (autoritativo en Rust con validacion y clamp)
 
 Queda detras de feature flag por env:
 

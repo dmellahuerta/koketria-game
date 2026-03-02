@@ -24,7 +24,30 @@ struct ClientSession {
     name: String,
     character: Option<String>,
     room_id: Option<String>,
+    state: PlayerState,
+    state_ts: i64,
     tx: mpsc::UnboundedSender<String>,
+}
+
+#[derive(Clone)]
+struct PlayerState {
+    position: Vec3,
+    rotation: Rotation,
+    jumping: bool,
+    moving: bool,
+}
+
+#[derive(Clone)]
+struct Vec3 {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Clone)]
+struct Rotation {
+    yaw: f64,
+    pitch: f64,
 }
 
 impl WsRoomsState {
@@ -100,13 +123,8 @@ impl Inner {
           "alive": true,
           "lunarRainCooldownMs": 0,
           "pendingHealthRegen": 0,
-          "state": {
-            "position": { "x": 0.0, "y": 1.7, "z": 0.0 },
-            "rotation": { "yaw": 0.0, "pitch": 0.0 },
-            "jumping": false,
-            "moving": false
-          },
-          "ts": now_ms()
+          "state": player_state_json(&client.state),
+          "ts": client.state_ts
         }))
     }
 
@@ -172,6 +190,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         inner.client_seq += 1;
         let client_id = format!("p-{}", inner.client_seq);
         let name = format!("Player-{:04}", inner.client_seq % 10000);
+        let initial_state = default_player_state();
         inner.clients.insert(
             client_id.clone(),
             ClientSession {
@@ -179,6 +198,8 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 name: name.clone(),
                 character: None,
                 room_id: None,
+                state: initial_state.clone(),
+                state_ts: now_ms(),
                 tx: out_tx.clone(),
             },
         );
@@ -191,12 +212,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
               "name": name,
               "character": Value::Null,
               "ts": now_ms(),
-              "state": {
-                "position": { "x": 0.0, "y": 1.7, "z": 0.0 },
-                "rotation": { "yaw": 0.0, "pitch": 0.0 },
-                "jumping": false,
-                "moving": false
-              }
+              "state": player_state_json(&initial_state)
             },
             "rooms": inner.public_rooms_json()
           }
@@ -550,6 +566,86 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None,
             );
         }
+        "player_move" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status.as_wire() != "in_game" {
+                return;
+            }
+
+            let position = message.get("position");
+            let rotation = message.get("rotation");
+            let (
+                Some(px),
+                Some(py),
+                Some(pz),
+                Some(yaw),
+                Some(pitch),
+            ) = (
+                position.and_then(|v| v.get("x")).and_then(Value::as_f64),
+                position.and_then(|v| v.get("y")).and_then(Value::as_f64),
+                position.and_then(|v| v.get("z")).and_then(Value::as_f64),
+                rotation.and_then(|v| v.get("yaw")).and_then(Value::as_f64),
+                rotation.and_then(|v| v.get("pitch")).and_then(Value::as_f64),
+            ) else {
+                return;
+            };
+
+            let jumping = message.get("jumping").and_then(Value::as_bool).unwrap_or(false);
+            let moving = message.get("moving").and_then(Value::as_bool).unwrap_or(false);
+
+            let next_state = PlayerState {
+                position: Vec3 {
+                    x: clamp(px, -200.0, 200.0),
+                    y: clamp(py, 0.5, 4.0),
+                    z: clamp(pz, -200.0, 200.0),
+                },
+                rotation: Rotation {
+                    yaw: clamp(yaw, -std::f64::consts::PI * 100.0, std::f64::consts::PI * 100.0),
+                    pitch: clamp(
+                        pitch,
+                        -std::f64::consts::FRAC_PI_2,
+                        std::f64::consts::FRAC_PI_2,
+                    ),
+                },
+                jumping,
+                moving,
+            };
+            let ts = now_ms();
+            if let Some(entry) = inner.clients.get_mut(client_id) {
+                entry.state = next_state.clone();
+                entry.state_ts = ts;
+            }
+
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"player_move",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "character": client.character,
+                    "position": {
+                      "x": next_state.position.x,
+                      "y": next_state.position.y,
+                      "z": next_state.position.z
+                    },
+                    "rotation": {
+                      "yaw": next_state.rotation.yaw,
+                      "pitch": next_state.rotation.pitch
+                    },
+                    "jumping": next_state.jumping,
+                    "moving": next_state.moving,
+                    "ts": ts
+                  }
+                }),
+                Some(client_id),
+            );
+        }
         _ => {
             // During incremental migration we ignore unsupported events
             // so the frontend does not surface noisy errors.
@@ -633,6 +729,39 @@ fn leave_room_internal(inner: &mut Inner, client_id: &str, send_left_room: bool)
     if send_left_room {
         inner.send_to(client_id, json!({ "type": "left_room", "ok": true, "data": Value::Null }));
     }
+}
+
+fn default_player_state() -> PlayerState {
+    PlayerState {
+        position: Vec3 {
+            x: 0.0,
+            y: 1.7,
+            z: 0.0,
+        },
+        rotation: Rotation { yaw: 0.0, pitch: 0.0 },
+        jumping: false,
+        moving: false,
+    }
+}
+
+fn player_state_json(state: &PlayerState) -> Value {
+    json!({
+      "position": {
+        "x": state.position.x,
+        "y": state.position.y,
+        "z": state.position.z
+      },
+      "rotation": {
+        "yaw": state.rotation.yaw,
+        "pitch": state.rotation.pitch
+      },
+      "jumping": state.jumping,
+      "moving": state.moving
+    })
+}
+
+fn clamp(value: f64, min: f64, max: f64) -> f64 {
+    value.max(min).min(max)
 }
 
 fn now_ms() -> i64 {
