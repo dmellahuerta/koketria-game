@@ -975,15 +975,23 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     return;
                 };
                 let now = now_ms();
-                let can_cast = now >= entry.combat.lunar_cd_until_ms;
-                if can_cast {
-                    entry.combat.lunar_cd_until_ms = now + LUNAR_SPECIAL_COOLDOWN_MS;
+                if !entry.combat.alive {
+                    (
+                        entry.state.position.clone(),
+                        false,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
+                } else {
+                    let can_cast = now >= entry.combat.lunar_cd_until_ms;
+                    if can_cast {
+                        entry.combat.lunar_cd_until_ms = now + LUNAR_SPECIAL_COOLDOWN_MS;
+                    }
+                    (
+                        entry.state.position.clone(),
+                        can_cast,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
                 }
-                (
-                    entry.state.position.clone(),
-                    can_cast,
-                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
-                )
             };
             inner.send_to(client_id, payload);
             if !allow_cast {
@@ -1089,15 +1097,23 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     return;
                 };
                 let now = now_ms();
-                let can_cast = now >= entry.combat.silent_cd_until_ms;
-                if can_cast {
-                    entry.combat.silent_cd_until_ms = now + SILENT_SPECIAL_COOLDOWN_MS;
+                if !entry.combat.alive {
+                    (
+                        entry.state.position.clone(),
+                        false,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
+                } else {
+                    let can_cast = now >= entry.combat.silent_cd_until_ms;
+                    if can_cast {
+                        entry.combat.silent_cd_until_ms = now + SILENT_SPECIAL_COOLDOWN_MS;
+                    }
+                    (
+                        entry.state.position.clone(),
+                        can_cast,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
                 }
-                (
-                    entry.state.position.clone(),
-                    can_cast,
-                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
-                )
             };
             inner.send_to(client_id, payload);
             if !allow_cast {
@@ -1196,15 +1212,23 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     return;
                 };
                 let now = now_ms();
-                let can_cast = now >= entry.combat.neoorphen_cd_until_ms;
-                if can_cast {
-                    entry.combat.neoorphen_cd_until_ms = now + NEOORPHEN_SPECIAL_COOLDOWN_MS;
+                if !entry.combat.alive {
+                    (
+                        entry.state.position.clone(),
+                        false,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
+                } else {
+                    let can_cast = now >= entry.combat.neoorphen_cd_until_ms;
+                    if can_cast {
+                        entry.combat.neoorphen_cd_until_ms = now + NEOORPHEN_SPECIAL_COOLDOWN_MS;
+                    }
+                    (
+                        entry.state.position.clone(),
+                        can_cast,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
                 }
-                (
-                    entry.state.position.clone(),
-                    can_cast,
-                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
-                )
             };
             inner.send_to(client_id, payload);
             if !allow_cast {
@@ -1310,14 +1334,21 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     return;
                 };
                 let now = now_ms();
-                let can_cast = now >= entry.combat.pumori_cd_until_ms;
-                if can_cast {
-                    entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
+                if !entry.combat.alive {
+                    (
+                        false,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
+                } else {
+                    let can_cast = now >= entry.combat.pumori_cd_until_ms;
+                    if can_cast {
+                        entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
+                    }
+                    (
+                        can_cast,
+                        player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                    )
                 }
-                (
-                    can_cast,
-                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
-                )
             };
             inner.send_to(client_id, payload);
             if !allow_cast {
