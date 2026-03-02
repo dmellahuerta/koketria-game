@@ -1485,6 +1485,11 @@ button:disabled {
   top: 24px;
 }
 
+.mobile-btn.menu {
+  left: 12px;
+  top: 24px;
+}
+
 .mobile-fullscreen-prompt {
   position: fixed;
   inset: 0;

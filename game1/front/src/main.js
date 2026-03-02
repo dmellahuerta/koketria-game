@@ -187,6 +187,7 @@ app.innerHTML = `
       </div>
     </div>
     <div class="mobile-right">
+      <button id="mobileOptionsBtn" type="button" class="mobile-btn menu">Menu</button>
       <button id="mobileJumpBtn" type="button" class="mobile-btn jump">Saltar</button>
       <button id="mobileSpecialBtn" type="button" class="mobile-btn special">Especial</button>
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
@@ -350,6 +351,7 @@ const mobileJoystickThumb = document.querySelector('#mobileJoystickThumb');
 const mobileFireBtn = document.querySelector('#mobileFireBtn');
 const mobileSpecialBtn = document.querySelector('#mobileSpecialBtn');
 const mobileJumpBtn = document.querySelector('#mobileJumpBtn');
+const mobileOptionsBtn = document.querySelector('#mobileOptionsBtn');
 const mobileFullscreenPrompt = document.querySelector('#mobileFullscreenPrompt');
 const mobileFsAcceptBtn = document.querySelector('#mobileFsAcceptBtn');
 const mobileFsSkipBtn = document.querySelector('#mobileFsSkipBtn');
@@ -462,6 +464,14 @@ const detectMobileControlsEnabled = () => {
   return !hasFineHoverPointer && coarsePointer && touchPoints > 0 && smallScreen;
 };
 
+const isMobileChromeForFullscreen = () => {
+  const userAgent = String(navigator.userAgent || '');
+  const isAndroid = /android/i.test(userAgent);
+  const isChrome = /chrome\//i.test(userAgent);
+  const isExcluded = /edga|opr|samsungbrowser|ucbrowser|yabrowser|duckduckgo|firefox|fxios/i.test(userAgent);
+  return isAndroid && isChrome && !isExcluded;
+};
+
 const isFullscreenActive = () => {
   return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
 };
@@ -483,6 +493,9 @@ const lockLandscapeIfPossible = async () => {
 };
 
 const requestMobileFullscreen = async () => {
+  if (!isMobileChromeForFullscreen()) {
+    return false;
+  }
   if (isFullscreenActive()) {
     await lockLandscapeIfPossible();
     return true;
@@ -521,6 +534,7 @@ const syncMobileFullscreenPrompt = () => {
   );
 
   const shouldShow = mobileInput.enabled
+    && isMobileChromeForFullscreen()
     && isInGameRoom
     && !isInVersusWaitingLobby()
     && !isFullscreenActive()
@@ -6719,6 +6733,18 @@ const bindMobileTouchControls = () => {
     }
   }, { passive: false });
 
+  const toggleMobileOptions = (event) => {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (!mobileInput.enabled || !state.joinedRoom || isInVersusWaitingLobby()) {
+      return;
+    }
+    toggleOptionsMenu();
+  };
+  mobileOptionsBtn?.addEventListener('touchstart', toggleMobileOptions, { passive: false });
+
   mobileJoystick.addEventListener('pointerdown', (event) => {
     if (!canUseMobileControls() || mobileInput.movePointerId !== null) {
       return;
@@ -6804,6 +6830,7 @@ const bindMobileTouchControls = () => {
     triggerMobileJump();
     event.preventDefault();
   });
+  mobileOptionsBtn?.addEventListener('pointerdown', toggleMobileOptions);
 };
 
 window.addEventListener('keydown', (event) => {
