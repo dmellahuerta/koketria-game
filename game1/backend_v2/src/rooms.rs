@@ -6,12 +6,32 @@ pub enum RoomMode {
     VersusMatch,
 }
 
+impl RoomMode {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::FreeForAll => "freeforall",
+            Self::VersusMatch => "versusmatch",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomStatus {
     Waiting,
     InGame,
     Cooldown,
     Finished,
+}
+
+impl RoomStatus {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::InGame => "in_game",
+            Self::Cooldown => "cooldown",
+            Self::Finished => "finished",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +59,13 @@ impl VersusType {
     pub fn max_players(self) -> usize {
         self.required_players()
     }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::OneVsOne => "1v1",
+            Self::TwoVsTwo => "2v2",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +79,21 @@ impl Team {
         match self {
             Self::Red => Self::Blue,
             Self::Blue => Self::Red,
+        }
+    }
+
+    pub fn from_wire(v: &str) -> Option<Self> {
+        match v.trim().to_lowercase().as_str() {
+            "red" => Some(Self::Red),
+            "blue" => Some(Self::Blue),
+            _ => None,
+        }
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Red => "red",
+            Self::Blue => "blue",
         }
     }
 }

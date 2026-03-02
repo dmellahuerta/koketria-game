@@ -1,4 +1,5 @@
 mod rooms;
+mod ws_rooms;
 
 use std::{env, net::SocketAddr, sync::Arc};
 
@@ -28,6 +29,8 @@ struct AppState {
     client: Client,
     upstream_http: String,
     upstream_ws: String,
+    rust_ws_rooms_enabled: bool,
+    ws_rooms_state: Arc<ws_rooms::WsRoomsState>,
 }
 
 #[tokio::main]
@@ -55,6 +58,19 @@ async fn main() -> Result<()> {
             .context("failed to build reqwest client")?,
         upstream_http,
         upstream_ws,
+        rust_ws_rooms_enabled: env::var("RUST_WS_ROOMS_ENABLED")
+            .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false),
+        ws_rooms_state: ws_rooms::WsRoomsState::new(
+            env::var("MAX_CUSTOM_ROOMS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(6),
+            env::var("MAX_PLAYERS_PER_ROOM")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(5),
+        ),
     });
 
     let app = Router::new()
@@ -112,11 +128,19 @@ async fn proxy_ws_upgrade(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| async move {
-        if let Err(err) = proxy_ws(socket, state, addr).await {
-            error!("ws proxy error from {}: {err:#}", addr);
-        }
-    })
+    if state.rust_ws_rooms_enabled {
+        let ws_state = state.ws_rooms_state.clone();
+        ws.on_upgrade(move |socket| async move {
+            debug!("ws local rooms mode enabled for {}", addr);
+            ws_rooms::handle_connection(socket, ws_state).await;
+        })
+    } else {
+        ws.on_upgrade(move |socket| async move {
+            if let Err(err) = proxy_ws(socket, state, addr).await {
+                error!("ws proxy error from {}: {err:#}", addr);
+            }
+        })
+    }
 }
 
 async fn proxy_ws(client_socket: WebSocket, state: Arc<AppState>, addr: SocketAddr) -> Result<()> {

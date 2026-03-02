@@ -39,6 +39,7 @@ Variables opcionales:
 - `BASE_URL` (default `http://127.0.0.1:3001`)
 - `WS_URL` (default derivada de `BASE_URL`)
 - `GOLDEN_PATH` (default `contract/golden/core_flow.json`)
+- `RUST_WS_ROOMS_ENABLED` (default `false`): si esta activo, `/ws` maneja lobby/salas desde Rust.
 
 ## Progreso fase 2 (salas en Rust)
 
@@ -55,3 +56,22 @@ Incluye reglas de:
 - validacion de `start` para `1v1` / `2v2`
 
 Con tests unitarios en el mismo archivo. En este commit todavia no esta conectado al runtime WS principal (siguiente paso de integracion).
+
+## Integracion WS de salas (fase 2 parcial)
+
+Se agrego `src/ws_rooms.rs` con soporte WS local para:
+
+- `connected`, `rooms_list`, `room_joined`, `room_state`, `left_room`
+- `create_room`, `join_room`, `leave_room`
+- `room_set_versus_type`, `versus_set_ready`, `versus_switch_team`
+- `start_game`, `end_game`
+- `ping`/`pong`
+- `chat_message`
+
+Queda detras de feature flag por env:
+
+```bash
+RUST_WS_ROOMS_ENABLED=true
+```
+
+Si no se habilita, `/ws` sigue funcionando como proxy al backend legacy.

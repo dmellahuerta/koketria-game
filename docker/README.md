@@ -29,6 +29,7 @@ Servicios expuestos:
 Nota:
 - En dev no existe servicio `backend` separado.
 - `backend_v2` levanta internamente el backend legacy solo como dependencia temporal de compatibilidad.
+- Opcional: `RUST_WS_ROOMS_ENABLED=true` para probar el lobby/salas WS implementado en Rust.
 
 ## Detener servicios
 
