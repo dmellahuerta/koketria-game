@@ -1411,6 +1411,22 @@ button:disabled {
   pointer-events: auto;
 }
 
+.mobile-menu-btn {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  border: 1px solid rgba(123, 255, 123, 0.45);
+  background: rgba(0, 23, 0, 0.82);
+  color: #d5ffd5;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  pointer-events: auto;
+  touch-action: none;
+}
+
 .mobile-left {
   left: max(14px, env(safe-area-inset-left));
 }
@@ -1482,11 +1498,6 @@ button:disabled {
 
 .mobile-btn.special {
   right: 12px;
-  top: 24px;
-}
-
-.mobile-btn.menu {
-  left: 12px;
   top: 24px;
 }
 

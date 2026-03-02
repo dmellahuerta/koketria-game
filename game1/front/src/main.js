@@ -180,6 +180,7 @@ app.innerHTML = `
 
   <div id="mobileControls" class="mobile-controls hidden">
     <div id="mobileLookZone" class="mobile-look-zone"></div>
+    <button id="mobileOptionsBtn" type="button" class="mobile-menu-btn">Menu</button>
     <div class="mobile-left">
       <div id="mobileJoystick" class="mobile-joystick">
         <div class="mobile-joystick-base"></div>
@@ -187,7 +188,6 @@ app.innerHTML = `
       </div>
     </div>
     <div class="mobile-right">
-      <button id="mobileOptionsBtn" type="button" class="mobile-btn menu">Menu</button>
       <button id="mobileJumpBtn" type="button" class="mobile-btn jump">Saltar</button>
       <button id="mobileSpecialBtn" type="button" class="mobile-btn special">Especial</button>
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
@@ -6744,6 +6744,7 @@ const bindMobileTouchControls = () => {
     toggleOptionsMenu();
   };
   mobileOptionsBtn?.addEventListener('touchstart', toggleMobileOptions, { passive: false });
+  mobileOptionsBtn?.addEventListener('click', toggleMobileOptions);
 
   mobileJoystick.addEventListener('pointerdown', (event) => {
     if (!canUseMobileControls() || mobileInput.movePointerId !== null) {
