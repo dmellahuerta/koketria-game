@@ -1097,6 +1097,10 @@ const updateVersusLobbyUi = () => {
   rightPlayers = rightPlayers.slice(0, teamSize);
   const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}`;
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
+  const requiredTeamSize = hasType ? (versusType === '2v2' ? 2 : 1) : 0;
+  const redCount = players.filter((player) => normalizePlayerTeam(player.team) === 'red').length;
+  const blueCount = players.filter((player) => normalizePlayerTeam(player.team) === 'blue').length;
+  const teamsBalanced = hasType && redCount === requiredTeamSize && blueCount === requiredTeamSize;
   const readyPlayers = players.filter((player) => Boolean(player.ready)).length;
   const allReady = enoughPlayers && players.every((player) => Boolean(player.ready));
   const selfPlayer = state.self ? players.find((player) => player.id === state.self.id) : null;
@@ -1106,7 +1110,7 @@ const updateVersusLobbyUi = () => {
   versusTypeSelect.value = hasType ? versusType : '';
   versusTypeSelect.disabled = !isHostPlayer;
   versusWaitingInfo.textContent = hasType
-    ? `Esperando: ${currentPlayers}/${requiredPlayers} jugadores (${versusType}) | Ready: ${readyPlayers}/${requiredPlayers}`
+    ? `Esperando: ${currentPlayers}/${requiredPlayers} (${versusType}) | Equipos: Rojo ${redCount}/${requiredTeamSize} - Azul ${blueCount}/${requiredTeamSize} | Ready: ${readyPlayers}/${requiredPlayers}`
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
   const leftChanged = renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize, 'left');
   const rightChanged = renderVersusSlots(versusRightPlayers, rightPlayers, teamSize, 'right');
@@ -1116,8 +1120,10 @@ const updateVersusLobbyUi = () => {
   }
   versusReadyBtn.disabled = !selfPlayer;
   versusReadyBtn.textContent = selfReady ? 'Ready: ON' : 'Ready: OFF';
-  versusStartBtn.disabled = !isHostPlayer || !allReady;
-  if (enoughPlayers && !allReady) {
+  versusStartBtn.disabled = !isHostPlayer || !allReady || !teamsBalanced;
+  if (enoughPlayers && !teamsBalanced) {
+    versusHint.textContent = `Equipos desbalanceados. Deben quedar ${requiredTeamSize} en Rojo y ${requiredTeamSize} en Azul.`;
+  } else if (enoughPlayers && !allReady) {
     versusHint.textContent = 'Faltan jugadores por marcar Ready para iniciar.';
   } else if (allReady) {
     versusHint.textContent = 'Todos listos. El host puede iniciar la partida.';

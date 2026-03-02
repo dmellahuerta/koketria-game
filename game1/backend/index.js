@@ -2790,40 +2790,8 @@ const start = async () => {
           if (targetTeam === sourceTeam) {
             return;
           }
-
-          const teamSize = requirements.versusType === '2v2' ? 2 : 1;
-          const targetCount = getTeamPlayerCount(room, targetTeam);
-          if (targetCount < teamSize) {
-            room.teams.set(current.id, targetTeam);
-            setPlayerReadyState(room, current.id, false);
-            broadcastRoomState(room);
-            return;
-          }
-
-          let swapCandidateId = null;
-          room.players.forEach((playerId) => {
-            if (swapCandidateId || playerId === current.id) {
-              return;
-            }
-            if (getPlayerTeam(room, playerId) === targetTeam) {
-              swapCandidateId = playerId;
-            }
-          });
-          if (!swapCandidateId) {
-            send(ws, {
-              type: 'error',
-              ...json(false, null, {
-                code: 'TEAM_FULL',
-                message: `El equipo ${targetTeam} esta lleno`,
-              }),
-            });
-            return;
-          }
-
           room.teams.set(current.id, targetTeam);
-          room.teams.set(swapCandidateId, sourceTeam);
           setPlayerReadyState(room, current.id, false);
-          setPlayerReadyState(room, swapCandidateId, false);
           broadcastRoomState(room);
           return;
         }
@@ -2878,6 +2846,30 @@ const start = async () => {
               });
               return;
             }
+            const requirements = getVersusRequirements(room.versusType);
+            if (!requirements) {
+              send(ws, {
+                type: 'error',
+                ...json(false, null, {
+                  code: 'INVALID_VERSUS_TYPE',
+                  message: 'Debes elegir 1v1 o 2v2 antes de iniciar',
+                }),
+              });
+              return;
+            }
+            const teamSize = requirements.versusType === '2v2' ? 2 : 1;
+            const redCount = getTeamPlayerCount(room, 'red');
+            const blueCount = getTeamPlayerCount(room, 'blue');
+            if (redCount !== teamSize || blueCount !== teamSize) {
+              send(ws, {
+                type: 'error',
+                ...json(false, null, {
+                  code: 'UNBALANCED_TEAMS',
+                  message: `Equipos desbalanceados (${redCount} rojo / ${blueCount} azul). Deben quedar ${teamSize} y ${teamSize}`,
+                }),
+              });
+              return;
+            }
             if (!areAllVersusPlayersReady(room)) {
               send(ws, {
                 type: 'error',
@@ -2888,7 +2880,6 @@ const start = async () => {
               });
               return;
             }
-            rebalanceVersusTeams(room);
           }
 
           room.status = message.type === 'start_game' ? 'in_game' : 'finished';
