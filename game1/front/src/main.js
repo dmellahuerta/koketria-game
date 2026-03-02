@@ -421,6 +421,7 @@ const mobileInput = {
   lookLastY: 0,
 };
 let mobileFullscreenPromptDismissed = false;
+let mobileFullscreenPromptActionLockUntil = 0;
 
 const clearMovementKeys = () => {
   keys.KeyW = false;
@@ -476,25 +477,29 @@ const lockLandscapeIfPossible = async () => {
 };
 
 const requestMobileFullscreen = async () => {
-  const target = renderer?.domElement || app;
-  if (!target || isFullscreenActive()) {
+  if (isFullscreenActive()) {
     await lockLandscapeIfPossible();
     return true;
   }
 
-  try {
-    if (target.requestFullscreen) {
-      await target.requestFullscreen({ navigationUI: 'hide' });
-    } else if (target.webkitRequestFullscreen) {
-      target.webkitRequestFullscreen();
-    } else {
-      return false;
+  const targets = [document.documentElement, app, renderer?.domElement].filter(Boolean);
+  for (let i = 0; i < targets.length; i += 1) {
+    const target = targets[i];
+    try {
+      if (typeof target.requestFullscreen === 'function') {
+        await target.requestFullscreen({ navigationUI: 'hide' });
+      } else if (typeof target.webkitRequestFullscreen === 'function') {
+        target.webkitRequestFullscreen();
+      } else {
+        continue;
+      }
+      await lockLandscapeIfPossible();
+      return true;
+    } catch {
+      // Try next compatible element.
     }
-    await lockLandscapeIfPossible();
-    return true;
-  } catch {
-    return false;
   }
+  return false;
 };
 
 const syncMobileFullscreenPrompt = () => {
@@ -6087,16 +6092,37 @@ optLeaveLobbyBtn.addEventListener('click', () => {
   sendWs({ type: 'leave_room' });
 });
 
-mobileFsAcceptBtn?.addEventListener('click', async () => {
+const runOnceMobilePromptAction = (handler) => (event) => {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const now = performance.now();
+  if (now < mobileFullscreenPromptActionLockUntil) {
+    return;
+  }
+  mobileFullscreenPromptActionLockUntil = now + 450;
+  handler();
+};
+
+const acceptMobileFullscreenPrompt = runOnceMobilePromptAction(async () => {
   mobileFullscreenPromptDismissed = true;
   hideMobileFullscreenPrompt();
   await requestMobileFullscreen();
 });
 
-mobileFsSkipBtn?.addEventListener('click', () => {
+const skipMobileFullscreenPrompt = runOnceMobilePromptAction(() => {
   mobileFullscreenPromptDismissed = true;
   hideMobileFullscreenPrompt();
 });
+
+mobileFsAcceptBtn?.addEventListener('click', acceptMobileFullscreenPrompt);
+mobileFsAcceptBtn?.addEventListener('touchstart', acceptMobileFullscreenPrompt, { passive: false });
+mobileFsAcceptBtn?.addEventListener('pointerdown', acceptMobileFullscreenPrompt);
+
+mobileFsSkipBtn?.addEventListener('click', skipMobileFullscreenPrompt);
+mobileFsSkipBtn?.addEventListener('touchstart', skipMobileFullscreenPrompt, { passive: false });
+mobileFsSkipBtn?.addEventListener('pointerdown', skipMobileFullscreenPrompt);
 
 optMouseSensitivity.addEventListener('input', () => {
   settings.mouseSensitivity = clampSetting(optMouseSensitivity.value, 0.4, 2.5, settings.mouseSensitivity);
