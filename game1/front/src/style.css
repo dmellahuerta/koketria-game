@@ -106,7 +106,7 @@ canvas {
   position: fixed;
   top: 50%;
   left: 50%;
-  width: min(92vw, 640px);
+  width: min(96vw, 1080px);
   transform: translate(-50%, -50%);
   z-index: 24;
 }
@@ -118,6 +118,34 @@ canvas {
   padding: 14px;
   box-shadow: 0 0 35px rgba(57, 214, 57, 0.22);
   color: #c8ffd2;
+}
+
+.versus-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+}
+
+.versus-main {
+  min-width: 0;
+}
+
+.versus-chat-side {
+  border: 1px solid rgba(112, 255, 112, 0.35);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(0, 20, 0, 0.66);
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+}
+
+.versus-chat-side h3 {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #ccffd6;
 }
 
 .versus-card h2 {
@@ -280,8 +308,11 @@ canvas {
 }
 
 .versus-chat-log {
-  max-height: 120px;
-  overflow: auto;
+  flex: 1;
+  min-height: 180px;
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: hidden;
   font-size: 0.78rem;
   line-height: 1.35;
   color: #beffca;
@@ -328,6 +359,14 @@ canvas {
 }
 
 @media (max-width: 680px) {
+  .versus-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .versus-chat-side {
+    min-height: 180px;
+  }
+
   .versus-teams {
     grid-template-columns: 1fr;
   }

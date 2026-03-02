@@ -45,40 +45,47 @@ app.innerHTML = `
 
   <section id="versusLobby" class="hidden">
     <div class="versus-card">
-      <h2>Lobby 2 - Versusmatch</h2>
-      <p id="versusRoomInfo">Sala: -</p>
-      <label>
-        Modalidad
-        <select id="versusTypeSelect">
-          <option value="">Selecciona tipo...</option>
-          <option value="1v1">1v1</option>
-          <option value="2v2">2v2</option>
-        </select>
-      </label>
-      <p id="versusWaitingInfo">Esperando jugadores...</p>
-      <div id="versusTeams" class="versus-teams">
-        <div class="versus-team team-red">
-          <h3>Equipo Rojo</h3>
-          <div id="versusLeftPlayers" class="versus-players"></div>
+      <div class="versus-layout">
+        <div class="versus-main">
+          <h2>Lobby 2 - Versusmatch</h2>
+          <p id="versusRoomInfo">Sala: -</p>
+          <label>
+            Modalidad
+            <select id="versusTypeSelect">
+              <option value="">Selecciona tipo...</option>
+              <option value="1v1">1v1</option>
+              <option value="2v2">2v2</option>
+            </select>
+          </label>
+          <p id="versusWaitingInfo">Esperando jugadores...</p>
+          <div id="versusTeams" class="versus-teams">
+            <div class="versus-team team-red">
+              <h3>Equipo Rojo</h3>
+              <div id="versusLeftPlayers" class="versus-players"></div>
+            </div>
+            <div class="versus-team team-blue">
+              <h3>Equipo Azul</h3>
+              <div id="versusRightPlayers" class="versus-players"></div>
+            </div>
+          </div>
+          <div class="lobby-actions">
+            <button id="versusReadyBtn" type="button">Ready: OFF</button>
+            <button id="versusStartBtn" type="button">Iniciar partida</button>
+            <button id="versusLeaveBtn" type="button">Volver al lobby</button>
+          </div>
+          <div class="versus-chat-box">
+            <div class="versus-chat-input">
+              <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
+              <button id="versusChatSendBtn" type="button">Enviar</button>
+            </div>
+          </div>
+          <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
         </div>
-        <div class="versus-team team-blue">
-          <h3>Equipo Azul</h3>
-          <div id="versusRightPlayers" class="versus-players"></div>
+        <div class="versus-chat-side">
+          <h3>Chat Lobby 2</h3>
+          <div id="versusChatLog" class="versus-chat-log"></div>
         </div>
       </div>
-      <div class="lobby-actions">
-        <button id="versusReadyBtn" type="button">Ready: OFF</button>
-        <button id="versusStartBtn" type="button">Iniciar partida</button>
-        <button id="versusLeaveBtn" type="button">Volver al lobby</button>
-      </div>
-      <div class="versus-chat-box">
-        <div id="versusChatLog" class="versus-chat-log"></div>
-        <div class="versus-chat-input">
-          <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
-          <button id="versusChatSendBtn" type="button">Enviar</button>
-        </div>
-      </div>
-      <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
     </div>
   </section>
 
@@ -1058,6 +1065,10 @@ const updateVersusLobbyUi = () => {
     return;
   }
   if (!isInVersusWaitingLobby()) {
+    if (state.joinedRoom?.room?.mode === 'versusmatch' && state.joinedRoom?.room?.status === 'in_game' && versusChatMessages.length > 0) {
+      versusChatMessages.length = 0;
+      renderVersusChat();
+    }
     versusLobby.classList.add('hidden');
     clearVersusPreviewSlots();
     return;
