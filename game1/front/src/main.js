@@ -2130,7 +2130,7 @@ const bootLobbyLoader = async () => {
     + (charList.length * 2)
     + 1
     + battleThemeIds.length
-    + 1
+    + 2
     + 3
     + 1;
   let done = 0;
@@ -2172,6 +2172,8 @@ const bootLobbyLoader = async () => {
   }
   await preloadAudioSource(lobbyTrackPath, 10000);
   tick('Audio lobby cargado');
+  await preloadAudioSource(versusLobbyTrackPath, 10000);
+  tick('Audio lobby2 cargado');
   await loadPickupModelTemplate('mana');
   tick('Item mana cargado');
   await loadPickupModelTemplate('defensa');
@@ -2311,6 +2313,7 @@ const localAttackVoices = [];
 const maxLocalAttackVoices = 8;
 const preLobbyTrackPath = '/themes/pre-lobby.mp3';
 const lobbyTrackPath = '/themes/lobby.mp3';
+const versusLobbyTrackPath = '/lobby/2.mp3';
 const battleThemeTrackById = {
   battle1: '/themes/battle1.mp3',
   battle2: '/themes/battle2.mp3',
@@ -2367,10 +2370,18 @@ const shouldPlayPreLobbyMusic = () => {
 };
 
 const shouldPlayLobbyMusic = () => {
-  return !state.joinedRoom
+  const inClassicLobby = !state.joinedRoom
     && lobbySection
     && !lobbySection.classList.contains('hidden')
     && (!bootLoader || bootLoader.classList.contains('hidden'));
+  return inClassicLobby || isInVersusWaitingLobby();
+};
+
+const getLobbyMusicTrackPath = () => {
+  if (isInVersusWaitingLobby()) {
+    return versusLobbyTrackPath;
+  }
+  return lobbyTrackPath;
 };
 
 const shouldPlayBattleMusic = () => {
@@ -2460,6 +2471,12 @@ const refreshBackgroundMusic = () => {
     return;
   }
   if (shouldPlayLobbyMusic()) {
+    const targetTrack = getLobbyMusicTrackPath();
+    const currentTrack = lobbyMusic.getAttribute('data-lobby-src') || '';
+    if (currentTrack !== targetTrack) {
+      applyLoopAudioSource(lobbyMusic, targetTrack, 'data-lobby-src');
+      lobbyMusicActive = false;
+    }
     stopBattleMusic();
     if (preLobbyMusicActive && !preLobbyMusic.ended) {
       waitForPreLobbyToEndForLobby = true;
