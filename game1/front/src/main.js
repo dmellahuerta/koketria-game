@@ -1007,6 +1007,8 @@ const renderVersusSlots = (container, players, slotCount, containerKey, options 
   }
   const { showOnlyActualPlayers = false } = options;
   const safePlayers = Array.isArray(players) ? players : [];
+  const playerCount = Math.max(1, safePlayers.length);
+  container.style.setProperty('--team-count', String(playerCount));
   const slots = showOnlyActualPlayers
     ? safePlayers.length
     : Math.max(1, Number(slotCount) || 1);
