@@ -68,15 +68,17 @@ app.innerHTML = `
               <div id="versusRightPlayers" class="versus-players"></div>
             </div>
           </div>
-          <div class="lobby-actions">
-            <button id="versusReadyBtn" type="button">Ready: OFF</button>
-            <button id="versusStartBtn" type="button">Iniciar partida</button>
-            <button id="versusLeaveBtn" type="button">Volver al lobby</button>
-          </div>
-          <div class="versus-chat-box">
-            <div class="versus-chat-input">
-              <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
-              <button id="versusChatSendBtn" type="button">Enviar</button>
+          <div class="versus-bottom-bar">
+            <div class="lobby-actions versus-actions">
+              <button id="versusReadyBtn" type="button">Ready: OFF</button>
+              <button id="versusStartBtn" type="button">Iniciar partida</button>
+              <button id="versusLeaveBtn" type="button">Volver al lobby</button>
+            </div>
+            <div class="versus-chat-box">
+              <div class="versus-chat-input">
+                <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
+                <button id="versusChatSendBtn" type="button">Enviar</button>
+              </div>
             </div>
           </div>
           <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
