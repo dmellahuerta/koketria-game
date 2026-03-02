@@ -1001,14 +1001,18 @@ const syncVersusPlayerPreviews = () => {
   }
 };
 
-const renderVersusSlots = (container, players, slotCount, containerKey) => {
+const renderVersusSlots = (container, players, slotCount, containerKey, options = {}) => {
   if (!container) {
     return false;
   }
+  const { showOnlyActualPlayers = false } = options;
   const safePlayers = Array.isArray(players) ? players : [];
-  const slots = Math.max(1, Number(slotCount) || 1);
+  const slots = showOnlyActualPlayers
+    ? safePlayers.length
+    : Math.max(1, Number(slotCount) || 1);
   const renderKeyParts = [String(containerKey || ''), String(slots)];
-  for (let i = 0; i < slots; i += 1) {
+  const iterations = showOnlyActualPlayers ? safePlayers.length : slots;
+  for (let i = 0; i < iterations; i += 1) {
     const player = safePlayers[i];
     if (player) {
       renderKeyParts.push(`${player.id}|${player.name}|${player.character || ''}|${normalizePlayerTeam(player.team) || ''}|${Boolean(player.ready)}`);
@@ -1039,7 +1043,7 @@ const renderVersusSlots = (container, players, slotCount, containerKey) => {
           ${me ? `<button class="versus-team-switch-btn" type="button" data-action="switch-team" data-player-id="${player.id}">${switchLabel}</button>` : ''}
         </div>
       `);
-    } else {
+    } else if (!showOnlyActualPlayers) {
       rows.push(`
         <div class="versus-player empty">
           <div class="versus-player-model placeholder"></div>
@@ -1093,8 +1097,8 @@ const updateVersusLobbyUi = () => {
     leftPlayers = players.slice(0, teamSize);
     rightPlayers = players.slice(teamSize, teamSize * 2);
   }
-  leftPlayers = leftPlayers.slice(0, teamSize);
-  rightPlayers = rightPlayers.slice(0, teamSize);
+  const leftCount = leftPlayers.length;
+  const rightCount = rightPlayers.length;
   const layoutKey = `${versusType}|${teamSize}|${leftPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}|${rightPlayers.map((p) => `${p.id}:${p.character || ''}:${normalizePlayerTeam(p.team) || '-'}`).join(',')}`;
   const enoughPlayers = hasType && requiredPlayers > 0 && currentPlayers === requiredPlayers;
   const requiredTeamSize = hasType ? (versusType === '2v2' ? 2 : 1) : 0;
@@ -1112,8 +1116,28 @@ const updateVersusLobbyUi = () => {
   versusWaitingInfo.textContent = hasType
     ? `Esperando: ${currentPlayers}/${requiredPlayers} (${versusType}) | Equipos: Rojo ${redCount}/${requiredTeamSize} - Azul ${blueCount}/${requiredTeamSize} | Ready: ${readyPlayers}/${requiredPlayers}`
     : `Esperando selección de modalidad (${currentPlayers}/${maxPlayers})`;
-  const leftChanged = renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize, 'left');
-  const rightChanged = renderVersusSlots(versusRightPlayers, rightPlayers, teamSize, 'right');
+  const leftChanged = renderVersusSlots(versusLeftPlayers, leftPlayers, teamSize, 'left', { showOnlyActualPlayers: true });
+  const rightChanged = renderVersusSlots(versusRightPlayers, rightPlayers, teamSize, 'right', { showOnlyActualPlayers: true });
+  versusLeftPlayers.classList.toggle('empty-team', leftCount === 0);
+  versusRightPlayers.classList.toggle('empty-team', rightCount === 0);
+  if (leftCount === 0) {
+    versusLeftPlayers.innerHTML = `
+      <div class="versus-player empty">
+        <div class="versus-player-model placeholder"></div>
+        <strong>Esperando...</strong>
+        <span>Sin jugadores en Rojo</span>
+      </div>
+    `;
+  }
+  if (rightCount === 0) {
+    versusRightPlayers.innerHTML = `
+      <div class="versus-player empty">
+        <div class="versus-player-model placeholder"></div>
+        <strong>Esperando...</strong>
+        <span>Sin jugadores en Azul</span>
+      </div>
+    `;
+  }
   if (leftChanged || rightChanged || layoutKey !== lastVersusLobbyLayoutKey || versusPreviewSlots.size === 0) {
     syncVersusPlayerPreviews();
     lastVersusLobbyLayoutKey = layoutKey;
