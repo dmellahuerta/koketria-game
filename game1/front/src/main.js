@@ -8165,6 +8165,7 @@ const updateMovement = (delta) => {
       hasInput
       && moveVelocity.lengthSq() > 16
       && now - lastMovementProgressAt > 220
+      && tuningPerfStats.correctionStreak >= reconcileUnstickSoftStreak
       && now - lastReconcileUnstickAt > reconcileUnstickCooldownMs
     ) {
       // Anti-stuck: if we are pushing forward and netcode is correcting continuously,
@@ -8197,19 +8198,7 @@ const applyLocalMovementReconciliation = (delta) => {
     localReconcileExpiresAt = 0;
     return;
   }
-  const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
-  const localSpeedNow = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
-  const targetDx = localReconcileTarget.x - camera.position.x;
-  const targetDz = localReconcileTarget.z - camera.position.z;
-  const targetDistance = Math.sqrt((targetDx * targetDx) + (targetDz * targetDz));
-  if (hasMoveIntent && localSpeedNow > 2.5 && targetDistance < 2.2) {
-    // Avoid treadmill effect: while actively moving, ignore short reconcile pulls.
-    return;
-  }
-  let factor = Math.max(0.01, Math.min(1, delta * localReconcileRatePerSecond));
-  if (hasMoveIntent && localSpeedNow > 2.5) {
-    factor *= 0.35;
-  }
+  const factor = Math.max(0.01, Math.min(1, delta * localReconcileRatePerSecond));
   camera.position.lerp(localReconcileTarget, factor);
   camera.position.y = Math.max(playerGroundY, camera.position.y);
   if (camera.position.distanceToSquared(localReconcileTarget) <= (localReconcileSoftError * localReconcileSoftError)) {
