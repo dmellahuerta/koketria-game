@@ -193,6 +193,9 @@ const LAG_COMP_RTT_FACTOR: f64 = 0.35;
 const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
 const SPECIAL_HIT_DAMAGE: f64 = 17.0;
+const NORMAL_SHOCKWAVE_RADIUS: f64 = 4.2;
+const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.18;
+const NORMAL_SHOCKWAVE_MAX_FACTOR: f64 = 0.9;
 const LUNAR_STRIKE_AOE_RADIUS: f64 = 4.2;
 const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 4.2;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
@@ -1003,6 +1006,43 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     );
                     let winner = apply_hit_and_emit(
                         &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
+                    );
+                    if winner {
+                        tokio::spawn(schedule_match_reset(
+                            Arc::clone(state),
+                            room_id.clone(),
+                            ROUND_RESET_SECONDS as u64,
+                        ));
+                    }
+                }
+            } else {
+                let impact_point = Vec3 {
+                    x: origin.x + (direction.x * effective_distance),
+                    y: origin.y + (direction.y * effective_distance),
+                    z: origin.z + (direction.z * effective_distance),
+                };
+                if is_mana {
+                    let projectile_speed =
+                        projectile_speed_units_per_second(character_for_shot.as_deref());
+                    let travel_ms =
+                        ((effective_distance / projectile_speed.max(1.0)) * 1000.0).round();
+                    let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+                    tokio::spawn(apply_delayed_normal_shockwave_damage(
+                        Arc::clone(state),
+                        room_id.clone(),
+                        client_id.to_string(),
+                        impact_point,
+                        impact_delay_ms,
+                    ));
+                } else {
+                    let winner = apply_normal_shockwave_damage(
+                        &mut inner,
+                        &room_id,
+                        client_id,
+                        &impact_point,
+                        NORMAL_SHOCKWAVE_RADIUS,
+                        HIT_DAMAGE,
+                        now,
                     );
                     if winner {
                         tokio::spawn(schedule_match_reset(
@@ -2044,6 +2084,100 @@ async fn apply_delayed_authoritative_hit(
             headshot,
             base_damage,
             ts,
+        )
+    };
+
+    if winner {
+        tokio::spawn(schedule_match_reset(
+            Arc::clone(&state),
+            room_id,
+            ROUND_RESET_SECONDS as u64,
+        ));
+    }
+}
+
+fn apply_normal_shockwave_damage(
+    inner: &mut Inner,
+    room_id: &str,
+    attacker_id: &str,
+    impact: &Vec3,
+    radius: f64,
+    normal_hit_damage: f64,
+    ts: i64,
+) -> bool {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return false;
+    };
+    let room_players: Vec<String> = room.players.iter().cloned().collect();
+    let mut winner = false;
+    for victim_id in room_players {
+        if victim_id == attacker_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, attacker_id, &victim_id) {
+            continue;
+        }
+        let Some(victim) = inner.clients.get(&victim_id) else {
+            continue;
+        };
+        if !victim.combat.alive {
+            continue;
+        }
+        let dx = victim.state.position.x - impact.x;
+        let dz = victim.state.position.z - impact.z;
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist > radius {
+            continue;
+        }
+        let t = (1.0 - (dist / radius.max(0.001))).clamp(0.0, 1.0);
+        let factor =
+            NORMAL_SHOCKWAVE_MIN_FACTOR + ((NORMAL_SHOCKWAVE_MAX_FACTOR - NORMAL_SHOCKWAVE_MIN_FACTOR) * t);
+        let mut splash_damage = normal_hit_damage * factor;
+        splash_damage = splash_damage.min((normal_hit_damage - 0.1).max(0.0)).max(1.0);
+        if apply_hit_and_emit(
+            inner,
+            room_id,
+            attacker_id,
+            &victim_id,
+            false,
+            splash_damage,
+            ts,
+        ) {
+            winner = true;
+            break;
+        }
+    }
+    winner
+}
+
+async fn apply_delayed_normal_shockwave_damage(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    attacker_id: String,
+    impact: Vec3,
+    delay_ms: u64,
+) {
+    sleep(Duration::from_millis(delay_ms)).await;
+
+    let winner = {
+        let mut inner = state.inner.lock().await;
+        let Some(room) = inner.rooms.rooms.get(&room_id) else {
+            return;
+        };
+        if room.status != RoomStatus::InGame || !room.players.contains(&attacker_id) {
+            return;
+        }
+        if !inner.clients.contains_key(&attacker_id) {
+            return;
+        }
+        apply_normal_shockwave_damage(
+            &mut inner,
+            &room_id,
+            &attacker_id,
+            &impact,
+            NORMAL_SHOCKWAVE_RADIUS,
+            HIT_DAMAGE,
+            now_ms(),
         )
     };
 
