@@ -6970,6 +6970,16 @@ const bindMobileTouchControls = () => {
 };
 
 window.addEventListener('keydown', (event) => {
+  const active = document.activeElement;
+  const isEditableFocused = Boolean(
+    active
+      && (
+        active.tagName === 'INPUT'
+        || active.tagName === 'TEXTAREA'
+        || active.isContentEditable
+      ),
+  );
+
   if (event.code === 'Escape' && !isChatTyping) {
     event.preventDefault();
     toggleOptionsMenu();
@@ -6998,6 +7008,10 @@ window.addEventListener('keydown', (event) => {
       sendWs({ type: 'chat_message', text });
     }
     closeChatInput();
+    return;
+  }
+
+  if (isEditableFocused) {
     return;
   }
 
@@ -7075,6 +7089,20 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  const active = document.activeElement;
+  const isEditableFocused = Boolean(
+    active
+      && (
+        active.tagName === 'INPUT'
+        || active.tagName === 'TEXTAREA'
+        || active.isContentEditable
+      ),
+  );
+
+  if (isEditableFocused) {
+    return;
+  }
+
   if (isChatTyping) {
     return;
   }
