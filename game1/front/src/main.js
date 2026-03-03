@@ -847,53 +847,25 @@ const formatWeather = (weather) => {
 };
 
 const applyWeather = (weather) => {
-  const value = weather || 'night';
-  currentWeather = value;
+  void weather;
+  currentWeather = 'rainy';
 
-  rain.visible = value === 'rainy';
-  snow.visible = value === 'snow';
-  stars.visible = value === 'night' || value === 'snow';
+  // Matrix style fixed ambience.
+  rain.visible = true;
+  snow.visible = false;
+  stars.visible = false;
   lowSparks.visible = false;
   moon.visible = false;
   secondMoon.visible = false;
 
-  if (value === 'sunny') {
-    scene.background = new THREE.Color(0xb7dfff);
-    scene.fog.color.set(0xb7dfff);
-    scene.fog.near = 90;
-    scene.fog.far = 400;
-    ambient.intensity = 0.74;
-    keyLight.intensity = 1.2;
-    keyLight.color.set(0xfff2c2);
-    lowSparkMat.opacity = 0.35;
-  } else if (value === 'rainy') {
-    scene.background = new THREE.Color(0x5b6670);
-    scene.fog.color.set(0x5b6670);
-    scene.fog.near = 10;
-    scene.fog.far = 95;
-    ambient.intensity = 0.26;
-    keyLight.intensity = 0.42;
-    keyLight.color.set(0x8bb7d7);
-    lowSparkMat.opacity = 0.25;
-  } else if (value === 'snow') {
-    scene.background = new THREE.Color(0xd8e9f4);
-    scene.fog.color.set(0xd8e9f4);
-    scene.fog.near = 26;
-    scene.fog.far = 200;
-    ambient.intensity = 0.65;
-    keyLight.intensity = 0.9;
-    keyLight.color.set(0xe7f6ff);
-    lowSparkMat.opacity = 0.42;
-  } else {
-    scene.background = new THREE.Color(0x070b14);
-    scene.fog.color.set(0x070b14);
-    scene.fog.near = 16;
-    scene.fog.far = 140;
-    ambient.intensity = 0.26;
-    keyLight.intensity = 0.38;
-    keyLight.color.set(0x7f79c8);
-    lowSparkMat.opacity = 0.6;
-  }
+  scene.background = new THREE.Color(0x040b06);
+  scene.fog.color.set(0x040b06);
+  scene.fog.near = 12;
+  scene.fog.far = 110;
+  ambient.intensity = 0.23;
+  keyLight.intensity = 0.4;
+  keyLight.color.set(0x49ff73);
+  lowSparkMat.opacity = 0.18;
 };
 
 const sendWs = (payload) => {
@@ -1554,7 +1526,7 @@ const terrainBaseY = -2.25;
 let currentMapSeed = null;
 let currentMapProfile = null;
 
-const rainCount = 5600;
+const rainCount = 3200;
 const rainPos = new Float32Array(rainCount * 3);
 const rainVel = new Float32Array(rainCount);
 for (let i = 0; i < rainCount; i += 1) {
@@ -7601,8 +7573,16 @@ const updateSnow = (delta) => {
 };
 
 const updateKoketriaNature = (delta) => {
-  const pulseDecay = currentWeather === 'night' ? 0.35 : 0.55;
+  const pulseDecay = 0.55;
   naturePulse = Math.max(0, naturePulse - (delta * pulseDecay));
+
+  if (!lowSparks.visible && naturePulse <= 0.0001) {
+    if (edgeMistMesh?.material) {
+      const now = performance.now() * 0.001;
+      edgeMistMesh.material.opacity = 0.13 + (Math.sin(now * 0.7) * 0.02);
+    }
+    return;
+  }
 
   const now = performance.now() * 0.001;
   const positions = lowSparkGeo.attributes.position.array;
