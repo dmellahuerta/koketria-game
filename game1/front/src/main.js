@@ -3403,10 +3403,6 @@ const localReconcileSoftError = 0.12;
 const localReconcileHardSnapDistance = 3.2;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
-const localReconcileSoftMaxError = 0.5;
-const reconcileUnstickSoftStreak = 14;
-const reconcileUnstickBypassMs = 650;
-const reconcileUnstickCooldownMs = 900;
 const localInputHistoryLimit = 180;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
@@ -3415,8 +3411,6 @@ let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
-let lastMovementProgressAt = performance.now();
-let lastReconcileUnstickAt = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 const reconcileStats = {
@@ -5999,7 +5993,6 @@ const connectWebSocket = () => {
         const error = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
         registerReconcileErrorSample(error);
         const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
-        const softThreshold = getDynamicSoftReconcileError();
         if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('hard');
@@ -6011,7 +6004,7 @@ const connectWebSocket = () => {
           localCollisionBypassUntil = performance.now() + 700;
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
-        } else if (error >= softThreshold) {
+        } else if (error >= localReconcileSoftError) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
@@ -7143,7 +7136,6 @@ const logTuningSnapshot = () => {
       correctionsPerSec: Number(reconcileStats.correctionsPerSec.toFixed(2)),
       softPerSec: Number(tuningPerfStats.softCorrectionsPerSec.toFixed(2)),
       hardPerSec: Number(tuningPerfStats.hardCorrectionsPerSec.toFixed(2)),
-      softThresholdNow: Number(getDynamicSoftReconcileError().toFixed(3)),
       streak: tuningPerfStats.correctionStreak,
       streakMax: tuningPerfStats.correctionStreakMax,
       hasTarget: Boolean(localReconcileTarget),
@@ -7183,20 +7175,6 @@ const logTuningSnapshot = () => {
   console.groupCollapsed('[koketria][snapshot:J]', snapshot.at);
   console.log(snapshot);
   console.groupEnd();
-};
-
-const getDynamicSoftReconcileError = () => {
-  const latency = Number.isFinite(state.latencyMs) ? state.latencyMs : 0;
-  const ackSamples = tuningPerfStats.ackRttSamples;
-  const ackAvg = ackSamples.length > 0
-    ? ackSamples.reduce((sum, value) => sum + value, 0) / ackSamples.length
-    : latency;
-  const ackP95 = percentileFromSamples(ackSamples, 0.95);
-  const jitter = Math.max(0, ackP95 - ackAvg);
-  const latencyAllowance = Math.max(0, (latency - 90) * 0.0013);
-  const jitterAllowance = Math.max(0, jitter * 0.0012);
-  const dynamic = localReconcileSoftError + latencyAllowance + jitterAllowance;
-  return Math.max(localReconcileSoftError, Math.min(localReconcileSoftMaxError, dynamic));
 };
 
 const sendLocalPlayerState = (force = false) => {
@@ -8117,24 +8095,6 @@ const updateMovement = (delta) => {
       camera.position.x = next.x;
       camera.position.z = next.z;
       moved = true;
-    }
-
-    const now = performance.now();
-    if (moved) {
-      lastMovementProgressAt = now;
-    } else if (
-      hasInput
-      && moveVelocity.lengthSq() > 16
-      && now - lastMovementProgressAt > 220
-      && tuningPerfStats.correctionStreak >= reconcileUnstickSoftStreak
-      && now - lastReconcileUnstickAt > reconcileUnstickCooldownMs
-    ) {
-      // Anti-stuck: if we are pushing forward and netcode is correcting continuously,
-      // trust authoritative trajectory briefly to break local collision thrash.
-      localCollisionBypassUntil = now + reconcileUnstickBypassMs;
-      localReconcileTarget = null;
-      localReconcileExpiresAt = 0;
-      lastReconcileUnstickAt = now;
     }
 
     camera.position.y = Math.max(playerGroundY, camera.position.y);
