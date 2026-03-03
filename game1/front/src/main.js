@@ -5281,10 +5281,6 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0) => {
   }
   clearPumoriOrbitSpecialByOwner(ownerId);
   const center = getPlayerPositionById(ownerId);
-  if (!center) {
-    return;
-  }
-
   const now = performance.now();
   const safeElapsedMs = Math.max(0, Number(elapsedMs) || 0);
   const visualStartAt = now - safeElapsedMs;
@@ -5304,6 +5300,7 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0) => {
     maxOrbitRadius: 22,
     maxActiveHammers: 28,
     phase: Math.random() * Math.PI * 2,
+    waitingOwnerUntil: center ? 0 : now + 2500,
   });
 };
 
@@ -8626,7 +8623,9 @@ const updatePumoriOrbitSpecials = (delta) => {
     }
     const center = getPlayerPositionById(special.ownerId);
     if (!center) {
-      clearPumoriOrbitSpecialByOwner(special.ownerId);
+      if (now > (special.waitingOwnerUntil || 0)) {
+        clearPumoriOrbitSpecialByOwner(special.ownerId);
+      }
       continue;
     }
     // Compact disposed entries in place to avoid per-frame array allocations.
