@@ -149,6 +149,9 @@ const SHIELD_DAMAGE_COST_FACTOR: f64 = 0.85;
 const HEADSHOT_RADIUS: f64 = 0.62;
 const BODYSHOT_RADIUS: f64 = 1.15;
 const TORSO_RADIUS: f64 = 1.02;
+const TORSO_CAPSULE_RADIUS: f64 = 0.78;
+const LEGS_CAPSULE_RADIUS: f64 = 0.66;
+const CAPSULE_SAMPLE_STEPS: usize = 7;
 const HEAD_CENTER_OFFSET_Y: f64 = 0.18;
 const BODY_CENTER_OFFSET_Y: f64 = -0.45;
 const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
@@ -2607,6 +2610,38 @@ fn ray_hit_sphere(
     }
 }
 
+fn ray_hit_vertical_capsule(
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    center_x: f64,
+    center_z: f64,
+    min_y: f64,
+    max_y: f64,
+    radius: f64,
+    max_distance: f64,
+) -> Option<f64> {
+    let low = min_y.min(max_y);
+    let high = min_y.max(max_y);
+    let steps = CAPSULE_SAMPLE_STEPS.max(2);
+    let mut best: Option<f64> = None;
+    for i in 0..steps {
+        let t = (i as f64) / ((steps - 1) as f64);
+        let center = Vec3 {
+            x: center_x,
+            y: low + ((high - low) * t),
+            z: center_z,
+        };
+        let Some(dist) = ray_hit_sphere(origin, direction_norm, &center, radius, max_distance) else {
+            continue;
+        };
+        match best {
+            Some(cur) if dist >= cur => {}
+            _ => best = Some(dist),
+        }
+    }
+    best
+}
+
 fn is_friendly_fire_blocked(
     inner: &Inner,
     room_id: &str,
@@ -2660,11 +2695,10 @@ fn find_best_hit(
             y: rewound.y + BODY_CENTER_OFFSET_Y,
             z: rewound.z,
         };
-        let torso_center = Vec3 {
-            x: rewound.x,
-            y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
-            z: rewound.z,
-        };
+        let torso_min_y = rewound.y - 0.28;
+        let torso_max_y = rewound.y + 0.58;
+        let legs_min_y = rewound.y - 1.05;
+        let legs_max_y = rewound.y - 0.18;
 
         let mut candidate_hit: Option<(bool, f64)> = None;
         if let Some(head_dist) = ray_hit_sphere(
@@ -2696,7 +2730,11 @@ fn find_best_hit(
         if let Some(torso_dist) = ray_hit_sphere(
             origin,
             direction_norm,
-            &torso_center,
+            &Vec3 {
+                x: rewound.x,
+                y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                z: rewound.z,
+            },
             TORSO_RADIUS,
             max_distance,
         ) {
@@ -2706,6 +2744,46 @@ fn find_best_hit(
                 }
                 None => {
                     candidate_hit = Some((false, torso_dist));
+                }
+                _ => {}
+            }
+        }
+        if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
+            origin,
+            direction_norm,
+            rewound.x,
+            rewound.z,
+            torso_min_y,
+            torso_max_y,
+            TORSO_CAPSULE_RADIUS,
+            max_distance,
+        ) {
+            match candidate_hit {
+                Some((_is_head, cur)) if torso_capsule_dist < cur => {
+                    candidate_hit = Some((false, torso_capsule_dist));
+                }
+                None => {
+                    candidate_hit = Some((false, torso_capsule_dist));
+                }
+                _ => {}
+            }
+        }
+        if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
+            origin,
+            direction_norm,
+            rewound.x,
+            rewound.z,
+            legs_min_y,
+            legs_max_y,
+            LEGS_CAPSULE_RADIUS,
+            max_distance,
+        ) {
+            match candidate_hit {
+                Some((_is_head, cur)) if legs_capsule_dist < cur => {
+                    candidate_hit = Some((false, legs_capsule_dist));
+                }
+                None => {
+                    candidate_hit = Some((false, legs_capsule_dist));
                 }
                 _ => {}
             }
