@@ -3405,8 +3405,6 @@ const localReconcileAbsoluteSnapDistance = 8;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
 const localReconcileSoftMaxError = 0.5;
-const localReconcileSoftMovingIgnoreError = 1.8;
-const localReconcileSoftMinIntervalMs = 130;
 const reconcileUnstickSoftStreak = 14;
 const reconcileUnstickBypassMs = 650;
 const reconcileUnstickCooldownMs = 900;
@@ -3420,7 +3418,6 @@ let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
 let lastMovementProgressAt = performance.now();
 let lastReconcileUnstickAt = 0;
-let lastSoftReconcileAt = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 const reconcileStats = {
@@ -6024,21 +6021,10 @@ const connectWebSocket = () => {
             localCollisionBypassUntil = nowMs + 480;
           }
         } else if (error >= softThreshold) {
-          const nowMs = performance.now();
-          const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
-          // Under sustained movement, ignore medium soft corrections to avoid treadmill/jitter feel.
-          if (hasMoveIntent && tuningPerfStats.localSpeed > 2.2 && error < localReconcileSoftMovingIgnoreError) {
-            return;
-          }
-          // Throttle soft correction application rate to prevent correction spam.
-          if (nowMs - lastSoftReconcileAt < localReconcileSoftMinIntervalMs) {
-            return;
-          }
-          lastSoftReconcileAt = nowMs;
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
-          localReconcileExpiresAt = nowMs + localReconcileExpireMs;
+          localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
         }
       }
       return;
@@ -7058,7 +7044,6 @@ const clearLocalPredictionHistory = () => {
   localReconcileExpiresAt = 0;
   localCollisionBypassUntil = 0;
   reconcileStats.errorSamples.length = 0;
-  lastSoftReconcileAt = 0;
   reconcileStats.correctionsInWindow = 0;
   reconcileStats.correctionsPerSec = 0;
   reconcileStats.lateAcksInWindow = 0;
