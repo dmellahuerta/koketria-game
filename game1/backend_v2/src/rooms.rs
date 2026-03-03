@@ -115,17 +115,6 @@ pub struct Room {
 }
 
 #[derive(Debug, Clone)]
-pub struct RoomSummary {
-    pub id: String,
-    pub name: String,
-    pub players: usize,
-    pub status: RoomStatus,
-    pub mode: RoomMode,
-    pub required_players: usize,
-    pub max_players: usize,
-}
-
-#[derive(Debug, Clone)]
 pub struct RoomManager {
     pub rooms: HashMap<String, Room>,
     pub max_custom_rooms: usize,
@@ -345,22 +334,6 @@ impl RoomManager {
             return Err(StartValidationError::NotAllReady);
         }
         Ok(())
-    }
-
-    pub fn summaries(&self) -> Vec<RoomSummary> {
-        let mut out = Vec::new();
-        for room in self.rooms.values() {
-            out.push(RoomSummary {
-                id: room.id.clone(),
-                name: room.name.clone(),
-                players: room.players.len(),
-                status: room.status,
-                mode: room.mode,
-                required_players: room.required_players,
-                max_players: room.max_players,
-            });
-        }
-        out
     }
 
     fn rebalance_teams(&mut self, room_id: &str) {
