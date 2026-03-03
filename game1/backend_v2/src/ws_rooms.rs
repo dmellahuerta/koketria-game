@@ -207,6 +207,8 @@ const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
+const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.42;
+const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.74;
 
 #[derive(Clone)]
 struct PumoriOrbitHammer {
@@ -1909,17 +1911,14 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                 );
                 let max_hit_distance = wall_hit_dist.unwrap_or(segment_len).min(segment_len);
 
-                let victim_hit =
-                    find_best_hit(
-                        &inner,
-                        &room_id,
-                        &caster_id,
-                        &hammer.position,
-                        &segment_dir,
-                        max_hit_distance,
-                        now,
-                    )
-                    .map(|(victim_id, _headshot, _dist)| victim_id);
+                let victim_hit = find_pumori_hammer_hit(
+                    &inner,
+                    &room_id,
+                    &caster_id,
+                    &hammer.position,
+                    &segment_dir,
+                    max_hit_distance,
+                );
 
                 hammer.position = next_pos;
 
@@ -2984,6 +2983,76 @@ fn find_best_hit(
         }
     }
     best
+}
+
+fn find_pumori_hammer_hit(
+    inner: &Inner,
+    room_id: &str,
+    caster_id: &str,
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    max_distance: f64,
+) -> Option<String> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    let mut best: Option<(String, f64)> = None;
+    for candidate_id in &room.players {
+        if candidate_id == caster_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, caster_id, candidate_id) {
+            continue;
+        }
+        let Some(candidate) = inner.clients.get(candidate_id) else {
+            continue;
+        };
+        if !candidate.combat.alive {
+            continue;
+        }
+
+        let center = &candidate.state.position;
+        let head_center = Vec3 {
+            x: center.x,
+            y: center.y + HEAD_CENTER_OFFSET_Y,
+            z: center.z,
+        };
+        let body_center = Vec3 {
+            x: center.x,
+            y: center.y + BODY_CENTER_OFFSET_Y,
+            z: center.z,
+        };
+
+        let mut hit_dist: Option<f64> = None;
+        if let Some(d) = ray_hit_sphere(
+            origin,
+            direction_norm,
+            &head_center,
+            PUMORI_HAMMER_HEAD_RADIUS,
+            max_distance,
+        ) {
+            hit_dist = Some(d);
+        }
+        if let Some(d) = ray_hit_sphere(
+            origin,
+            direction_norm,
+            &body_center,
+            PUMORI_HAMMER_BODY_RADIUS,
+            max_distance,
+        ) {
+            match hit_dist {
+                Some(cur) if d >= cur => {}
+                _ => hit_dist = Some(d),
+            }
+        }
+
+        let Some(dist) = hit_dist else {
+            continue;
+        };
+        match &best {
+            Some((_id, cur)) if dist >= *cur => {}
+            _ => best = Some((candidate_id.clone(), dist)),
+        }
+    }
+    best.map(|(id, _)| id)
 }
 
 fn ray_aabb_intersection_t(
