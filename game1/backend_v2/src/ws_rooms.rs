@@ -201,8 +201,15 @@ const PUMORI_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE * 0.5;
 const NORMAL_SHOCKWAVE_RADIUS: f64 = 4.2;
 const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.18;
 const NORMAL_SHOCKWAVE_MAX_FACTOR: f64 = 0.9;
+const SILENT_SPECIAL_EXPLOSION_RADIUS: f64 = 4.0;
+const SILENT_SPECIAL_MIN_FACTOR: f64 = 0.22;
+const SILENT_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const LUNAR_STRIKE_AOE_RADIUS: f64 = 4.2;
+const LUNAR_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const LUNAR_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 4.2;
+const NEO_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const NEO_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
 const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 85.0;
 const LUNAR_SPECIAL_IMPACT_DELAY_MS: u64 = 460;
@@ -216,6 +223,9 @@ const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
+const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 2.8;
+const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.35;
+const PUMORI_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
@@ -1173,7 +1183,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .map(|r| r.players.iter().cloned().collect())
                 .unwrap_or_default();
             let now_hit = now_ms();
-            let mut pending_hits: Vec<(String, u64)> = Vec::new();
+            let mut pending_impacts: Vec<(Vec3, u64)> = Vec::new();
             for victim_id in &room_players {
                 if victim_id == client_id {
                     continue;
@@ -1210,19 +1220,19 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 let delay_ms = ((distance / SILENT_SPECIAL_PROJECTILE_SPEED.max(1.0)) * 1000.0)
                     .round()
                     .clamp(25.0, 900.0) as u64;
-                pending_hits.push((victim_id.clone(), delay_ms));
+                pending_impacts.push((rewound, delay_ms));
             }
-            for (victim_id, delay_ms) in pending_hits {
-                tokio::spawn(apply_delayed_authoritative_hit(
+            for (impact, delay_ms) in pending_impacts {
+                tokio::spawn(apply_delayed_radial_falloff_damage(
                     Arc::clone(state),
                     room_id.clone(),
                     client_id.to_string(),
-                    victim_id,
-                    false,
+                    impact,
+                    SILENT_SPECIAL_EXPLOSION_RADIUS,
                     HIT_DAMAGE,
-                    Some(now_hit),
+                    SILENT_SPECIAL_MIN_FACTOR,
+                    SILENT_SPECIAL_MAX_FACTOR,
                     delay_ms,
-                    true,
                 ));
             }
         }
@@ -2023,15 +2033,17 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
 
                 hammer.position = next_pos;
 
-                if let Some(victim_id) = victim_hit {
+                if victim_hit.is_some() {
                     hammer.active = false;
-                    if apply_hit_and_emit(
+                    if apply_radial_falloff_damage(
                         &mut inner,
                         &room_id,
                         &caster_id,
-                        &victim_id,
-                        false,
+                        &segment_end,
+                        PUMORI_SPECIAL_EXPLOSION_RADIUS,
                         PUMORI_SPECIAL_HIT_DAMAGE,
+                        PUMORI_SPECIAL_MIN_FACTOR,
+                        PUMORI_SPECIAL_MAX_FACTOR,
                         now,
                     ) {
                         winner = true;
@@ -2135,13 +2147,15 @@ async fn apply_delayed_authoritative_hit(
     }
 }
 
-fn apply_normal_shockwave_damage(
+fn apply_radial_falloff_damage(
     inner: &mut Inner,
     room_id: &str,
     attacker_id: &str,
     impact: &Vec3,
     radius: f64,
-    normal_hit_damage: f64,
+    base_damage: f64,
+    min_factor: f64,
+    max_factor: f64,
     ts: i64,
 ) -> bool {
     let Some(room) = inner.rooms.rooms.get(room_id) else {
@@ -2169,10 +2183,14 @@ fn apply_normal_shockwave_damage(
             continue;
         }
         let t = (1.0 - (dist / radius.max(0.001))).clamp(0.0, 1.0);
-        let factor =
-            NORMAL_SHOCKWAVE_MIN_FACTOR + ((NORMAL_SHOCKWAVE_MAX_FACTOR - NORMAL_SHOCKWAVE_MIN_FACTOR) * t);
-        let mut splash_damage = normal_hit_damage * factor;
-        splash_damage = splash_damage.min((normal_hit_damage - 0.1).max(0.0)).max(1.0);
+        let factor = min_factor + ((max_factor - min_factor) * t);
+        let mut splash_damage = base_damage * factor;
+        if max_factor < 1.0 {
+            splash_damage = splash_damage.min((base_damage - 0.1).max(0.0));
+        } else {
+            splash_damage = splash_damage.min(base_damage);
+        }
+        splash_damage = splash_damage.max(1.0);
         if apply_hit_and_emit(
             inner,
             room_id,
@@ -2187,6 +2205,28 @@ fn apply_normal_shockwave_damage(
         }
     }
     winner
+}
+
+fn apply_normal_shockwave_damage(
+    inner: &mut Inner,
+    room_id: &str,
+    attacker_id: &str,
+    impact: &Vec3,
+    radius: f64,
+    normal_hit_damage: f64,
+    ts: i64,
+) -> bool {
+    apply_radial_falloff_damage(
+        inner,
+        room_id,
+        attacker_id,
+        impact,
+        radius,
+        normal_hit_damage,
+        NORMAL_SHOCKWAVE_MIN_FACTOR,
+        NORMAL_SHOCKWAVE_MAX_FACTOR,
+        ts,
+    )
 }
 
 async fn apply_delayed_normal_shockwave_damage(
@@ -2229,6 +2269,52 @@ async fn apply_delayed_normal_shockwave_damage(
     }
 }
 
+async fn apply_delayed_radial_falloff_damage(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    attacker_id: String,
+    impact: Vec3,
+    radius: f64,
+    base_damage: f64,
+    min_factor: f64,
+    max_factor: f64,
+    delay_ms: u64,
+) {
+    sleep(Duration::from_millis(delay_ms)).await;
+
+    let winner = {
+        let mut inner = state.inner.lock().await;
+        let Some(room) = inner.rooms.rooms.get(&room_id) else {
+            return;
+        };
+        if room.status != RoomStatus::InGame || !room.players.contains(&attacker_id) {
+            return;
+        }
+        if !inner.clients.contains_key(&attacker_id) {
+            return;
+        }
+        apply_radial_falloff_damage(
+            &mut inner,
+            &room_id,
+            &attacker_id,
+            &impact,
+            radius,
+            base_damage,
+            min_factor,
+            max_factor,
+            now_ms(),
+        )
+    };
+
+    if winner {
+        tokio::spawn(schedule_match_reset(
+            Arc::clone(&state),
+            room_id,
+            ROUND_RESET_SECONDS as u64,
+        ));
+    }
+}
+
 async fn apply_delayed_area_wave_damage(
     state: Arc<WsRoomsState>,
     room_id: String,
@@ -2236,6 +2322,8 @@ async fn apply_delayed_area_wave_damage(
     impacts: Vec<Vec3>,
     aoe_radius: f64,
     base_damage: f64,
+    min_factor: f64,
+    max_factor: f64,
     delay_ms: u64,
 ) {
     if impacts.is_empty() {
@@ -2278,13 +2366,22 @@ async fn apply_delayed_area_wave_damage(
                     continue;
                 }
                 hit_once.insert(victim_id.clone());
+                let t = (1.0 - (((dx * dx + dz * dz).sqrt()) / aoe_radius.max(0.001))).clamp(0.0, 1.0);
+                let factor = min_factor + ((max_factor - min_factor) * t);
+                let mut damage = base_damage * factor;
+                if max_factor < 1.0 {
+                    damage = damage.min((base_damage - 0.1).max(0.0));
+                } else {
+                    damage = damage.min(base_damage);
+                }
+                damage = damage.max(1.0);
                 if apply_hit_and_emit(
                     &mut inner,
                     &room_id,
                     &caster_id,
                     victim_id,
                     false,
-                    base_damage,
+                    damage,
                     now_hit,
                 ) {
                     winner = true;
@@ -2398,6 +2495,8 @@ async fn run_lunar_rain_special(
             impacts,
             LUNAR_STRIKE_AOE_RADIUS,
             LUNAR_SPECIAL_HIT_DAMAGE,
+            LUNAR_SPECIAL_MIN_FACTOR,
+            LUNAR_SPECIAL_MAX_FACTOR,
             LUNAR_SPECIAL_IMPACT_DELAY_MS,
         ));
     }
@@ -2473,6 +2572,8 @@ async fn run_neoorphen_meteor_special(
             impacts,
             NEOORPHEN_STRIKE_AOE_RADIUS,
             NEOORPHEN_SPECIAL_HIT_DAMAGE,
+            NEO_SPECIAL_MIN_FACTOR,
+            NEO_SPECIAL_MAX_FACTOR,
             NEOORPHEN_SPECIAL_IMPACT_DELAY_MS,
         ));
     }
