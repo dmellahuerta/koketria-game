@@ -2631,6 +2631,8 @@ let activeBattleThemeId = 'battle1';
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
 const attackSoundExtensions = ['.ogg', '.mp3', '.wav', '.m4a', ''];
 const attackSoundUrlCache = new Map();
+const attackSoundRetryAtMs = new Map();
+const attackSoundResolveRetryDelayMs = 15_000;
 let localAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
@@ -2916,7 +2918,15 @@ const resolveCharacterAttackSoundUrl = async (characterId) => {
   }
 
   if (attackSoundUrlCache.has(normalized)) {
-    return attackSoundUrlCache.get(normalized);
+    const cached = attackSoundUrlCache.get(normalized);
+    if (cached && cached !== defaultAttackSoundUrl) {
+      return cached;
+    }
+  }
+
+  const retryAt = Number(attackSoundRetryAtMs.get(normalized) || 0);
+  if (retryAt > Date.now()) {
+    return defaultAttackSoundUrl;
   }
 
   const candidates = buildAttackSoundCandidates(normalized);
@@ -2925,11 +2935,12 @@ const resolveCharacterAttackSoundUrl = async (characterId) => {
     // eslint-disable-next-line no-await-in-loop
     if (await canPlayAudioUrl(candidate)) {
       attackSoundUrlCache.set(normalized, candidate);
+      attackSoundRetryAtMs.delete(normalized);
       return candidate;
     }
   }
 
-  attackSoundUrlCache.set(normalized, defaultAttackSoundUrl);
+  attackSoundRetryAtMs.set(normalized, Date.now() + attackSoundResolveRetryDelayMs);
   return defaultAttackSoundUrl;
 };
 
@@ -3010,11 +3021,6 @@ const startShootSound = () => {
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => {
       cleanup();
-      const fallbackApplied = shootSound.getAttribute('data-fallback-applied') === '1';
-      if (currentSrc !== defaultAttackSoundUrl && !fallbackApplied) {
-        shootSound.setAttribute('data-fallback-applied', '1');
-        applyAudioSource(shootSound, defaultAttackSoundUrl);
-      }
     });
   }
 };
