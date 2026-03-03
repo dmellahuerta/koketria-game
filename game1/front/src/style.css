@@ -70,14 +70,14 @@ canvas {
     );
   background-size: 3px 18px;
   opacity: 0.24;
-  animation: matrix-fall 5.2s linear infinite;
+  animation: matrix-fall 11s linear infinite;
 }
 
 #lobbyMatrixBackdrop::after {
   background-size: 2px 14px;
   opacity: 0.16;
   filter: blur(0.2px);
-  animation-duration: 7.4s;
+  animation-duration: 16s;
   animation-direction: reverse;
 }
 
