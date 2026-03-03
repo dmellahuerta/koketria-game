@@ -1,6 +1,3 @@
-FROM node:20-bookworm-slim AS node_runtime
 FROM rust:1.86
-
-COPY --from=node_runtime /usr/local/ /usr/local/
 
 WORKDIR /app
