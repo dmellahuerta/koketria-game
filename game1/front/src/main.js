@@ -37,6 +37,11 @@ app.innerHTML = `
           <button id="createVersusBtn" type="button">Crear Versusmatch</button>
           <a id="mainPortalLink" class="lobby-link-btn" href="https://misterrii.com">Web principal</a>
         </div>
+        <div class="lobby-music-row">
+          <label for="lobbyMusicVolume">Volumen música lobby</label>
+          <input id="lobbyMusicVolume" type="range" min="0" max="1" step="0.01" />
+          <span id="lobbyMusicVolumeValue">100%</span>
+        </div>
         <h2>Salas activas</h2>
         <div id="roomList" class="room-list"></div>
         <p id="lobbyError" class="error hidden"></p>
@@ -81,6 +86,11 @@ app.innerHTML = `
                 <button id="versusChatSendBtn" type="button">Enviar</button>
               </div>
             </div>
+          </div>
+          <div class="lobby-music-row versus-music-row">
+            <label for="versusLobbyMusicVolume">Volumen música lobby1</label>
+            <input id="versusLobbyMusicVolume" type="range" min="0" max="1" step="0.01" />
+            <span id="versusLobbyMusicVolumeValue">100%</span>
           </div>
           <p id="versusHint">Las partidas versus aparecen en estado waiting hasta completar jugadores.</p>
         </div>
@@ -281,9 +291,13 @@ const characterPreview = document.querySelector('#characterPreview');
 const refreshRoomsBtn = document.querySelector('#refreshRoomsBtn');
 const createVersusBtn = document.querySelector('#createVersusBtn');
 const mainPortalLink = document.querySelector('#mainPortalLink');
+const lobbyMusicVolume = document.querySelector('#lobbyMusicVolume');
+const lobbyMusicVolumeValue = document.querySelector('#lobbyMusicVolumeValue');
 const roomList = document.querySelector('#roomList');
 const lobbyError = document.querySelector('#lobbyError');
 const versusLobby = document.querySelector('#versusLobby');
+const versusLobbyMusicVolume = document.querySelector('#versusLobbyMusicVolume');
+const versusLobbyMusicVolumeValue = document.querySelector('#versusLobbyMusicVolumeValue');
 const versusRoomInfo = document.querySelector('#versusRoomInfo');
 const versusTypeSelect = document.querySelector('#versusTypeSelect');
 const versusWaitingInfo = document.querySelector('#versusWaitingInfo');
@@ -2774,6 +2788,23 @@ const applyGameSettings = () => {
   renderPerfPanel();
 };
 
+const syncLobbyMusicUi = () => {
+  const value = clampSetting(settings.musicVolume, 0, 1, 1);
+  const label = `${Math.round(value * 100)}%`;
+  if (lobbyMusicVolume) {
+    lobbyMusicVolume.value = String(value);
+  }
+  if (lobbyMusicVolumeValue) {
+    lobbyMusicVolumeValue.textContent = label;
+  }
+  if (versusLobbyMusicVolume) {
+    versusLobbyMusicVolume.value = String(value);
+  }
+  if (versusLobbyMusicVolumeValue) {
+    versusLobbyMusicVolumeValue.textContent = label;
+  }
+};
+
 const syncOptionsUi = () => {
   optMouseSensitivity.value = String(settings.mouseSensitivity);
   optMouseSensitivityValue.textContent = settings.mouseSensitivity.toFixed(2);
@@ -2786,6 +2817,7 @@ const syncOptionsUi = () => {
   optFov.value = String(Math.round(settings.fov));
   optFovValue.textContent = String(Math.round(settings.fov));
   optShowPerf.checked = Boolean(settings.showPerfByDefault);
+  syncLobbyMusicUi();
 };
 
 const closeOptionsMenu = () => {
@@ -6231,7 +6263,23 @@ optMusicVolume.addEventListener('input', () => {
   settings.musicVolume = clampSetting(optMusicVolume.value, 0, 1, settings.musicVolume);
   optMusicVolumeValue.textContent = `${Math.round(settings.musicVolume * 100)}%`;
   applyGameSettings();
+  syncLobbyMusicUi();
   saveSettings();
+});
+
+const onLobbyMusicVolumeInput = (rawValue) => {
+  settings.musicVolume = clampSetting(rawValue, 0, 1, settings.musicVolume);
+  applyGameSettings();
+  syncOptionsUi();
+  saveSettings();
+};
+
+lobbyMusicVolume?.addEventListener('input', () => {
+  onLobbyMusicVolumeInput(lobbyMusicVolume.value);
+});
+
+versusLobbyMusicVolume?.addEventListener('input', () => {
+  onLobbyMusicVolumeInput(versusLobbyMusicVolume.value);
 });
 
 optSfxVolume.addEventListener('input', () => {
