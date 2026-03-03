@@ -3403,6 +3403,8 @@ const localReconcileSoftError = 0.12;
 const localReconcileHardSnapDistance = 3.2;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
+const localReconcileSoftMovingIgnoreError = 1.25;
+const localReconcileSoftMinIntervalMs = 120;
 const localInputHistoryLimit = 180;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
@@ -3411,6 +3413,7 @@ let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
+let lastSoftReconcileAt = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 const reconcileStats = {
@@ -6005,10 +6008,19 @@ const connectWebSocket = () => {
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
+          const nowMs = performance.now();
+          const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
+          if (hasMoveIntent && tuningPerfStats.localSpeed > 2 && error < localReconcileSoftMovingIgnoreError) {
+            return;
+          }
+          if (nowMs - lastSoftReconcileAt < localReconcileSoftMinIntervalMs) {
+            return;
+          }
+          lastSoftReconcileAt = nowMs;
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
-          localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
+          localReconcileExpiresAt = nowMs + localReconcileExpireMs;
         }
       }
       return;
@@ -7027,6 +7039,7 @@ const clearLocalPredictionHistory = () => {
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
   localCollisionBypassUntil = 0;
+  lastSoftReconcileAt = 0;
   reconcileStats.errorSamples.length = 0;
   reconcileStats.correctionsInWindow = 0;
   reconcileStats.correctionsPerSec = 0;
