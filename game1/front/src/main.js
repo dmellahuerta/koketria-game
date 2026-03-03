@@ -4220,6 +4220,8 @@ const respawnPlayer = () => {
   mana = maxMana;
   manaHudValue = Math.round(maxMana);
   pendingHealthRegen = 0;
+  lunarRainCooldownEndsAt = 0;
+  lastLunarCooldownShown = null;
   isReloading = false;
   reloadCooldown = 0;
   isJumping = false;

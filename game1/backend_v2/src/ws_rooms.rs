@@ -1803,7 +1803,7 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
         sleep(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64)).await;
 
         let winner = {
-            let inner = state.inner.lock().await;
+            let mut inner = state.inner.lock().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -2136,7 +2136,7 @@ async fn run_neoorphen_meteor_special(
         }
 
         let impacts = {
-            let mut inner = state.inner.lock().await;
+            let inner = state.inner.lock().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
