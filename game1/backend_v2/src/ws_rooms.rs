@@ -209,6 +209,8 @@ const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
 const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.42;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.74;
+const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.55;
+const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 
 #[derive(Clone)]
 struct PumoriOrbitHammer {
@@ -1886,7 +1888,9 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                 let radius = expanding_radius + ((elapsed_s * 3.4) + idx as f64).sin() * 0.12;
                 let next_pos = Vec3 {
                     x: center.x + (angle.cos() * radius),
-                    y: center.y + 1.15 + ((elapsed_s * 3.1) + idx as f64).sin() * 0.22,
+                    y: center.y
+                        + PUMORI_ORBIT_CENTER_HEIGHT
+                        + ((elapsed_s * 3.1) + idx as f64).sin() * PUMORI_ORBIT_HEIGHT_WAVE,
                     z: center.z + (angle.sin() * radius),
                 };
 
