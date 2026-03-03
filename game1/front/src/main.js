@@ -3400,14 +3400,14 @@ const remoteAnimMoveSpeedOff = 0.32;
 const remoteAnimSwitchCooldownMs = 140;
 const remoteMovingSignalHoldMs = 220;
 const localReconcileSoftError = 0.12;
-const localReconcileHardSnapDistance = 3.6;
-const localReconcileAbsoluteSnapDistance = 8;
+const localReconcileHardSnapDistance = 3.2;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
 const localReconcileSoftMaxError = 0.5;
 const reconcileUnstickSoftStreak = 14;
 const reconcileUnstickBypassMs = 650;
 const reconcileUnstickCooldownMs = 900;
+const reconcileSoftSuppressMs = 950;
 const localInputHistoryLimit = 180;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
@@ -3416,6 +3416,7 @@ let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
+let localSoftReconcileSuppressedUntil = 0;
 let lastMovementProgressAt = performance.now();
 let lastReconcileUnstickAt = 0;
 let localInputSeq = 0;
@@ -6001,26 +6002,34 @@ const connectWebSocket = () => {
         registerReconcileErrorSample(error);
         const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
         const softThreshold = getDynamicSoftReconcileError();
-        const hardThreshold = getDynamicHardReconcileError();
-        if (error >= hardThreshold) {
+        if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('hard');
+          camera.position.copy(correctedTarget);
+          camera.position.y = Math.max(playerGroundY, camera.position.y);
+          pendingMoveInputs.length = 0;
+          moveVelocity.x = 0;
+          moveVelocity.z = 0;
+          localCollisionBypassUntil = performance.now() + 700;
+          localSoftReconcileSuppressedUntil = 0;
+          localReconcileTarget = null;
+          localReconcileExpiresAt = 0;
+        } else if (error >= softThreshold) {
           const nowMs = performance.now();
-          if (error >= localReconcileAbsoluteSnapDistance) {
-            camera.position.copy(correctedTarget);
-            camera.position.y = Math.max(playerGroundY, camera.position.y);
-            pendingMoveInputs.length = 0;
-            moveVelocity.x = 0;
-            moveVelocity.z = 0;
-            localCollisionBypassUntil = nowMs + 700;
+          if (nowMs < localSoftReconcileSuppressedUntil) {
+            return;
+          }
+          const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
+          if (
+            hasMoveIntent
+            && tuningPerfStats.correctionStreak >= 10
+            && tuningPerfStats.localSpeed > 3
+          ) {
+            localSoftReconcileSuppressedUntil = nowMs + reconcileSoftSuppressMs;
             localReconcileTarget = null;
             localReconcileExpiresAt = 0;
-          } else {
-            localReconcileTarget = correctedTarget;
-            localReconcileExpiresAt = nowMs + Math.max(420, localReconcileExpireMs);
-            localCollisionBypassUntil = nowMs + 480;
+            return;
           }
-        } else if (error >= softThreshold) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
@@ -7043,6 +7052,7 @@ const clearLocalPredictionHistory = () => {
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
   localCollisionBypassUntil = 0;
+  localSoftReconcileSuppressedUntil = 0;
   reconcileStats.errorSamples.length = 0;
   reconcileStats.correctionsInWindow = 0;
   reconcileStats.correctionsPerSec = 0;
@@ -7153,12 +7163,12 @@ const logTuningSnapshot = () => {
       softPerSec: Number(tuningPerfStats.softCorrectionsPerSec.toFixed(2)),
       hardPerSec: Number(tuningPerfStats.hardCorrectionsPerSec.toFixed(2)),
       softThresholdNow: Number(getDynamicSoftReconcileError().toFixed(3)),
-      hardThresholdNow: Number(getDynamicHardReconcileError().toFixed(3)),
       streak: tuningPerfStats.correctionStreak,
       streakMax: tuningPerfStats.correctionStreakMax,
       hasTarget: Boolean(localReconcileTarget),
       targetExpiresInMs: Math.max(0, Math.ceil(localReconcileExpiresAt - now)),
       collisionBypassMs: Math.max(0, Math.ceil(localCollisionBypassUntil - now)),
+      softSuppressMs: Math.max(0, Math.ceil(localSoftReconcileSuppressedUntil - now)),
     },
     movement: {
       canPlay: canPlay(),
@@ -7207,20 +7217,6 @@ const getDynamicSoftReconcileError = () => {
   const jitterAllowance = Math.max(0, jitter * 0.0012);
   const dynamic = localReconcileSoftError + latencyAllowance + jitterAllowance;
   return Math.max(localReconcileSoftError, Math.min(localReconcileSoftMaxError, dynamic));
-};
-
-const getDynamicHardReconcileError = () => {
-  const latency = Number.isFinite(state.latencyMs) ? state.latencyMs : 0;
-  const ackSamples = tuningPerfStats.ackRttSamples;
-  const ackAvg = ackSamples.length > 0
-    ? ackSamples.reduce((sum, value) => sum + value, 0) / ackSamples.length
-    : latency;
-  const ackP95 = percentileFromSamples(ackSamples, 0.95);
-  const jitter = Math.max(0, ackP95 - ackAvg);
-  const latencyAllowance = Math.max(0, (latency - 120) * 0.01);
-  const jitterAllowance = Math.max(0, jitter * 0.008);
-  const dynamic = localReconcileHardSnapDistance + latencyAllowance + jitterAllowance;
-  return Math.max(localReconcileHardSnapDistance, Math.min(6.2, dynamic));
 };
 
 const sendLocalPlayerState = (force = false) => {
