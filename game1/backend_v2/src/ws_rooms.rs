@@ -146,8 +146,9 @@ const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 34.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_DAMAGE_COST_FACTOR: f64 = 0.85;
-const HEADSHOT_RADIUS: f64 = 0.5;
-const BODYSHOT_RADIUS: f64 = 0.92;
+const HEADSHOT_RADIUS: f64 = 0.62;
+const BODYSHOT_RADIUS: f64 = 1.15;
+const TORSO_RADIUS: f64 = 1.02;
 const HEAD_CENTER_OFFSET_Y: f64 = 0.18;
 const BODY_CENTER_OFFSET_Y: f64 = -0.45;
 const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
@@ -932,7 +933,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "ts": now
                   }
                 }),
-                None,
+                Some(client_id),
             );
 
             let hit = find_best_hit(
@@ -2659,6 +2660,11 @@ fn find_best_hit(
             y: rewound.y + BODY_CENTER_OFFSET_Y,
             z: rewound.z,
         };
+        let torso_center = Vec3 {
+            x: rewound.x,
+            y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
+            z: rewound.z,
+        };
 
         let mut candidate_hit: Option<(bool, f64)> = None;
         if let Some(head_dist) = ray_hit_sphere(
@@ -2683,6 +2689,23 @@ fn find_best_hit(
                 }
                 None => {
                     candidate_hit = Some((false, body_dist));
+                }
+                _ => {}
+            }
+        }
+        if let Some(torso_dist) = ray_hit_sphere(
+            origin,
+            direction_norm,
+            &torso_center,
+            TORSO_RADIUS,
+            max_distance,
+        ) {
+            match candidate_hit {
+                Some((_is_head, cur)) if torso_dist < cur => {
+                    candidate_hit = Some((false, torso_dist));
+                }
+                None => {
+                    candidate_hit = Some((false, torso_dist));
                 }
                 _ => {}
             }
