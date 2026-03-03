@@ -1542,6 +1542,7 @@ const mushroomRockMat = new THREE.MeshStandardMaterial({
 });
 
 const shootables = [];
+shootables.push(floor);
 const pillarBounds = [];
 const playerCollisionRadius = 0.55;
 const mapPillarCount = 180;

@@ -181,6 +181,7 @@ const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
+const GROUND_HIT_Y: f64 = 0.2;
 const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
 const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
@@ -937,9 +938,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let rewind_ts = now - (base_rewind + dynamic_extra);
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
-            let effective_distance = wall_hit_distance
-                .map(|d| d.min(distance))
-                .unwrap_or(distance);
+            let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, distance);
+            let effective_distance = match (wall_hit_distance, ground_hit_distance) {
+                (Some(w), Some(g)) => w.min(g).min(distance),
+                (Some(w), None) => w.min(distance),
+                (None, Some(g)) => g.min(distance),
+                (None, None) => distance,
+            };
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -3196,6 +3201,22 @@ fn resolve_wall_hit_distance(
         }
     }
     best
+}
+
+fn resolve_ground_hit_distance(
+    origin: &Vec3,
+    direction_norm: &Vec3,
+    max_distance: f64,
+) -> Option<f64> {
+    let dy = direction_norm.y;
+    if dy >= -1e-6 {
+        return None;
+    }
+    let t = (GROUND_HIT_Y - origin.y) / dy;
+    if !t.is_finite() || t < MIN_WALL_HIT_DISTANCE || t > max_distance {
+        return None;
+    }
+    Some(t)
 }
 
 fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
