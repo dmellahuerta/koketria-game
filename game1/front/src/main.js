@@ -9,7 +9,19 @@ const shouldRegisterServiceWorker = import.meta.env.PROD
 
 if (shouldRegisterServiceWorker) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    let reloadedBySw = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloadedBySw) {
+        return;
+      }
+      reloadedBySw = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register('/sw.js')
+      .then((registration) => {
+        registration.update().catch(() => {});
+      })
+      .catch(() => {});
   });
 }
 

@@ -1,6 +1,6 @@
-const CACHE_NAME = 'koketria-game-v2';
-const RUNTIME_CACHE = 'koketria-runtime-v2';
-const CORE_ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/pwa-icon.svg'];
+const CACHE_NAME = 'koketria-game-v3';
+const RUNTIME_CACHE = 'koketria-runtime-v3';
+const CORE_ASSETS = ['/manifest.webmanifest', '/pwa-icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -32,30 +32,66 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
+  const isNavigation = request.mode === 'navigate'
+    || request.destination === 'document'
+    || url.pathname === '/'
+    || url.pathname === '/index.html';
+  const isAssetFile = url.pathname.startsWith('/assets/');
+
+  if (isNavigation) {
+    event.respondWith((async () => {
+      try {
+        const fresh = await fetch(request, { cache: 'no-store' });
+        if (fresh && fresh.status === 200 && fresh.type === 'basic') {
+          const cache = await caches.open(RUNTIME_CACHE);
+          cache.put('/index.html', fresh.clone());
+        }
+        return fresh;
+      } catch {
+        const fallback = await caches.match('/index.html');
+        if (fallback) {
+          return fallback;
+        }
+        return new Response('', { status: 504, statusText: 'Offline' });
+      }
+    })());
+    return;
+  }
+
+  if (isAssetFile) {
+    event.respondWith((async () => {
+      const cached = await caches.match(request);
       if (cached) {
         return cached;
       }
-      return fetch(request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          const copy = response.clone();
-          caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(async () => {
-          if (request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-          const fallback = await caches.match(request);
-          if (fallback) {
-            return fallback;
-          }
-          return new Response('', { status: 504, statusText: 'Offline' });
-        });
-    }),
-  );
+      try {
+        const fresh = await fetch(request);
+        if (fresh && fresh.status === 200 && fresh.type === 'basic') {
+          const cache = await caches.open(RUNTIME_CACHE);
+          cache.put(request, fresh.clone());
+        }
+        return fresh;
+      } catch {
+        return new Response('', { status: 504, statusText: 'Offline' });
+      }
+    })());
+    return;
+  }
+
+  event.respondWith((async () => {
+    try {
+      const fresh = await fetch(request);
+      if (fresh && fresh.status === 200 && fresh.type === 'basic') {
+        const cache = await caches.open(RUNTIME_CACHE);
+        cache.put(request, fresh.clone());
+      }
+      return fresh;
+    } catch {
+      const fallback = await caches.match(request);
+      if (fallback) {
+        return fallback;
+      }
+      return new Response('', { status: 504, statusText: 'Offline' });
+    }
+  })());
 });
