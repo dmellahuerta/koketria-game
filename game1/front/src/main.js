@@ -925,29 +925,8 @@ let fpsSampleStartedAt = performance.now();
 let vfxQuality = 1;
 
 const requestLatencyProbe = (force = false) => {
-  const now = performance.now();
-  if (!state.showPerf || !state.joinedRoom || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    return;
-  }
-
-  if (pendingLatencyProbe && now - pendingLatencyProbe.sentAt < 5000) {
-    return;
-  }
-
-  if (!force && now - lastLatencyProbeAt < latencyProbeIntervalMs) {
-    return;
-  }
-
-  const probeId = `${Date.now()}-${latencyProbeSeq}`;
-  latencyProbeSeq += 1;
-  pendingLatencyProbe = { id: probeId, sentAt: now };
-  lastLatencyProbeAt = now;
-  sendWs({
-    type: 'ping',
-    probeId,
-    clientTs: Date.now(),
-    rttMs: Number.isFinite(state.latencyMs) ? Math.round(state.latencyMs) : undefined,
-  });
+  void force;
+  // Latencia ahora se mide server-driven con ping/pong.
 };
 
 const updatePerfMetrics = () => {
@@ -976,7 +955,6 @@ const updatePerfMetrics = () => {
     }
   }
 
-  requestLatencyProbe();
 };
 
 const isVersusRoom = (room) => {
@@ -5714,6 +5692,29 @@ const connectWebSocket = () => {
         pendingLatencyProbe = null;
         renderPerfPanel();
       }
+      return;
+    }
+
+    if (payload.type === 'ping') {
+      const probeId = payload.data?.probeId;
+      updateServerTimeOffset(payload.data?.serverTs);
+      if (Number.isFinite(Number(probeId))) {
+        sendWs({
+          type: 'pong',
+          probeId: Number(probeId),
+          clientTs: Date.now(),
+        });
+      }
+      return;
+    }
+
+    if (payload.type === 'latency_update') {
+      const latency = Number(payload.data?.latencyMs);
+      if (Number.isFinite(latency) && latency >= 0) {
+        state.latencyMs = latency;
+        renderPerfPanel();
+      }
+      updateServerTimeOffset(payload.data?.serverTs);
       return;
     }
 

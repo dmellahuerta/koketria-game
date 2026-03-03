@@ -72,6 +72,9 @@ struct ClientSession {
     kills: i64,
     deaths: i64,
     latency_ms: f64,
+    latency_probe_seq: u64,
+    latency_probe_sent_at: i64,
+    latency_probe_id: u64,
     state_history: Vec<StateSnapshot>,
     tx: mpsc::UnboundedSender<String>,
 }
@@ -230,6 +233,9 @@ const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
+const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
+const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
+const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
 
 #[derive(Clone)]
 struct PumoriOrbitHammer {
@@ -428,6 +434,9 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 kills: 0,
                 deaths: 0,
                 latency_ms: 0.0,
+                latency_probe_seq: 0,
+                latency_probe_sent_at: 0,
+                latency_probe_id: 0,
                 state_history: vec![StateSnapshot {
                     ts: now_ms(),
                     position: initial_state.position.clone(),
@@ -453,6 +462,29 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     };
     info!("[ws_rooms] connected client_id={}", client_id);
     let _ = out_tx.send(connected_payload.to_string());
+    let ping_state = Arc::clone(&state);
+    let ping_client_id = client_id.clone();
+    let ping_task = tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(SERVER_LATENCY_PING_INTERVAL_MS)).await;
+            let mut inner = ping_state.inner.lock().await;
+            let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
+                break;
+            };
+            entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
+            entry.latency_probe_id = entry.latency_probe_seq;
+            entry.latency_probe_sent_at = now_ms();
+            let payload = json!({
+              "type": "ping",
+              "ok": true,
+              "data": {
+                "probeId": entry.latency_probe_id,
+                "serverTs": now_ms()
+              }
+            });
+            let _ = entry.tx.send(payload.to_string());
+        }
+    });
 
     while let Some(next) = ws_rx.next().await {
         let msg = match next {
@@ -505,6 +537,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         ));
     }
     info!("[ws_rooms] disconnected client_id={}", client_id);
+    ping_task.abort();
     write_task.abort();
 }
 
@@ -524,13 +557,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             );
         }
         "ping" => {
-            if let Some(rtt_ms) = message.get("rttMs").and_then(Value::as_f64) {
-                if rtt_ms.is_finite() && rtt_ms >= 0.0 {
-                    if let Some(entry) = inner.clients.get_mut(client_id) {
-                        entry.latency_ms = clamp(rtt_ms, 0.0, 450.0);
-                    }
-                }
-            }
+            // legacy ping from old clients, kept for compatibility.
             inner.send_to(
                 client_id,
                 json!({
@@ -543,6 +570,42 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   }
                 }),
             );
+        }
+        "pong" => {
+            let probe_id = message.get("probeId").and_then(Value::as_u64).unwrap_or(0);
+            let now = now_ms();
+            let mut measured = None;
+            if let Some(entry) = inner.clients.get_mut(client_id) {
+                if probe_id != 0
+                    && probe_id == entry.latency_probe_id
+                    && entry.latency_probe_sent_at > 0
+                    && now >= entry.latency_probe_sent_at
+                {
+                    let sample_ms = clamp((now - entry.latency_probe_sent_at) as f64, 0.0, 450.0);
+                    let next_latency = if entry.latency_ms <= 0.0001 {
+                        sample_ms
+                    } else {
+                        (entry.latency_ms * (1.0 - LATENCY_SMOOTH_ALPHA))
+                            + (sample_ms * LATENCY_SMOOTH_ALPHA)
+                    };
+                    entry.latency_ms = clamp(next_latency, 0.0, 450.0);
+                    measured = Some(entry.latency_ms);
+                }
+            }
+            if let Some(latency_ms) = measured {
+                inner.send_to(
+                    client_id,
+                    json!({
+                      "type":"latency_update",
+                      "ok": true,
+                      "data": {
+                        "latencyMs": latency_ms,
+                        "probeId": probe_id,
+                        "serverTs": now
+                      }
+                    }),
+                );
+            }
         }
         "create_room" => {
             let mode = message
@@ -995,6 +1058,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         projectile_speed_units_per_second(character_for_shot.as_deref());
                     let travel_ms = ((hit_dist / projectile_speed.max(1.0)) * 1000.0).round();
                     let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+                    let impact_point = Vec3 {
+                        x: origin.x + (direction.x * hit_dist),
+                        y: origin.y + (direction.y * hit_dist),
+                        z: origin.z + (direction.z * hit_dist),
+                    };
                     tokio::spawn(apply_delayed_authoritative_hit(
                         Arc::clone(state),
                         room_id.clone(),
@@ -1002,6 +1070,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         victim_id.clone(),
                         headshot,
                         HIT_DAMAGE,
+                        impact_point,
                         Some(now),
                         impact_delay_ms,
                         true,
@@ -2079,6 +2148,7 @@ async fn apply_delayed_authoritative_hit(
     victim_id: String,
     headshot: bool,
     base_damage: f64,
+    impact_point: Vec3,
     shot_ts: Option<i64>,
     impact_delay_ms: u64,
     send_hit_confirm: bool,
@@ -2108,11 +2178,19 @@ async fn apply_delayed_authoritative_hit(
         if !inner.clients.contains_key(&attacker_id) {
             return;
         }
+        let Some(revalidated_headshot) = classify_point_hit_on_player(
+            &impact_point,
+            &victim.state.position,
+            headshot,
+            MAGIC_IMPACT_REVALIDATION_MARGIN,
+        ) else {
+            return;
+        };
         let ts = now_ms();
         if send_hit_confirm {
             let mut data = json!({
               "victimId": victim_id,
-              "headshot": headshot,
+              "headshot": revalidated_headshot,
               "ts": ts
             });
             if let Some(shot_ts_value) = shot_ts {
@@ -2132,7 +2210,7 @@ async fn apply_delayed_authoritative_hit(
             &room_id,
             &attacker_id,
             &victim_id,
-            headshot,
+            revalidated_headshot,
             base_damage,
             ts,
         )
@@ -2174,6 +2252,14 @@ fn apply_radial_falloff_damage(
             continue;
         };
         if !victim.combat.alive {
+            continue;
+        }
+        let victim_aim = Vec3 {
+            x: victim.state.position.x,
+            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+            z: victim.state.position.z,
+        };
+        if !has_line_of_sight(inner, room_id, impact, &victim_aim) {
             continue;
         }
         let dx = victim.state.position.x - impact.x;
@@ -2358,6 +2444,14 @@ async fn apply_delayed_area_wave_damage(
                     continue;
                 };
                 if !victim.combat.alive {
+                    continue;
+                }
+                let victim_aim = Vec3 {
+                    x: victim.state.position.x,
+                    y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                    z: victim.state.position.z,
+                };
+                if !has_line_of_sight(&inner, &room_id, impact, &victim_aim) {
                     continue;
                 }
                 let dx = victim.state.position.x - impact.x;
@@ -3491,6 +3585,60 @@ fn resolve_ground_hit_distance(
         return None;
     }
     Some(t)
+}
+
+fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bool {
+    let segment = sub(to, from);
+    let total_distance = (segment.x * segment.x + segment.y * segment.y + segment.z * segment.z).sqrt();
+    if total_distance <= 0.0001 {
+        return true;
+    }
+    let Some(direction) = normalize_vec3(segment) else {
+        return true;
+    };
+    match resolve_wall_hit_distance(inner, room_id, from, &direction, total_distance) {
+        Some(wall_dist) => wall_dist + 0.08 >= total_distance,
+        None => true,
+    }
+}
+
+fn classify_point_hit_on_player(
+    impact_point: &Vec3,
+    base_position: &Vec3,
+    prefer_headshot: bool,
+    margin: f64,
+) -> Option<bool> {
+    let head_center = Vec3 {
+        x: base_position.x,
+        y: base_position.y + HEAD_CENTER_OFFSET_Y,
+        z: base_position.z,
+    };
+    let body_center = Vec3 {
+        x: base_position.x,
+        y: base_position.y + BODY_CENTER_OFFSET_Y,
+        z: base_position.z,
+    };
+    let head_radius = HEADSHOT_RADIUS + margin;
+    if distance_sq(impact_point, &head_center) <= head_radius * head_radius {
+        return Some(true);
+    }
+    let body_radius = BODYSHOT_RADIUS + margin;
+    if distance_sq(impact_point, &body_center) <= body_radius * body_radius {
+        return Some(false);
+    }
+    let torso_center = Vec3 {
+        x: base_position.x,
+        y: base_position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+        z: base_position.z,
+    };
+    let torso_radius = TORSO_RADIUS + margin;
+    if distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius {
+        return Some(false);
+    }
+    if prefer_headshot {
+        return None;
+    }
+    None
 }
 
 fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
