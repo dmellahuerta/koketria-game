@@ -3129,6 +3129,8 @@ const tmpTravelVec = new THREE.Vector3();
 const tmpLocalHead = new THREE.Vector3();
 const tmpLocalBody = new THREE.Vector3();
 const tracerUpAxis = new THREE.Vector3(0, 1, 0);
+const tmpWorldQuatA = new THREE.Quaternion();
+const tmpWorldQuatB = new THREE.Quaternion();
 
 const getVfxSpawnBudget = (position) => {
   const cam = getRenderCamera();
@@ -7842,12 +7844,21 @@ const updateRemotePlayers = (delta) => {
       entry.head.rotation.x = lerpAngle(entry.head.rotation.x, entry.targetPitch, factor);
     }
     if (entry.healthBar?.holder) {
-      entry.healthBar.holder.quaternion.copy(getRenderCamera().quaternion);
+      const cam = getRenderCamera();
+      const holder = entry.healthBar.holder;
+      cam.getWorldQuaternion(tmpWorldQuatA);
+      if (holder.parent) {
+        holder.parent.getWorldQuaternion(tmpWorldQuatB);
+        tmpWorldQuatB.invert();
+        holder.quaternion.copy(tmpWorldQuatB.multiply(tmpWorldQuatA));
+      } else {
+        holder.quaternion.copy(tmpWorldQuatA);
+      }
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
       const visibleByDistance = distance <= remoteHealthBarMaxVisibleDistance;
       const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
-      entry.healthBar.holder.scale.setScalar(scale);
-      entry.healthBar.holder.visible = !entry.isDead && visibleByDistance;
+      holder.scale.setScalar(scale);
+      holder.visible = !entry.isDead && visibleByDistance;
     }
     if (entry.teamOutline) {
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
