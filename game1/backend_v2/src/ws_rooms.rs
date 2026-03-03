@@ -948,28 +948,44 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 effective_distance,
                 rewind_ts,
             );
-            if let Some((victim_id, headshot, _hit_dist)) = hit {
-                inner.send_to(
-                    client_id,
-                    json!({
-                      "type":"hit_confirm",
-                      "ok": true,
-                      "data": {
-                        "victimId": victim_id,
-                        "headshot": headshot,
-                        "ts": now
-                      }
-                    }),
-                );
-                let winner = apply_hit_and_emit(
-                    &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
-                );
-                if winner {
-                    tokio::spawn(schedule_match_reset(
+            if let Some((victim_id, headshot, hit_dist)) = hit {
+                if is_mana {
+                    let projectile_speed =
+                        projectile_speed_units_per_second(character_for_shot.as_deref());
+                    let travel_ms = ((hit_dist / projectile_speed.max(1.0)) * 1000.0).round();
+                    let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+                    tokio::spawn(apply_delayed_magic_hit(
                         Arc::clone(state),
                         room_id.clone(),
-                        ROUND_RESET_SECONDS as u64,
+                        client_id.to_string(),
+                        victim_id.clone(),
+                        headshot,
+                        now,
+                        impact_delay_ms,
                     ));
+                } else {
+                    inner.send_to(
+                        client_id,
+                        json!({
+                          "type":"hit_confirm",
+                          "ok": true,
+                          "data": {
+                            "victimId": victim_id,
+                            "headshot": headshot,
+                            "ts": now
+                          }
+                        }),
+                    );
+                    let winner = apply_hit_and_emit(
+                        &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
+                    );
+                    if winner {
+                        tokio::spawn(schedule_match_reset(
+                            Arc::clone(state),
+                            room_id.clone(),
+                            ROUND_RESET_SECONDS as u64,
+                        ));
+                    }
                 }
             }
         }
@@ -1853,6 +1869,74 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
     }
 }
 
+async fn apply_delayed_magic_hit(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    attacker_id: String,
+    victim_id: String,
+    headshot: bool,
+    shot_ts: i64,
+    impact_delay_ms: u64,
+) {
+    sleep(Duration::from_millis(impact_delay_ms)).await;
+
+    let winner = {
+        let mut inner = state.inner.lock().await;
+        let Some(room) = inner.rooms.rooms.get(&room_id) else {
+            return;
+        };
+        if room.status != RoomStatus::InGame {
+            return;
+        }
+        if !room.players.contains(&attacker_id) || !room.players.contains(&victim_id) {
+            return;
+        }
+        if is_friendly_fire_blocked(&inner, &room_id, &attacker_id, &victim_id) {
+            return;
+        }
+        let Some(victim) = inner.clients.get(&victim_id) else {
+            return;
+        };
+        if !victim.combat.alive {
+            return;
+        }
+        if !inner.clients.contains_key(&attacker_id) {
+            return;
+        }
+        let ts = now_ms();
+        inner.send_to(
+            &attacker_id,
+            json!({
+              "type":"hit_confirm",
+              "ok": true,
+              "data": {
+                "victimId": victim_id,
+                "headshot": headshot,
+                "ts": ts,
+                "shotTs": shot_ts
+              }
+            }),
+        );
+        apply_hit_and_emit(
+            &mut inner,
+            &room_id,
+            &attacker_id,
+            &victim_id,
+            headshot,
+            HIT_DAMAGE,
+            ts,
+        )
+    };
+
+    if winner {
+        tokio::spawn(schedule_match_reset(
+            Arc::clone(&state),
+            room_id,
+            ROUND_RESET_SECONDS as u64,
+        ));
+    }
+}
+
 fn build_special_impacts(
     center: &Vec3,
     wave_seed: u64,
@@ -2507,6 +2591,17 @@ fn get_shot_interval_ms(character: Option<&str>) -> i64 {
         MAGIC_ATTACK_INTERVAL_MS
     } else {
         BULLET_ATTACK_INTERVAL_MS
+    }
+}
+
+fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
+    let key = normalize_character(character);
+    match key.as_str() {
+        "silentman" | "silenmant" => 85.0,
+        "neoorphen" => 60.0,
+        "pezunalunar" | "pezuanalunar" => 80.0,
+        "pumori" => 36.0,
+        _ => 120.0,
     }
 }
 
