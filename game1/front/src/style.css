@@ -47,7 +47,7 @@ canvas {
 #lobbyMatrixBackdrop {
   display: none;
   position: fixed;
-  inset: 0;
+  inset: -14vh 0;
   z-index: 8;
   pointer-events: none;
   background:
@@ -69,10 +69,10 @@ canvas {
 
 @keyframes matrix-rain {
   0% {
-    transform: translateY(-10%);
+    transform: translateY(-8%);
   }
   100% {
-    transform: translateY(10%);
+    transform: translateY(8%);
   }
 }
 
