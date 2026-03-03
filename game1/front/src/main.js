@@ -8278,7 +8278,7 @@ const updatePumoriOrbitSpecials = (delta) => {
 
     const t = (now - special.createdAt) / 1000;
     const lifeRatio = Math.max(0, Math.min(1, (now - special.createdAt) / Math.max(1, special.endAt - special.createdAt)));
-    const lift = 0.55 + (Math.sin(t * 5.5) * 0.1);
+    const lift = 0.35 + (Math.sin(t * 5.5) * 0.1);
     const ownerIsSelf = Boolean(state.self && special.ownerId === state.self.id);
     for (let j = 0; j < special.hammers.length; j += 1) {
       const hammerEntry = special.hammers[j];
