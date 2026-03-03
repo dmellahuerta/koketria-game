@@ -203,8 +203,9 @@ const LUNAR_SPECIAL_MAX_RADIUS: f64 = 28.0;
 const NEO_SPECIAL_MIN_RADIUS: f64 = 5.0;
 const NEO_SPECIAL_MAX_RADIUS: f64 = 24.0;
 const PUMORI_ORBIT_DURATION_MS: i64 = 10_000;
-const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 260;
+const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
+const PUMORI_ORBIT_DAMAGE_RING_THICKNESS: f64 = 3.8;
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -1799,7 +1800,7 @@ fn apply_hit_and_emit(
 
 async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, caster_id: String) {
     let ticks = (PUMORI_ORBIT_DURATION_MS / PUMORI_ORBIT_DAMAGE_TICK_MS).max(1);
-    for _ in 0..ticks {
+    for tick in 0..ticks {
         sleep(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64)).await;
 
         let winner = {
@@ -1817,6 +1818,10 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                 return;
             }
             let center = caster.state.position.clone();
+            let progress = ((tick + 1) as f64 / ticks as f64).clamp(0.0, 1.0);
+            let outer_radius =
+                PUMORI_ORBIT_DAMAGE_RADIUS * (0.18 + (0.82 * progress));
+            let inner_radius = (outer_radius - PUMORI_ORBIT_DAMAGE_RING_THICKNESS).max(0.0);
             let candidate_ids: Vec<String> = room
                 .players
                 .iter()
@@ -1837,7 +1842,8 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                 }
                 let dx = victim.state.position.x - center.x;
                 let dz = victim.state.position.z - center.z;
-                if (dx * dx + dz * dz).sqrt() <= PUMORI_ORBIT_DAMAGE_RADIUS {
+                let distance = (dx * dx + dz * dz).sqrt();
+                if distance >= inner_radius && distance <= outer_radius {
                     hit_ids.push(victim_id);
                 }
             }
