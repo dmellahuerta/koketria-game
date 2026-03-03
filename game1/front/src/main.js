@@ -3407,7 +3407,6 @@ const localReconcileSoftMaxError = 0.5;
 const reconcileUnstickSoftStreak = 14;
 const reconcileUnstickBypassMs = 650;
 const reconcileUnstickCooldownMs = 900;
-const reconcileSoftSuppressMs = 950;
 const localInputHistoryLimit = 180;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
@@ -3416,7 +3415,6 @@ let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
-let localSoftReconcileSuppressedUntil = 0;
 let lastMovementProgressAt = performance.now();
 let lastReconcileUnstickAt = 0;
 let localInputSeq = 0;
@@ -6011,25 +6009,9 @@ const connectWebSocket = () => {
           moveVelocity.x = 0;
           moveVelocity.z = 0;
           localCollisionBypassUntil = performance.now() + 700;
-          localSoftReconcileSuppressedUntil = 0;
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= softThreshold) {
-          const nowMs = performance.now();
-          if (nowMs < localSoftReconcileSuppressedUntil) {
-            return;
-          }
-          const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
-          if (
-            hasMoveIntent
-            && tuningPerfStats.correctionStreak >= 10
-            && tuningPerfStats.localSpeed > 3
-          ) {
-            localSoftReconcileSuppressedUntil = nowMs + reconcileSoftSuppressMs;
-            localReconcileTarget = null;
-            localReconcileExpiresAt = 0;
-            return;
-          }
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
@@ -7052,7 +7034,6 @@ const clearLocalPredictionHistory = () => {
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
   localCollisionBypassUntil = 0;
-  localSoftReconcileSuppressedUntil = 0;
   reconcileStats.errorSamples.length = 0;
   reconcileStats.correctionsInWindow = 0;
   reconcileStats.correctionsPerSec = 0;
@@ -7168,7 +7149,6 @@ const logTuningSnapshot = () => {
       hasTarget: Boolean(localReconcileTarget),
       targetExpiresInMs: Math.max(0, Math.ceil(localReconcileExpiresAt - now)),
       collisionBypassMs: Math.max(0, Math.ceil(localCollisionBypassUntil - now)),
-      softSuppressMs: Math.max(0, Math.ceil(localSoftReconcileSuppressedUntil - now)),
     },
     movement: {
       canPlay: canPlay(),
