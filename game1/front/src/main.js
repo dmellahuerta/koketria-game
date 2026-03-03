@@ -1479,6 +1479,7 @@ const tpAimForward = new THREE.Vector3();
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.domElement.classList.add('game-render-canvas');
 app.appendChild(renderer.domElement);
 
 const ambient = new THREE.AmbientLight(0x66ff88, 0.3);
