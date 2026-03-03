@@ -7491,6 +7491,7 @@ const shoot = () => {
       z: shotDirection.z,
     },
     distance,
+    shotTs: Math.round(getEstimatedServerNowMs()),
   });
 
   muzzleFlash.intensity = 2.3;

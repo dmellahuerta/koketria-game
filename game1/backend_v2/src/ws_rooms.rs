@@ -185,6 +185,9 @@ const MAP_AXIS_Z_BASE: f64 = 96.0;
 const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
+const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
+const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
+const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
 const GROUND_HIT_Y: f64 = 0.2;
 const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
@@ -937,7 +940,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             };
             let mut maybe_resources_payload: Option<Value> = None;
             let mut shot_blocked = false;
-            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64)> = None;
+            let client_shot_ts = message.get("shotTs").and_then(Value::as_i64);
+            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
             {
                 let Some(shooter) = inner.clients.get_mut(client_id) else {
                     return;
@@ -995,6 +999,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         direction,
                         shooter.character.clone(),
                         shooter.latency_ms,
+                        client_shot_ts,
                     ));
                 }
             }
@@ -1004,7 +1009,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if shot_blocked {
                 return;
             }
-            let Some((origin, direction, character_for_shot, shooter_latency_ms)) = prepared_shot
+            let Some((origin, direction, character_for_shot, shooter_latency_ms, client_shot_ts)) = prepared_shot
             else {
                 return;
             };
@@ -1016,7 +1021,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             };
             let dynamic_extra = ((shooter_latency_ms * LAG_COMP_RTT_FACTOR).round() as i64)
                 .clamp(0, LAG_COMP_EXTRA_MAX_MS);
-            let rewind_ts = now - (base_rewind + dynamic_extra);
+            let rewind_ts_fallback = now - (base_rewind + dynamic_extra);
+            let rewind_floor = now - STATE_HISTORY_WINDOW_MS;
+            let rewind_ts = match client_shot_ts {
+                Some(ts) => clamp_i64(ts, rewind_floor, now),
+                None => clamp_i64(rewind_ts_fallback, rewind_floor, now),
+            };
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
             let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, distance);
@@ -1553,14 +1563,23 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
 
+            let ts = now_ms();
             let (next_x, next_z) = if let Some(current_entry) = inner.clients.get(client_id) {
+                let dt_ms = clamp_i64(ts - current_entry.state_ts, 16, PLAYER_MAX_MOVE_DT_MS);
+                let (limited_x, limited_z) = clamp_move_step(
+                    current_entry.state.position.x,
+                    current_entry.state.position.z,
+                    clamp(px, -200.0, 200.0),
+                    clamp(pz, -200.0, 200.0),
+                    dt_ms,
+                );
                 resolve_player_position(
                     &inner,
                     &room_id,
                     current_entry.state.position.x,
                     current_entry.state.position.z,
-                    clamp(px, -200.0, 200.0),
-                    clamp(pz, -200.0, 200.0),
+                    limited_x,
+                    limited_z,
                 )
             } else {
                 (clamp(px, -200.0, 200.0), clamp(pz, -200.0, 200.0))
@@ -1587,7 +1606,6 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 jumping,
                 moving,
             };
-            let ts = now_ms();
             if let Some(entry) = inner.clients.get_mut(client_id) {
                 entry.state = next_state.clone();
                 entry.state_ts = ts;
@@ -3128,6 +3146,32 @@ fn player_state_json(state: &PlayerState) -> Value {
 
 fn clamp(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
+}
+
+fn clamp_i64(value: i64, min: i64, max: i64) -> i64 {
+    value.max(min).min(max)
+}
+
+fn clamp_move_step(
+    prev_x: f64,
+    prev_z: f64,
+    desired_x: f64,
+    desired_z: f64,
+    dt_ms: i64,
+) -> (f64, f64) {
+    let dx = desired_x - prev_x;
+    let dz = desired_z - prev_z;
+    let step_len = (dx * dx + dz * dz).sqrt();
+    if step_len <= 1e-8 {
+        return (desired_x, desired_z);
+    }
+    let dt_s = (clamp_i64(dt_ms, 1, PLAYER_MAX_MOVE_DT_MS) as f64) / 1000.0;
+    let max_step = (PLAYER_MAX_SPEED_UNITS_PER_SECOND * dt_s) + PLAYER_MOVE_TOLERANCE_UNITS;
+    if step_len <= max_step {
+        return (desired_x, desired_z);
+    }
+    let ratio = max_step / step_len;
+    (prev_x + (dx * ratio), prev_z + (dz * ratio))
 }
 
 fn normalize_vec3(v: Vec3) -> Option<Vec3> {
