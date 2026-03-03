@@ -179,6 +179,9 @@ app.innerHTML = `
       <p>Geometrías: <span id="geometriesValue">0</span></p>
       <p>Texturas: <span id="texturesValue">0</span></p>
       <p>VFX activos: <span id="vfxValue">0</span></p>
+      <p>Pred err avg/p95: <span id="predErrValue">0.00 / 0.00</span></p>
+      <p>Correcciones/s: <span id="corrRateValue">0.00</span></p>
+      <p>Late ACK/s: <span id="lateAckRateValue">0.00</span></p>
     </div>
   </div>
 
@@ -361,6 +364,9 @@ const trianglesValue = document.querySelector('#trianglesValue');
 const geometriesValue = document.querySelector('#geometriesValue');
 const texturesValue = document.querySelector('#texturesValue');
 const vfxValue = document.querySelector('#vfxValue');
+const predErrValue = document.querySelector('#predErrValue');
+const corrRateValue = document.querySelector('#corrRateValue');
+const lateAckRateValue = document.querySelector('#lateAckRateValue');
 const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
@@ -835,6 +841,14 @@ const renderPerfPanel = () => {
   geometriesValue.textContent = String(Math.round(renderPerfStats.geometries));
   texturesValue.textContent = String(Math.round(renderPerfStats.textures));
   vfxValue.textContent = String(Math.round(renderPerfStats.vfx));
+  const samples = reconcileStats.errorSamples;
+  const avgErr = samples.length > 0
+    ? samples.reduce((sum, value) => sum + value, 0) / samples.length
+    : 0;
+  const p95Err = percentileFromSamples(samples, 0.95);
+  predErrValue.textContent = `${avgErr.toFixed(2)} / ${p95Err.toFixed(2)}`;
+  corrRateValue.textContent = reconcileStats.correctionsPerSec.toFixed(2);
+  lateAckRateValue.textContent = reconcileStats.lateAcksPerSec.toFixed(2);
   perfPanel.classList.remove('hidden');
 };
 
@@ -937,6 +951,10 @@ const updatePerfMetrics = () => {
 
   if (elapsed >= 500) {
     state.fps = Math.max(0, Math.round((fpsFrames * 1000) / elapsed));
+    reconcileStats.correctionsPerSec = (reconcileStats.correctionsInWindow * 1000) / elapsed;
+    reconcileStats.lateAcksPerSec = (reconcileStats.lateAcksInWindow * 1000) / elapsed;
+    reconcileStats.correctionsInWindow = 0;
+    reconcileStats.lateAcksInWindow = 0;
     const fps = state.fps;
     if (fps >= 58) {
       vfxQuality = 1;
@@ -3275,6 +3293,13 @@ let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
+const reconcileStats = {
+  errorSamples: [],
+  correctionsInWindow: 0,
+  correctionsPerSec: 0,
+  lateAcksInWindow: 0,
+  lateAcksPerSec: 0,
+};
 
 const getEstimatedServerNowMs = () => Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
 
@@ -5825,6 +5850,7 @@ const connectWebSocket = () => {
             }
             pendingMoveInputs.splice(0, idx + 1);
           } else if (pendingMoveInputs.length > 0) {
+            reconcileStats.lateAcksInWindow += 1;
             const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
             if (pruneUntil > 0) {
               pendingMoveInputs.splice(0, pruneUntil);
@@ -5835,13 +5861,16 @@ const connectWebSocket = () => {
         const dy = ackPos.y - errorBaseY;
         const dz = ackPos.z - errorBaseZ;
         const error = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        registerReconcileErrorSample(error);
         const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
         if (error >= localReconcileHardSnapDistance) {
+          reconcileStats.correctionsInWindow += 1;
           camera.position.copy(correctedTarget);
           constrainPlayerToWorld();
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
+          reconcileStats.correctionsInWindow += 1;
           localReconcileTarget = correctedTarget;
           localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
         }
@@ -6861,6 +6890,30 @@ const clearLocalPredictionHistory = () => {
   localInputSeq = 0;
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
+  reconcileStats.errorSamples.length = 0;
+  reconcileStats.correctionsInWindow = 0;
+  reconcileStats.correctionsPerSec = 0;
+  reconcileStats.lateAcksInWindow = 0;
+  reconcileStats.lateAcksPerSec = 0;
+};
+
+const registerReconcileErrorSample = (error) => {
+  if (!Number.isFinite(error) || error < 0) {
+    return;
+  }
+  reconcileStats.errorSamples.push(error);
+  if (reconcileStats.errorSamples.length > 140) {
+    reconcileStats.errorSamples.splice(0, reconcileStats.errorSamples.length - 140);
+  }
+};
+
+const percentileFromSamples = (samples, p) => {
+  if (!Array.isArray(samples) || samples.length <= 0) {
+    return 0;
+  }
+  const ordered = samples.slice().sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(ordered.length - 1, Math.floor((ordered.length - 1) * p)));
+  return ordered[idx];
 };
 
 const sendLocalPlayerState = (force = false) => {
