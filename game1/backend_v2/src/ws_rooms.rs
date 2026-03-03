@@ -154,6 +154,12 @@ const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const SILENT_SPECIAL_COOLDOWN_MS: i64 = 15_000;
 const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const PUMORI_SPECIAL_COOLDOWN_MS: i64 = 30_000;
+const LUNAR_SPECIAL_DURATION_MS: i64 = 10_000;
+const NEOORPHEN_SPECIAL_DURATION_MS: i64 = 10_000;
+const LUNAR_SPECIAL_WAVE_INTERVAL_MS: i64 = 420;
+const NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS: i64 = 320;
+const LUNAR_STRIKES_PER_WAVE: usize = 16;
+const NEOORPHEN_STRIKES_PER_WAVE: usize = 18;
 const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 10;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
@@ -185,6 +191,10 @@ const SPECIAL_HIT_DAMAGE: f64 = 17.0;
 const LUNAR_STRIKE_AOE_RADIUS: f64 = 4.2;
 const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 4.2;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
+const LUNAR_SPECIAL_MIN_RADIUS: f64 = 6.0;
+const LUNAR_SPECIAL_MAX_RADIUS: f64 = 28.0;
+const NEO_SPECIAL_MIN_RADIUS: f64 = 5.0;
+const NEO_SPECIAL_MAX_RADIUS: f64 = 24.0;
 const PUMORI_ORBIT_DURATION_MS: i64 = 10_000;
 const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 260;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
@@ -997,89 +1007,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if !allow_cast {
                 return;
             }
-            let mut strikes = Vec::new();
-            let mut impacts = Vec::new();
-            for i in 0..8 {
-                let t = (i as f64) / 8.0;
-                let angle = t * std::f64::consts::TAU;
-                let radius = 4.0 + (i as f64 % 4.0) * 2.0;
-                let impact = Vec3 {
-                    x: origin.x + angle.cos() * radius,
-                    y: 0.2,
-                    z: origin.z + angle.sin() * radius,
-                };
-                let start = Vec3 {
-                    x: impact.x,
-                    y: 34.0 + (i as f64 % 3.0) * 4.0,
-                    z: impact.z,
-                };
-                strikes.push(json!({
-                  "start": { "x": start.x, "y": start.y, "z": start.z },
-                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
-                }));
-                impacts.push(impact);
-            }
-            inner.broadcast_room(
-                &room_id,
-                json!({
-                  "type":"special_lunar_rain_wave",
-                  "ok": true,
-                  "data": {
-                    "playerId": client_id,
-                    "strikes": strikes,
-                    "ts": now_ms()
-                  }
-                }),
-                None,
-            );
-            let mut hit_once = HashSet::new();
-            let mut winner = false;
-            let room_players: Vec<String> = inner
-                .rooms
-                .rooms
-                .get(&room_id)
-                .map(|r| r.players.iter().cloned().collect())
-                .unwrap_or_default();
-            for impact in &impacts {
-                for victim_id in &room_players {
-                    if victim_id == client_id || hit_once.contains(victim_id) {
-                        continue;
-                    }
-                    if is_friendly_fire_blocked(&inner, &room_id, client_id, victim_id) {
-                        continue;
-                    }
-                    let Some(victim) = inner.clients.get(victim_id) else {
-                        continue;
-                    };
-                    if !victim.combat.alive {
-                        continue;
-                    }
-                    let dx = victim.state.position.x - impact.x;
-                    let dz = victim.state.position.z - impact.z;
-                    if (dx * dx + dz * dz).sqrt() > LUNAR_STRIKE_AOE_RADIUS {
-                        continue;
-                    }
-                    hit_once.insert(victim_id.clone());
-                    if apply_hit_and_emit(
-                        &mut inner,
-                        &room_id,
-                        client_id,
-                        victim_id,
-                        false,
-                        SPECIAL_HIT_DAMAGE,
-                        now_ms(),
-                    ) {
-                        winner = true;
-                    }
-                }
-            }
-            if winner {
-                tokio::spawn(schedule_match_reset(
-                    Arc::clone(state),
-                    room_id.clone(),
-                    ROUND_RESET_SECONDS as u64,
-                ));
-            }
+            tokio::spawn(run_lunar_rain_special(
+                Arc::clone(state),
+                room_id.clone(),
+                client_id.to_string(),
+                origin,
+            ));
         }
         "player_special_silent_cone" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1143,57 +1076,66 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
                 None,
             );
-            let mut hit_once = HashSet::new();
             let now_hit = now_ms();
-            for ray in &rays {
-                let dir = ray.get("direction");
-                let Some(direction) = normalize_vec3(Vec3 {
-                    x: dir
-                        .and_then(|v| v.get("x"))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0),
-                    y: dir
-                        .and_then(|v| v.get("y"))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0),
-                    z: dir
-                        .and_then(|v| v.get("z"))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0),
-                }) else {
-                    continue;
-                };
-                let Some((victim_id, _headshot, _dist)) = find_best_hit(
-                    &inner,
-                    &room_id,
-                    client_id,
-                    &origin,
-                    &direction,
-                    SILENT_SPECIAL_MAX_DISTANCE,
-                    now_hit - LAG_COMP_MAGIC_MS,
-                ) else {
-                    continue;
-                };
-                if hit_once.contains(&victim_id) {
+            let room_players: Vec<String> = inner
+                .rooms
+                .rooms
+                .get(&room_id)
+                .map(|r| r.players.iter().cloned().collect())
+                .unwrap_or_default();
+            let mut winner = false;
+            for victim_id in &room_players {
+                if victim_id == client_id {
                     continue;
                 }
-                hit_once.insert(victim_id.clone());
+                if is_friendly_fire_blocked(&inner, &room_id, client_id, victim_id) {
+                    continue;
+                }
+                let Some(victim) = inner.clients.get(victim_id) else {
+                    continue;
+                };
+                if !victim.combat.alive {
+                    continue;
+                }
+                let rewound = client_position_at(victim, now_hit - LAG_COMP_MAGIC_MS);
+                let to_target = Vec3 {
+                    x: rewound.x - origin.x,
+                    y: rewound.y - origin.y,
+                    z: rewound.z - origin.z,
+                };
+                let distance = distance_sq(&rewound, &origin).sqrt();
+                if distance <= 0.0001 || distance > SILENT_SPECIAL_MAX_DISTANCE {
+                    continue;
+                }
+                let Some(direction) = normalize_vec3(to_target) else {
+                    continue;
+                };
+                if let Some(wall_distance) =
+                    resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance)
+                {
+                    if wall_distance + 0.2 < distance {
+                        continue;
+                    }
+                }
                 if apply_hit_and_emit(
                     &mut inner,
                     &room_id,
                     client_id,
-                    &victim_id,
+                    victim_id,
                     false,
                     SPECIAL_HIT_DAMAGE,
                     now_hit,
                 ) {
-                    tokio::spawn(schedule_match_reset(
-                        Arc::clone(state),
-                        room_id.clone(),
-                        ROUND_RESET_SECONDS as u64,
-                    ));
+                    winner = true;
                     break;
                 }
+            }
+            if winner {
+                tokio::spawn(schedule_match_reset(
+                    Arc::clone(state),
+                    room_id.clone(),
+                    ROUND_RESET_SECONDS as u64,
+                ));
             }
         }
         "player_special_neoorphen_meteor" => {
@@ -1234,89 +1176,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if !allow_cast {
                 return;
             }
-            let mut strikes = Vec::new();
-            let mut impacts = Vec::new();
-            for i in 0..12 {
-                let t = (i as f64) / 12.0;
-                let angle = t * std::f64::consts::TAU;
-                let radius = 5.0 + (i as f64 % 5.0) * 1.8;
-                let impact = Vec3 {
-                    x: origin.x + angle.cos() * radius,
-                    y: 0.2,
-                    z: origin.z + angle.sin() * radius,
-                };
-                let start = Vec3 {
-                    x: impact.x,
-                    y: 60.0 + (i as f64 % 4.0) * 6.0,
-                    z: impact.z,
-                };
-                strikes.push(json!({
-                  "start": { "x": start.x, "y": start.y, "z": start.z },
-                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
-                }));
-                impacts.push(impact);
-            }
-            inner.broadcast_room(
-                &room_id,
-                json!({
-                  "type":"special_neoorphen_meteor_wave",
-                  "ok": true,
-                  "data": {
-                    "playerId": client_id,
-                    "strikes": strikes,
-                    "ts": now_ms()
-                  }
-                }),
-                None,
-            );
-            let mut hit_once = HashSet::new();
-            let mut winner = false;
-            let room_players: Vec<String> = inner
-                .rooms
-                .rooms
-                .get(&room_id)
-                .map(|r| r.players.iter().cloned().collect())
-                .unwrap_or_default();
-            for impact in &impacts {
-                for victim_id in &room_players {
-                    if victim_id == client_id || hit_once.contains(victim_id) {
-                        continue;
-                    }
-                    if is_friendly_fire_blocked(&inner, &room_id, client_id, victim_id) {
-                        continue;
-                    }
-                    let Some(victim) = inner.clients.get(victim_id) else {
-                        continue;
-                    };
-                    if !victim.combat.alive {
-                        continue;
-                    }
-                    let dx = victim.state.position.x - impact.x;
-                    let dz = victim.state.position.z - impact.z;
-                    if (dx * dx + dz * dz).sqrt() > NEOORPHEN_STRIKE_AOE_RADIUS {
-                        continue;
-                    }
-                    hit_once.insert(victim_id.clone());
-                    if apply_hit_and_emit(
-                        &mut inner,
-                        &room_id,
-                        client_id,
-                        victim_id,
-                        false,
-                        SPECIAL_HIT_DAMAGE,
-                        now_ms(),
-                    ) {
-                        winner = true;
-                    }
-                }
-            }
-            if winner {
-                tokio::spawn(schedule_match_reset(
-                    Arc::clone(state),
-                    room_id.clone(),
-                    ROUND_RESET_SECONDS as u64,
-                ));
-            }
+            tokio::spawn(run_neoorphen_meteor_special(
+                Arc::clone(state),
+                room_id.clone(),
+                client_id.to_string(),
+                origin,
+            ));
         }
         "player_special_pumori_orbit" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -1982,6 +1847,262 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
             return;
         }
     }
+}
+
+fn build_special_impacts(
+    center: &Vec3,
+    wave_seed: u64,
+    strikes_per_wave: usize,
+    min_radius: f64,
+    max_radius: f64,
+) -> Vec<Vec3> {
+    let mut rng = SeededRng::new(wave_seed ^ 0xD0E5_51A1);
+    let mut impacts = Vec::with_capacity(strikes_per_wave);
+    for i in 0..strikes_per_wave {
+        let angle = rng.next_f64() * std::f64::consts::TAU;
+        let radius = min_radius + (rng.next_f64() * (max_radius - min_radius));
+        let jitter = ((i as f64) / (strikes_per_wave.max(1) as f64)) * 0.55;
+        impacts.push(Vec3 {
+            x: center.x + angle.cos() * (radius + jitter),
+            y: 0.2,
+            z: center.z + angle.sin() * (radius + jitter),
+        });
+    }
+    impacts
+}
+
+async fn run_lunar_rain_special(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    caster_id: String,
+    cast_origin: Vec3,
+) {
+    let waves = (LUNAR_SPECIAL_DURATION_MS / LUNAR_SPECIAL_WAVE_INTERVAL_MS).max(1);
+    let base_seed = now_ms() as u64 ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id);
+    for wave_idx in 0..waves {
+        if wave_idx > 0 {
+            sleep(Duration::from_millis(LUNAR_SPECIAL_WAVE_INTERVAL_MS as u64)).await;
+        }
+
+        let winner = {
+            let mut inner = state.inner.lock().await;
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame || !room.players.contains(&caster_id) {
+                return;
+            }
+            let Some(caster) = inner.clients.get(&caster_id) else {
+                return;
+            };
+            if !caster.combat.alive {
+                return;
+            }
+            let center = caster.state.position.clone();
+            let impacts = build_special_impacts(
+                &center,
+                base_seed ^ ((wave_idx as u64) * 0x9E37_79B9) ^ 0xAA11_BBCC,
+                LUNAR_STRIKES_PER_WAVE,
+                LUNAR_SPECIAL_MIN_RADIUS,
+                LUNAR_SPECIAL_MAX_RADIUS,
+            );
+            let mut strikes = Vec::with_capacity(impacts.len());
+            for (i, impact) in impacts.iter().enumerate() {
+                let start = Vec3 {
+                    x: impact.x + ((i as f64) * 0.17).sin() * 1.3,
+                    y: 36.0 + (((wave_idx + i as i64) % 4) as f64) * 5.0,
+                    z: impact.z + ((i as f64) * 0.19).cos() * 1.3,
+                };
+                strikes.push(json!({
+                  "start": { "x": start.x, "y": start.y, "z": start.z },
+                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
+                }));
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_lunar_rain_wave",
+                  "ok": true,
+                  "data": {
+                    "playerId": caster_id,
+                    "strikes": strikes,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+
+            let room_players: Vec<String> = room.players.iter().cloned().collect();
+            let mut hit_once = HashSet::new();
+            let now_hit = now_ms();
+            let mut winner = false;
+            for impact in &impacts {
+                for victim_id in &room_players {
+                    if victim_id == &caster_id || hit_once.contains(victim_id) {
+                        continue;
+                    }
+                    if is_friendly_fire_blocked(&inner, &room_id, &caster_id, victim_id) {
+                        continue;
+                    }
+                    let Some(victim) = inner.clients.get(victim_id) else {
+                        continue;
+                    };
+                    if !victim.combat.alive {
+                        continue;
+                    }
+                    let dx = victim.state.position.x - impact.x;
+                    let dz = victim.state.position.z - impact.z;
+                    if (dx * dx + dz * dz).sqrt() > LUNAR_STRIKE_AOE_RADIUS {
+                        continue;
+                    }
+                    hit_once.insert(victim_id.clone());
+                    if apply_hit_and_emit(
+                        &mut inner,
+                        &room_id,
+                        &caster_id,
+                        victim_id,
+                        false,
+                        SPECIAL_HIT_DAMAGE,
+                        now_hit,
+                    ) {
+                        winner = true;
+                        break;
+                    }
+                }
+                if winner {
+                    break;
+                }
+            }
+            winner
+        };
+
+        if winner {
+            tokio::spawn(schedule_match_reset(
+                Arc::clone(&state),
+                room_id.clone(),
+                ROUND_RESET_SECONDS as u64,
+            ));
+            return;
+        }
+    }
+    let _ = cast_origin;
+}
+
+async fn run_neoorphen_meteor_special(
+    state: Arc<WsRoomsState>,
+    room_id: String,
+    caster_id: String,
+    cast_origin: Vec3,
+) {
+    let waves = (NEOORPHEN_SPECIAL_DURATION_MS / NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS).max(1);
+    let base_seed = now_ms() as u64 ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id) ^ 0x77CC_1144;
+    for wave_idx in 0..waves {
+        if wave_idx > 0 {
+            sleep(Duration::from_millis(NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS as u64)).await;
+        }
+
+        let winner = {
+            let mut inner = state.inner.lock().await;
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame || !room.players.contains(&caster_id) {
+                return;
+            }
+            let Some(caster) = inner.clients.get(&caster_id) else {
+                return;
+            };
+            if !caster.combat.alive {
+                return;
+            }
+            let center = caster.state.position.clone();
+            let impacts = build_special_impacts(
+                &center,
+                base_seed ^ ((wave_idx as u64) * 0x85EB_CA6B) ^ 0x33AA_22FF,
+                NEOORPHEN_STRIKES_PER_WAVE,
+                NEO_SPECIAL_MIN_RADIUS,
+                NEO_SPECIAL_MAX_RADIUS,
+            );
+            let mut strikes = Vec::with_capacity(impacts.len());
+            for (i, impact) in impacts.iter().enumerate() {
+                let start = Vec3 {
+                    x: impact.x + ((i as f64) * 0.13).sin() * 0.9,
+                    y: 62.0 + (((wave_idx + i as i64) % 6) as f64) * 7.0,
+                    z: impact.z + ((i as f64) * 0.16).cos() * 0.9,
+                };
+                strikes.push(json!({
+                  "start": { "x": start.x, "y": start.y, "z": start.z },
+                  "impact": { "x": impact.x, "y": impact.y, "z": impact.z }
+                }));
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"special_neoorphen_meteor_wave",
+                  "ok": true,
+                  "data": {
+                    "playerId": caster_id,
+                    "strikes": strikes,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+
+            let room_players: Vec<String> = room.players.iter().cloned().collect();
+            let mut hit_once = HashSet::new();
+            let now_hit = now_ms();
+            let mut winner = false;
+            for impact in &impacts {
+                for victim_id in &room_players {
+                    if victim_id == &caster_id || hit_once.contains(victim_id) {
+                        continue;
+                    }
+                    if is_friendly_fire_blocked(&inner, &room_id, &caster_id, victim_id) {
+                        continue;
+                    }
+                    let Some(victim) = inner.clients.get(victim_id) else {
+                        continue;
+                    };
+                    if !victim.combat.alive {
+                        continue;
+                    }
+                    let dx = victim.state.position.x - impact.x;
+                    let dz = victim.state.position.z - impact.z;
+                    if (dx * dx + dz * dz).sqrt() > NEOORPHEN_STRIKE_AOE_RADIUS {
+                        continue;
+                    }
+                    hit_once.insert(victim_id.clone());
+                    if apply_hit_and_emit(
+                        &mut inner,
+                        &room_id,
+                        &caster_id,
+                        victim_id,
+                        false,
+                        SPECIAL_HIT_DAMAGE,
+                        now_hit,
+                    ) {
+                        winner = true;
+                        break;
+                    }
+                }
+                if winner {
+                    break;
+                }
+            }
+            winner
+        };
+
+        if winner {
+            tokio::spawn(schedule_match_reset(
+                Arc::clone(&state),
+                room_id.clone(),
+                ROUND_RESET_SECONDS as u64,
+            ));
+            return;
+        }
+    }
+    let _ = cast_origin;
 }
 
 async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
