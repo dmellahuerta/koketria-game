@@ -5955,11 +5955,9 @@ const connectWebSocket = () => {
         let errorBaseX = camera.position.x;
         let errorBaseY = camera.position.y;
         let errorBaseZ = camera.position.z;
-        let ackMatchedPrediction = false;
         if (Number.isFinite(ackSeq) && ackSeq > 0) {
           const idx = pendingMoveInputs.findIndex((entry) => entry.seq === ackSeq);
           if (idx >= 0) {
-            ackMatchedPrediction = true;
             const predicted = pendingMoveInputs[idx].predictedPosition;
             const sentAt = Number(pendingMoveInputs[idx].sentAt);
             if (Number.isFinite(sentAt) && sentAt > 0) {
@@ -5971,20 +5969,13 @@ const connectWebSocket = () => {
               errorBaseZ = predicted.z;
             }
             pendingMoveInputs.splice(0, idx + 1);
-          } else {
+          } else if (pendingMoveInputs.length > 0) {
             reconcileStats.lateAcksInWindow += 1;
-            if (pendingMoveInputs.length > 0) {
-              const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
-              if (pruneUntil > 0) {
-                pendingMoveInputs.splice(0, pruneUntil);
-              }
+            const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
+            if (pruneUntil > 0) {
+              pendingMoveInputs.splice(0, pruneUntil);
             }
-            // Ignore stale/unmatched ACK corrections to avoid local rubberband lock.
-            return;
           }
-        }
-        if (Number.isFinite(ackSeq) && ackSeq > 0 && !ackMatchedPrediction) {
-          return;
         }
         const dx = ackPos.x - errorBaseX;
         const dy = ackPos.y - errorBaseY;
@@ -5997,9 +5988,6 @@ const connectWebSocket = () => {
           registerCorrectionEvent('hard');
           camera.position.copy(correctedTarget);
           constrainPlayerToWorld();
-          pendingMoveInputs.length = 0;
-          moveVelocity.x = 0;
-          moveVelocity.z = 0;
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
