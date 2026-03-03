@@ -3116,6 +3116,10 @@ const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
+const hitWaveYOffset = 0.04;
+const hitWaveStartScale = 0.9;
+const hitWaveLife = 0.2;
+const hitWaveExpand = 5.8;
 const vfxNearDistance = 35;
 const vfxFarDistance = 165;
 const tmpSegDir = new THREE.Vector3();
@@ -5404,7 +5408,7 @@ const createImpact = (position, color = 0x7dff92) => {
   return impact;
 };
 
-const createHitWave = (position, color = 0x9fffb6, options = {}) => {
+const createHitWave = (position, color = 0x9fffb6) => {
   if (!position) {
     return null;
   }
@@ -5418,11 +5422,11 @@ const createHitWave = (position, color = 0x9fffb6, options = {}) => {
   const wave = new THREE.Mesh(hitWaveGeometry, hitWaveMaterial.clone());
   wave.material.color = new THREE.Color(color);
   wave.position.copy(position);
-  wave.position.y += Number.isFinite(options.yOffset) ? options.yOffset : 0.04;
+  wave.position.y += hitWaveYOffset;
   wave.rotation.x = -Math.PI / 2;
-  wave.scale.setScalar(Number.isFinite(options.startScale) ? options.startScale : 0.9);
-  wave.userData.life = Number.isFinite(options.life) ? options.life : 0.2;
-  wave.userData.expand = Number.isFinite(options.expand) ? options.expand : 5.8;
+  wave.scale.setScalar(hitWaveStartScale);
+  wave.userData.life = hitWaveLife;
+  wave.userData.expand = hitWaveExpand;
   scene.add(wave);
   activeHitWaves.push(wave);
   return wave;
