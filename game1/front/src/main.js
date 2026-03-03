@@ -3654,11 +3654,15 @@ const rebuildMapFromSeed = (seed) => {
 
   for (let i = shootables.length - 1; i >= 0; i -= 1) {
     const mesh = shootables[i];
+    if (mesh === floor) {
+      continue;
+    }
     scene.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
   }
   shootables.length = 0;
+  shootables.push(floor);
   pillarBounds.length = 0;
   clearKoketriaDecor();
 
@@ -5419,7 +5423,30 @@ const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
   raycaster.set(segStart, tmpTravelVec);
   raycaster.far = distance + pad;
   const hits = raycaster.intersectObjects(shootables, false);
-  return hits.length > 0 ? hits[0].point.clone() : null;
+  const wallPoint = hits.length > 0 ? hits[0].point.clone() : null;
+
+  const dy = segEnd.y - segStart.y;
+  let groundPoint = null;
+  if (Math.abs(dy) > 1e-6) {
+    const t = (0.2 - segStart.y) / dy;
+    if (t >= 0 && t <= 1) {
+      groundPoint = new THREE.Vector3(
+        segStart.x + ((segEnd.x - segStart.x) * t),
+        0.2,
+        segStart.z + ((segEnd.z - segStart.z) * t),
+      );
+    }
+  }
+
+  if (!wallPoint) {
+    return groundPoint;
+  }
+  if (!groundPoint) {
+    return wallPoint;
+  }
+  return segStart.distanceToSquared(groundPoint) < segStart.distanceToSquared(wallPoint)
+    ? groundPoint
+    : wallPoint;
 };
 
 const getLocalSegmentCharacterImpact = (segStart, segEnd) => {
