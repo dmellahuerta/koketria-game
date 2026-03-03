@@ -173,7 +173,11 @@ app.innerHTML = `
 
     <div id="perfPanel" class="hidden">
       <p>FPS: <span id="fpsValue">0</span></p>
+      <p>Frame ms avg/p95: <span id="frameMsValue">0.0 / 0.0</span></p>
       <p>Latencia: <span id="latencyValue">--</span></p>
+      <p>ACK RTT avg/p95: <span id="ackRttValue">0.0 / 0.0</span></p>
+      <p>WS out msg/s kb/s: <span id="wsOutValue">0.0 / 0.0</span></p>
+      <p>Move send/s pendientes: <span id="moveFlowValue">0.0 / 0</span></p>
       <p>Draw calls: <span id="drawCallsValue">0</span></p>
       <p>Triángulos: <span id="trianglesValue">0</span></p>
       <p>Geometrías: <span id="geometriesValue">0</span></p>
@@ -181,7 +185,11 @@ app.innerHTML = `
       <p>VFX activos: <span id="vfxValue">0</span></p>
       <p>Pred err avg/p95: <span id="predErrValue">0.00 / 0.00</span></p>
       <p>Correcciones/s: <span id="corrRateValue">0.00</span></p>
+      <p>Corr soft/hard s: <span id="corrSplitValue">0.00 / 0.00</span></p>
       <p>Late ACK/s: <span id="lateAckRateValue">0.00</span></p>
+      <p>Streak corr max: <span id="corrStreakValue">0 / 0</span></p>
+      <p>Velocidad local: <span id="localSpeedValue">0.00</span></p>
+      <p>Bypass colisión ms: <span id="collisionBypassValue">0</span></p>
     </div>
   </div>
 
@@ -358,7 +366,11 @@ const weatherHud = document.querySelector('#weatherHud');
 const playersHud = document.querySelector('#playersHud');
 const perfPanel = document.querySelector('#perfPanel');
 const fpsValue = document.querySelector('#fpsValue');
+const frameMsValue = document.querySelector('#frameMsValue');
 const latencyValue = document.querySelector('#latencyValue');
+const ackRttValue = document.querySelector('#ackRttValue');
+const wsOutValue = document.querySelector('#wsOutValue');
+const moveFlowValue = document.querySelector('#moveFlowValue');
 const drawCallsValue = document.querySelector('#drawCallsValue');
 const trianglesValue = document.querySelector('#trianglesValue');
 const geometriesValue = document.querySelector('#geometriesValue');
@@ -366,7 +378,11 @@ const texturesValue = document.querySelector('#texturesValue');
 const vfxValue = document.querySelector('#vfxValue');
 const predErrValue = document.querySelector('#predErrValue');
 const corrRateValue = document.querySelector('#corrRateValue');
+const corrSplitValue = document.querySelector('#corrSplitValue');
 const lateAckRateValue = document.querySelector('#lateAckRateValue');
+const corrStreakValue = document.querySelector('#corrStreakValue');
+const localSpeedValue = document.querySelector('#localSpeedValue');
+const collisionBypassValue = document.querySelector('#collisionBypassValue');
 const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
@@ -425,6 +441,25 @@ const renderPerfStats = {
   geometries: 0,
   textures: 0,
   vfx: 0,
+};
+const tuningPerfStats = {
+  frameMsSamples: [],
+  ackRttSamples: [],
+  wsOutMsgsInWindow: 0,
+  wsOutBytesInWindow: 0,
+  wsOutMsgsPerSec: 0,
+  wsOutKbps: 0,
+  moveMsgsInWindow: 0,
+  moveMsgsPerSec: 0,
+  softCorrectionsInWindow: 0,
+  softCorrectionsPerSec: 0,
+  hardCorrectionsInWindow: 0,
+  hardCorrectionsPerSec: 0,
+  correctionStreak: 0,
+  correctionStreakMax: 0,
+  lastCorrectionAt: 0,
+  lastFrameAt: performance.now(),
+  localSpeed: 0,
 };
 
 const chatMessages = [];
@@ -833,9 +868,21 @@ const renderPerfPanel = () => {
   }
 
   fpsValue.textContent = String(state.fps);
+  const frameAvg = tuningPerfStats.frameMsSamples.length > 0
+    ? tuningPerfStats.frameMsSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.frameMsSamples.length
+    : 0;
+  const frameP95 = percentileFromSamples(tuningPerfStats.frameMsSamples, 0.95);
+  frameMsValue.textContent = `${frameAvg.toFixed(1)} / ${frameP95.toFixed(1)}`;
   latencyValue.textContent = Number.isFinite(state.latencyMs)
     ? `${Math.round(state.latencyMs)} ms`
     : '--';
+  const ackAvg = tuningPerfStats.ackRttSamples.length > 0
+    ? tuningPerfStats.ackRttSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.ackRttSamples.length
+    : 0;
+  const ackP95 = percentileFromSamples(tuningPerfStats.ackRttSamples, 0.95);
+  ackRttValue.textContent = `${ackAvg.toFixed(1)} / ${ackP95.toFixed(1)}`;
+  wsOutValue.textContent = `${tuningPerfStats.wsOutMsgsPerSec.toFixed(1)} / ${tuningPerfStats.wsOutKbps.toFixed(1)}`;
+  moveFlowValue.textContent = `${tuningPerfStats.moveMsgsPerSec.toFixed(1)} / ${pendingMoveInputs.length}`;
   drawCallsValue.textContent = String(Math.round(renderPerfStats.drawCalls));
   trianglesValue.textContent = String(Math.round(renderPerfStats.triangles));
   geometriesValue.textContent = String(Math.round(renderPerfStats.geometries));
@@ -848,7 +895,11 @@ const renderPerfPanel = () => {
   const p95Err = percentileFromSamples(samples, 0.95);
   predErrValue.textContent = `${avgErr.toFixed(2)} / ${p95Err.toFixed(2)}`;
   corrRateValue.textContent = reconcileStats.correctionsPerSec.toFixed(2);
+  corrSplitValue.textContent = `${tuningPerfStats.softCorrectionsPerSec.toFixed(2)} / ${tuningPerfStats.hardCorrectionsPerSec.toFixed(2)}`;
   lateAckRateValue.textContent = reconcileStats.lateAcksPerSec.toFixed(2);
+  corrStreakValue.textContent = `${tuningPerfStats.correctionStreak} / ${tuningPerfStats.correctionStreakMax}`;
+  localSpeedValue.textContent = tuningPerfStats.localSpeed.toFixed(2);
+  collisionBypassValue.textContent = String(Math.max(0, Math.ceil(localCollisionBypassUntil - performance.now())));
   perfPanel.classList.remove('hidden');
 };
 
@@ -927,8 +978,13 @@ const sendWs = (payload) => {
     setLobbyError('WebSocket no conectado');
     return;
   }
-
-  state.ws.send(JSON.stringify(payload));
+  const wire = JSON.stringify(payload);
+  tuningPerfStats.wsOutMsgsInWindow += 1;
+  tuningPerfStats.wsOutBytesInWindow += wire.length;
+  if (payload?.type === 'player_move') {
+    tuningPerfStats.moveMsgsInWindow += 1;
+  }
+  state.ws.send(wire);
 };
 
 let latencyProbeSeq = 0;
@@ -946,6 +1002,19 @@ const requestLatencyProbe = (force = false) => {
 
 const updatePerfMetrics = () => {
   const now = performance.now();
+  const frameMs = Math.max(0, Math.min(250, now - tuningPerfStats.lastFrameAt));
+  tuningPerfStats.lastFrameAt = now;
+  if (frameMs > 0) {
+    tuningPerfStats.frameMsSamples.push(frameMs);
+    if (tuningPerfStats.frameMsSamples.length > 240) {
+      tuningPerfStats.frameMsSamples.splice(0, tuningPerfStats.frameMsSamples.length - 240);
+    }
+  }
+  tuningPerfStats.localSpeed = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
+  if (tuningPerfStats.lastCorrectionAt > 0 && now - tuningPerfStats.lastCorrectionAt > 900) {
+    tuningPerfStats.correctionStreak = 0;
+  }
+
   fpsFrames += 1;
   const elapsed = now - fpsSampleStartedAt;
 
@@ -953,8 +1022,18 @@ const updatePerfMetrics = () => {
     state.fps = Math.max(0, Math.round((fpsFrames * 1000) / elapsed));
     reconcileStats.correctionsPerSec = (reconcileStats.correctionsInWindow * 1000) / elapsed;
     reconcileStats.lateAcksPerSec = (reconcileStats.lateAcksInWindow * 1000) / elapsed;
+    tuningPerfStats.wsOutMsgsPerSec = (tuningPerfStats.wsOutMsgsInWindow * 1000) / elapsed;
+    tuningPerfStats.wsOutKbps = ((tuningPerfStats.wsOutBytesInWindow * 8) / elapsed);
+    tuningPerfStats.moveMsgsPerSec = (tuningPerfStats.moveMsgsInWindow * 1000) / elapsed;
+    tuningPerfStats.softCorrectionsPerSec = (tuningPerfStats.softCorrectionsInWindow * 1000) / elapsed;
+    tuningPerfStats.hardCorrectionsPerSec = (tuningPerfStats.hardCorrectionsInWindow * 1000) / elapsed;
     reconcileStats.correctionsInWindow = 0;
     reconcileStats.lateAcksInWindow = 0;
+    tuningPerfStats.wsOutMsgsInWindow = 0;
+    tuningPerfStats.wsOutBytesInWindow = 0;
+    tuningPerfStats.moveMsgsInWindow = 0;
+    tuningPerfStats.softCorrectionsInWindow = 0;
+    tuningPerfStats.hardCorrectionsInWindow = 0;
     const fps = state.fps;
     if (fps >= 58) {
       vfxQuality = 1;
@@ -5871,6 +5950,10 @@ const connectWebSocket = () => {
           if (idx >= 0) {
             ackMatchedPrediction = true;
             const predicted = pendingMoveInputs[idx].predictedPosition;
+            const sentAt = Number(pendingMoveInputs[idx].sentAt);
+            if (Number.isFinite(sentAt) && sentAt > 0) {
+              registerAckRttSample(performance.now() - sentAt);
+            }
             if (predicted) {
               errorBaseX = predicted.x;
               errorBaseY = predicted.y;
@@ -5900,6 +5983,7 @@ const connectWebSocket = () => {
         const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
         if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
+          registerCorrectionEvent('hard');
           camera.position.copy(correctedTarget);
           camera.position.y = Math.max(playerGroundY, camera.position.y);
           pendingMoveInputs.length = 0;
@@ -5910,6 +5994,7 @@ const connectWebSocket = () => {
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
           reconcileStats.correctionsInWindow += 1;
+          registerCorrectionEvent('soft');
           localReconcileTarget = correctedTarget;
           localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
         }
@@ -6929,11 +7014,27 @@ const clearLocalPredictionHistory = () => {
   localInputSeq = 0;
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
+  localCollisionBypassUntil = 0;
   reconcileStats.errorSamples.length = 0;
   reconcileStats.correctionsInWindow = 0;
   reconcileStats.correctionsPerSec = 0;
   reconcileStats.lateAcksInWindow = 0;
   reconcileStats.lateAcksPerSec = 0;
+  tuningPerfStats.frameMsSamples.length = 0;
+  tuningPerfStats.ackRttSamples.length = 0;
+  tuningPerfStats.wsOutMsgsInWindow = 0;
+  tuningPerfStats.wsOutBytesInWindow = 0;
+  tuningPerfStats.wsOutMsgsPerSec = 0;
+  tuningPerfStats.wsOutKbps = 0;
+  tuningPerfStats.moveMsgsInWindow = 0;
+  tuningPerfStats.moveMsgsPerSec = 0;
+  tuningPerfStats.softCorrectionsInWindow = 0;
+  tuningPerfStats.softCorrectionsPerSec = 0;
+  tuningPerfStats.hardCorrectionsInWindow = 0;
+  tuningPerfStats.hardCorrectionsPerSec = 0;
+  tuningPerfStats.correctionStreak = 0;
+  tuningPerfStats.correctionStreakMax = 0;
+  tuningPerfStats.lastCorrectionAt = 0;
 };
 
 const registerReconcileErrorSample = (error) => {
@@ -6944,6 +7045,33 @@ const registerReconcileErrorSample = (error) => {
   if (reconcileStats.errorSamples.length > 140) {
     reconcileStats.errorSamples.splice(0, reconcileStats.errorSamples.length - 140);
   }
+};
+
+const registerAckRttSample = (rttMs) => {
+  if (!Number.isFinite(rttMs) || rttMs < 0) {
+    return;
+  }
+  tuningPerfStats.ackRttSamples.push(Math.min(1000, rttMs));
+  if (tuningPerfStats.ackRttSamples.length > 180) {
+    tuningPerfStats.ackRttSamples.splice(0, tuningPerfStats.ackRttSamples.length - 180);
+  }
+};
+
+const registerCorrectionEvent = (kind) => {
+  const now = performance.now();
+  if (now - tuningPerfStats.lastCorrectionAt > 900) {
+    tuningPerfStats.correctionStreak = 0;
+  }
+  tuningPerfStats.correctionStreak += 1;
+  if (tuningPerfStats.correctionStreak > tuningPerfStats.correctionStreakMax) {
+    tuningPerfStats.correctionStreakMax = tuningPerfStats.correctionStreak;
+  }
+  tuningPerfStats.lastCorrectionAt = now;
+  if (kind === 'hard') {
+    tuningPerfStats.hardCorrectionsInWindow += 1;
+    return;
+  }
+  tuningPerfStats.softCorrectionsInWindow += 1;
 };
 
 const percentileFromSamples = (samples, p) => {
