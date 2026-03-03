@@ -15,6 +15,7 @@
   </head>
   <body>
     <div class="matrix-bg" aria-hidden="true"></div>
+    <div id="pwaModeBadge" class="pwa-badge">PWA mode: OFF</div>
     <main class="container">
       <header class="hero">
         <p class="eyebrow">MISTERRII NETWORK</p>
@@ -53,7 +54,33 @@
         var isHttps = window.location.protocol === 'https:';
         var ua = String(navigator.userAgent || '');
         var isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
-        var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+        var standaloneQuery = window.matchMedia('(display-mode: standalone)');
+        var fullscreenQuery = window.matchMedia('(display-mode: fullscreen)');
+        var minimalUiQuery = window.matchMedia('(display-mode: minimal-ui)');
+        function getPwaMode() {
+          return Boolean(
+            standaloneQuery.matches
+            || fullscreenQuery.matches
+            || minimalUiQuery.matches
+            || window.navigator.standalone === true
+          );
+        }
+        function renderPwaModeBadge() {
+          var badge = document.getElementById('pwaModeBadge');
+          if (!badge) return;
+          var isStandalone = getPwaMode();
+          badge.textContent = isStandalone ? 'PWA mode: ON' : 'PWA mode: OFF';
+          badge.classList.toggle('is-on', isStandalone);
+        }
+        renderPwaModeBadge();
+        [standaloneQuery, fullscreenQuery, minimalUiQuery].forEach(function (query) {
+          if (query && typeof query.addEventListener === 'function') {
+            query.addEventListener('change', renderPwaModeBadge);
+          } else if (query && typeof query.addListener === 'function') {
+            query.addListener(renderPwaModeBadge);
+          }
+        });
+        var isStandalone = getPwaMode();
         if ('serviceWorker' in navigator && isProdHost && isHttps) {
           window.addEventListener('load', function () {
             navigator.serviceWorker.register('/sw.js').catch(function () {});

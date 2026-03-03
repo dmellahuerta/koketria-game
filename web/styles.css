@@ -39,6 +39,27 @@ body {
   pointer-events: none;
 }
 
+.pwa-badge {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  border: 1px solid rgba(255, 122, 122, 0.6);
+  background: rgba(24, 5, 5, 0.86);
+  color: #ffb3b3;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.pwa-badge.is-on {
+  border-color: rgba(46, 255, 111, 0.6);
+  background: rgba(7, 24, 11, 0.9);
+  color: #b8ffd0;
+}
+
 .container {
   width: min(920px, calc(100vw - 40px));
   border: 1px solid var(--line);
