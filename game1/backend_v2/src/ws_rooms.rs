@@ -8,7 +8,7 @@ use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 use tracing::{debug, info, warn};
 
 use crate::rooms::{
@@ -240,6 +240,21 @@ const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
 
+fn compute_rewind_timestamp(
+    now_ms_v: i64,
+    client_shot_ts: Option<i64>,
+    base_rewind_ms: i64,
+    latency_ms: f64,
+) -> i64 {
+    let dynamic_extra = ((latency_ms * LAG_COMP_RTT_FACTOR).round() as i64).clamp(0, LAG_COMP_EXTRA_MAX_MS);
+    let rewind_floor = now_ms_v - STATE_HISTORY_WINDOW_MS;
+    let fallback = now_ms_v - (base_rewind_ms + dynamic_extra);
+    match client_shot_ts {
+        Some(ts) => clamp_i64(ts, rewind_floor, now_ms_v),
+        None => clamp_i64(fallback, rewind_floor, now_ms_v),
+    }
+}
+
 #[derive(Clone)]
 struct PumoriOrbitHammer {
     spawn_at_ms: i64,
@@ -468,8 +483,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     let ping_state = Arc::clone(&state);
     let ping_client_id = client_id.clone();
     let ping_task = tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_millis(SERVER_LATENCY_PING_INTERVAL_MS));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
-            sleep(Duration::from_millis(SERVER_LATENCY_PING_INTERVAL_MS)).await;
+            ticker.tick().await;
             let mut inner = ping_state.inner.lock().await;
             let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
                 break;
@@ -1019,14 +1036,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             } else {
                 LAG_COMP_BULLET_MS
             };
-            let dynamic_extra = ((shooter_latency_ms * LAG_COMP_RTT_FACTOR).round() as i64)
-                .clamp(0, LAG_COMP_EXTRA_MAX_MS);
-            let rewind_ts_fallback = now - (base_rewind + dynamic_extra);
-            let rewind_floor = now - STATE_HISTORY_WINDOW_MS;
-            let rewind_ts = match client_shot_ts {
-                Some(ts) => clamp_i64(ts, rewind_floor, now),
-                None => clamp_i64(rewind_ts_fallback, rewind_floor, now),
-            };
+            let rewind_ts =
+                compute_rewind_timestamp(now, client_shot_ts, base_rewind, shooter_latency_ms);
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
             let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, distance);
@@ -1204,7 +1215,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
 
-            let (origin, allow_cast, payload) = {
+            let (origin, allow_cast, payload, caster_latency_ms) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
@@ -1214,6 +1225,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         entry.state.position.clone(),
                         false,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.latency_ms,
                     )
                 } else {
                     let can_cast = now >= entry.combat.silent_cd_until_ms;
@@ -1224,6 +1236,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         entry.state.position.clone(),
                         can_cast,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.latency_ms,
                     )
                 }
             };
@@ -1262,6 +1275,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .map(|r| r.players.iter().cloned().collect())
                 .unwrap_or_default();
             let now_hit = now_ms();
+            let rewind_ts = compute_rewind_timestamp(now_hit, None, LAG_COMP_MAGIC_MS, caster_latency_ms);
             let mut pending_impacts: Vec<(Vec3, u64)> = Vec::new();
             for victim_id in &room_players {
                 if victim_id == client_id {
@@ -1276,7 +1290,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 if !victim.combat.alive {
                     continue;
                 }
-                let rewound = client_position_at(victim, now_hit - LAG_COMP_MAGIC_MS);
+                let rewound = client_position_at(victim, rewind_ts);
                 let to_target = Vec3 {
                     x: rewound.x - origin.x,
                     y: rewound.y - origin.y,
@@ -2027,9 +2041,11 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
     let mut rng =
         SeededRng::new((cast_start_ms as u64) ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id));
     let phase = rng.next_f64() * std::f64::consts::TAU;
+    let mut ticker = interval(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     for _ in 0..ticks {
-        sleep(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64)).await;
+        ticker.tick().await;
 
         let winner = {
             let mut inner = state.inner.lock().await;
@@ -2570,10 +2586,10 @@ async fn run_lunar_rain_special(
 ) {
     let waves = (LUNAR_SPECIAL_DURATION_MS / LUNAR_SPECIAL_WAVE_INTERVAL_MS).max(1);
     let base_seed = now_ms() as u64 ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id);
+    let mut ticker = interval(Duration::from_millis(LUNAR_SPECIAL_WAVE_INTERVAL_MS as u64));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     for wave_idx in 0..waves {
-        if wave_idx > 0 {
-            sleep(Duration::from_millis(LUNAR_SPECIAL_WAVE_INTERVAL_MS as u64)).await;
-        }
+        ticker.tick().await;
 
         let impacts = {
             let inner = state.inner.lock().await;
@@ -2647,10 +2663,10 @@ async fn run_neoorphen_meteor_special(
 ) {
     let waves = (NEOORPHEN_SPECIAL_DURATION_MS / NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS).max(1);
     let base_seed = now_ms() as u64 ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id) ^ 0x77CC_1144;
+    let mut ticker = interval(Duration::from_millis(NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS as u64));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     for wave_idx in 0..waves {
-        if wave_idx > 0 {
-            sleep(Duration::from_millis(NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS as u64)).await;
-        }
+        ticker.tick().await;
 
         let impacts = {
             let inner = state.inner.lock().await;

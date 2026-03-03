@@ -3146,27 +3146,49 @@ const tracerUpAxis = new THREE.Vector3(0, 1, 0);
 const tmpWorldQuatA = new THREE.Quaternion();
 const tmpWorldQuatB = new THREE.Quaternion();
 
+const getVfxLoadSheddingFactor = () => {
+  let factor = 1;
+  const calls = renderPerfStats.drawCalls || 0;
+  const liveVfx = renderPerfStats.vfx || 0;
+  const fps = state.fps || 0;
+  if (calls > 520) factor *= 0.88;
+  if (calls > 620) factor *= 0.78;
+  if (liveVfx > 680) factor *= 0.82;
+  if (liveVfx > 820) factor *= 0.68;
+  if (fps > 0 && fps < 50) factor *= 0.9;
+  if (fps > 0 && fps < 40) factor *= 0.78;
+  return Math.max(0.32, Math.min(1, factor));
+};
+
 const getVfxSpawnBudget = (position) => {
   const cam = getRenderCamera();
   if (!cam || !position) {
-    return vfxQuality;
+    return vfxQuality * getVfxLoadSheddingFactor();
   }
   const dx = position.x - cam.position.x;
   const dy = position.y - cam.position.y;
   const dz = position.z - cam.position.z;
   const dist = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
   if (dist <= vfxNearDistance) {
-    return vfxQuality;
+    return vfxQuality * getVfxLoadSheddingFactor();
   }
   if (dist >= vfxFarDistance) {
-    return vfxQuality * 0.35;
+    return vfxQuality * 0.35 * getVfxLoadSheddingFactor();
   }
   const t = (dist - vfxNearDistance) / (vfxFarDistance - vfxNearDistance);
-  return vfxQuality * (1 - (t * 0.65));
+  return vfxQuality * (1 - (t * 0.65)) * getVfxLoadSheddingFactor();
 };
 
-const getDynamicMaxTracers = () => Math.max(120, Math.round(maxActiveTracers * (0.45 + (vfxQuality * 0.55))));
-const getDynamicMaxImpacts = () => Math.max(180, Math.round(maxActiveImpacts * (0.4 + (vfxQuality * 0.6))));
+const getDynamicMaxTracers = () => {
+  const calls = renderPerfStats.drawCalls || 0;
+  const pressure = calls > 620 ? 0.68 : (calls > 520 ? 0.82 : 1);
+  return Math.max(96, Math.round(maxActiveTracers * (0.45 + (vfxQuality * 0.55)) * pressure));
+};
+const getDynamicMaxImpacts = () => {
+  const calls = renderPerfStats.drawCalls || 0;
+  const pressure = calls > 620 ? 0.68 : (calls > 520 ? 0.82 : 1);
+  return Math.max(140, Math.round(maxActiveImpacts * (0.4 + (vfxQuality * 0.6)) * pressure));
+};
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let isLocked = false;
@@ -8978,6 +9000,7 @@ const animate = () => {
   renderPerfStats.textures = renderer.info.memory.textures || 0;
   renderPerfStats.vfx = activeTracers.length
     + activeImpacts.length
+    + activeHitWaves.length
     + activePickupSparks.length
     + activeHolyProjectiles.length
     + activeHammerProjectiles.length
