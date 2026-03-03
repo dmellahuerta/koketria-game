@@ -3189,10 +3189,14 @@ const healthPickupRespawnMs = 60_000;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
-const headshotRadius = 0.5;
-const bodyshotRadius = 0.92;
+const headshotRadius = 0.62;
+const bodyshotRadius = 1.15;
+const torsoRadius = 1.02;
 const headCenterOffsetY = 0.18;
 const bodyCenterOffsetY = -0.45;
+const remoteHeadCenterOffsetY = playerGroundY + headCenterOffsetY;
+const remoteBodyCenterOffsetY = playerGroundY + bodyCenterOffsetY;
+const remoteTorsoCenterOffsetY = playerGroundY + (bodyCenterOffsetY * 0.45);
 const remoteHealthBarYOffset = 2.45;
 const remoteHealthBarWidth = 0.9;
 const remoteHealthBarHeight = 0.09;
@@ -5490,7 +5494,40 @@ const getLocalSegmentCharacterImpact = (segStart, segEnd) => {
   if (body) {
     return { point: body, headshot: false };
   }
+  tmpLocalBody.set(
+    camera.position.x,
+    camera.position.y + (bodyCenterOffsetY * 0.45),
+    camera.position.z,
+  );
+  const torso = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, torsoRadius);
+  if (torso) {
+    return { point: torso, headshot: false };
+  }
   return null;
+};
+
+const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd) => {
+  if (!entry?.group || entry.isDead) {
+    return null;
+  }
+  const headCenter = new THREE.Vector3(
+    entry.group.position.x,
+    entry.group.position.y + remoteHeadCenterOffsetY,
+    entry.group.position.z,
+  );
+  const bodyCenter = new THREE.Vector3(
+    entry.group.position.x,
+    entry.group.position.y + remoteBodyCenterOffsetY,
+    entry.group.position.z,
+  );
+  const torsoCenter = new THREE.Vector3(
+    entry.group.position.x,
+    entry.group.position.y + remoteTorsoCenterOffsetY,
+    entry.group.position.z,
+  );
+  return testSegmentSphereHit(segStart, segEnd, headCenter, headshotRadius)
+    || testSegmentSphereHit(segStart, segEnd, bodyCenter, bodyshotRadius)
+    || testSegmentSphereHit(segStart, segEnd, torsoCenter, torsoRadius);
 };
 
 const applyIncomingProjectileHit = (hitInfo, killerId) => {
@@ -6448,6 +6485,7 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, optio
   const projectedPoint = new THREE.Vector3();
   const headRadius = Number.isFinite(options.headRadius) ? options.headRadius : headshotRadius;
   const bodyRadius = Number.isFinite(options.bodyRadius) ? options.bodyRadius : bodyshotRadius;
+  const torsoHitRadius = Number.isFinite(options.torsoRadius) ? options.torsoRadius : torsoRadius;
 
   const tryHitSphere = (center, radius) => {
     toCenter.copy(center).sub(origin);
@@ -6468,11 +6506,26 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, optio
       continue;
     }
 
-    tmpCenter.set(entry.group.position.x, entry.group.position.y + 1.85, entry.group.position.z);
+    tmpCenter.set(
+      entry.group.position.x,
+      entry.group.position.y + remoteHeadCenterOffsetY,
+      entry.group.position.z,
+    );
     tryHitSphere(tmpCenter, headRadius);
 
-    tmpCenter.set(entry.group.position.x, entry.group.position.y + 1.1, entry.group.position.z);
+    tmpCenter.set(
+      entry.group.position.x,
+      entry.group.position.y + remoteBodyCenterOffsetY,
+      entry.group.position.z,
+    );
     tryHitSphere(tmpCenter, bodyRadius);
+
+    tmpCenter.set(
+      entry.group.position.x,
+      entry.group.position.y + remoteTorsoCenterOffsetY,
+      entry.group.position.z,
+    );
+    tryHitSphere(tmpCenter, torsoHitRadius);
   }
 
   if (!closestPoint) {
@@ -8053,13 +8106,7 @@ const updateHammerProjectiles = (delta) => {
     if (!impactPoint) {
       if (projectile.source === 'local') {
         for (const entry of state.remotePlayers.values()) {
-          if (!entry?.group || entry.isDead) {
-            continue;
-          }
-          const headCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.85, entry.group.position.z);
-          const bodyCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.1, entry.group.position.z);
-          impactPoint = testSegmentSphereHit(projectile.prevPos, projectile.pos, headCenter, headshotRadius)
-            || testSegmentSphereHit(projectile.prevPos, projectile.pos, bodyCenter, bodyshotRadius);
+          impactPoint = getRemoteSegmentCharacterImpact(entry, projectile.prevPos, projectile.pos);
           if (impactPoint) {
             break;
           }
@@ -8381,13 +8428,11 @@ const updatePumoriOrbitSpecials = (delta) => {
       if (!impactPoint) {
         if (ownerIsSelf) {
           for (const entry of state.remotePlayers.values()) {
-            if (!entry?.group || entry.isDead) {
-              continue;
-            }
-            const headCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.85, entry.group.position.z);
-            const bodyCenter = new THREE.Vector3(entry.group.position.x, entry.group.position.y + 1.1, entry.group.position.z);
-            impactPoint = testSegmentSphereHit(hammerEntry.prevPos, hammer.position, headCenter, headshotRadius)
-              || testSegmentSphereHit(hammerEntry.prevPos, hammer.position, bodyCenter, bodyshotRadius);
+            impactPoint = getRemoteSegmentCharacterImpact(
+              entry,
+              hammerEntry.prevPos,
+              hammer.position,
+            );
             if (impactPoint) {
               break;
             }
