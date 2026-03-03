@@ -1562,6 +1562,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .get("moving")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let input_seq = message.get("inputSeq").and_then(Value::as_u64).unwrap_or(0);
 
             let ts = now_ms();
             let (next_x, next_z) = if let Some(current_entry) = inner.clients.get(client_id) {
@@ -1629,6 +1630,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     },
                     "jumping": next_state.jumping,
                     "moving": next_state.moving,
+                    "inputSeq": input_seq,
                     "ts": ts
                   }
                 }),

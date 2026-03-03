@@ -3266,12 +3266,15 @@ const localReconcileSoftError = 0.09;
 const localReconcileHardSnapDistance = 2.6;
 const localReconcileRatePerSecond = 9.5;
 const localReconcileExpireMs = 220;
+const localInputHistoryLimit = 120;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
 let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
+let localInputSeq = 0;
+const pendingMoveInputs = [];
 
 const getEstimatedServerNowMs = () => Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
 
@@ -5594,8 +5597,7 @@ const applyOwnStateFromRoom = (roomState) => {
   if (pos) {
     camera.position.set(pos.x, pos.y, pos.z);
     constrainPlayerToWorld();
-    localReconcileTarget = null;
-    localReconcileExpiresAt = 0;
+    clearLocalPredictionHistory();
     isJumping = Boolean(selfPlayer.state?.jumping);
     if (!isJumping && camera.position.y <= (playerGroundY + 0.001)) {
       jumpVelocity = 0;
@@ -5730,6 +5732,7 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'room_joined') {
+      clearLocalPredictionHistory();
       applyRoomState(payload.data, { applyOwnState: true });
       return;
     }
@@ -5740,6 +5743,7 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'left_room') {
+      clearLocalPredictionHistory();
       state.joinedRoom = null;
       state.showScoreboard = false;
       pendingLatencyProbe = null;
@@ -5806,17 +5810,39 @@ const connectWebSocket = () => {
         && Number.isFinite(Number(pos.z))
       ) {
         const ackPos = new THREE.Vector3(Number(pos.x), Number(pos.y), Number(pos.z));
-        const dx = ackPos.x - camera.position.x;
-        const dy = ackPos.y - camera.position.y;
-        const dz = ackPos.z - camera.position.z;
+        const ackSeq = Number(payload.data?.inputSeq);
+        let errorBaseX = camera.position.x;
+        let errorBaseY = camera.position.y;
+        let errorBaseZ = camera.position.z;
+        if (Number.isFinite(ackSeq) && ackSeq > 0) {
+          const idx = pendingMoveInputs.findIndex((entry) => entry.seq === ackSeq);
+          if (idx >= 0) {
+            const predicted = pendingMoveInputs[idx].predictedPosition;
+            if (predicted) {
+              errorBaseX = predicted.x;
+              errorBaseY = predicted.y;
+              errorBaseZ = predicted.z;
+            }
+            pendingMoveInputs.splice(0, idx + 1);
+          } else if (pendingMoveInputs.length > 0) {
+            const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
+            if (pruneUntil > 0) {
+              pendingMoveInputs.splice(0, pruneUntil);
+            }
+          }
+        }
+        const dx = ackPos.x - errorBaseX;
+        const dy = ackPos.y - errorBaseY;
+        const dz = ackPos.z - errorBaseZ;
         const error = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
         if (error >= localReconcileHardSnapDistance) {
-          camera.position.copy(ackPos);
+          camera.position.copy(correctedTarget);
           constrainPlayerToWorld();
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
-          localReconcileTarget = ackPos;
+          localReconcileTarget = correctedTarget;
           localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
         }
       }
@@ -6143,6 +6169,7 @@ const connectWebSocket = () => {
         ) {
           camera.position.set(Number(respawnPos.x), Number(respawnPos.y), Number(respawnPos.z));
           constrainPlayerToWorld();
+          clearLocalPredictionHistory();
         }
         health = Number.isFinite(payload.data?.health) ? Number(payload.data.health) : maxHealth;
         shield = Number.isFinite(payload.data?.shield) ? Math.round(payload.data.shield) : startShield;
@@ -6829,6 +6856,13 @@ const updateRemoteHealthBar = (entry) => {
   entry.healthBar.holder.visible = !entry.isDead;
 };
 
+const clearLocalPredictionHistory = () => {
+  pendingMoveInputs.length = 0;
+  localInputSeq = 0;
+  localReconcileTarget = null;
+  localReconcileExpiresAt = 0;
+};
+
 const sendLocalPlayerState = (force = false) => {
   if (!state.joinedRoom) {
     return;
@@ -6840,8 +6874,22 @@ const sendLocalPlayerState = (force = false) => {
   }
 
   state.lastStateSentAt = now;
+  localInputSeq += 1;
   const moving = (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD)
     || moveVelocity.lengthSq() > 0.5;
+  const predictedPosition = new THREE.Vector3(
+    camera.position.x,
+    camera.position.y,
+    camera.position.z,
+  );
+  pendingMoveInputs.push({
+    seq: localInputSeq,
+    predictedPosition,
+    sentAt: now,
+  });
+  if (pendingMoveInputs.length > localInputHistoryLimit) {
+    pendingMoveInputs.splice(0, pendingMoveInputs.length - localInputHistoryLimit);
+  }
   sendWs({
     type: 'player_move',
     position: {
@@ -6852,6 +6900,7 @@ const sendLocalPlayerState = (force = false) => {
     rotation: { yaw, pitch },
     jumping: isJumping,
     moving,
+    inputSeq: localInputSeq,
   });
 };
 
