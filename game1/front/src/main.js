@@ -996,6 +996,24 @@ const getTeamPalette = (team) => {
   };
 };
 
+const getAbilityPalette = (kind, team = null) => {
+  void team;
+  const key = String(kind || '').toLowerCase();
+  if (key === 'holy') {
+    return { tracer: 0xfff3c2, impactA: 0xfff7db, impactB: 0x9fe7ff };
+  }
+  if (key === 'hammer') {
+    return { tracer: 0xffd77a, impactA: 0xfff0bc, impactB: 0x8fdfff };
+  }
+  if (key === 'poison') {
+    return { tracer: 0x62ff7a, impactA: 0x9dffb0, impactB: 0x2ecf57 };
+  }
+  if (key === 'lunar') {
+    return { tracer: 0x9fd8ff, impactA: 0xf0f9ff, impactB: 0x8fe9ff };
+  }
+  return getTeamPalette(team);
+};
+
 const getTeamByPlayerId = (playerId) => {
   const id = String(playerId || '');
   if (!id) {
@@ -1011,7 +1029,7 @@ const getTeamByPlayerId = (playerId) => {
 const getVersusScoreTarget = (room) => {
   const type = String(room?.versusType || '').trim().toLowerCase();
   if (type === '1v1') {
-    return 10;
+    return 5;
   }
   if (type === '2v2') {
     return 20;
@@ -2585,7 +2603,7 @@ const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
 const lunarSpecialCooldownMs = 30_000;
-const silentSpecialCooldownMs = 15_000;
+const silentSpecialCooldownMs = 5_000;
 let lunarRainCooldownEndsAt = 0;
 let lastLunarCooldownShown = null;
 
@@ -4959,7 +4977,7 @@ const createHolyShotVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const palette = getTeamPalette(options.team);
+  const palette = options.palette || getAbilityPalette('holy', options.team);
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.22, 14, 14),
     new THREE.MeshBasicMaterial({
@@ -5001,7 +5019,7 @@ const createHolyShotVisual = (start, end, options = {}) => {
 };
 
 const createHammerMesh = (scale = 1, opacity = 1, team = null) => {
-  const palette = getTeamPalette(team);
+  const palette = getAbilityPalette('hammer', team);
   const hammer = new THREE.Group();
   const head = new THREE.Mesh(
     new THREE.BoxGeometry(0.46 * scale, 0.26 * scale, 0.22 * scale),
@@ -5045,7 +5063,7 @@ const createSacredHammerVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const palette = getTeamPalette(options.team);
+  const palette = options.palette || getAbilityPalette('hammer', options.team);
   const hammer = createHammerMesh(1, 1, options.team);
   hammer.position.copy(start);
   scene.add(hammer);
@@ -5208,7 +5226,7 @@ const createPoisonGasVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const palette = getTeamPalette(options.team);
+  const palette = options.palette || getAbilityPalette('poison', options.team);
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.3, 16, 16),
     new THREE.MeshBasicMaterial({
@@ -5265,7 +5283,7 @@ const createLunarFireVisual = (start, end, options = {}) => {
   }
   const upAxis = new THREE.Vector3().crossVectors(rightAxis, dirNorm).normalize();
 
-  const palette = getTeamPalette(options.team);
+  const palette = options.palette || getAbilityPalette('lunar', options.team);
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(0.22, 16, 16),
     new THREE.MeshBasicMaterial({
@@ -5658,7 +5676,7 @@ const connectWebSocket = () => {
       const data = payload.data || {};
       const ownerId = String(data.playerId || '');
       const ownerTeam = getTeamByPlayerId(ownerId);
-      const ownerPalette = getTeamPalette(ownerTeam);
+      const ownerPalette = getAbilityPalette('lunar', ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
       for (let i = 0; i < strikes.length; i += 1) {
         const strike = strikes[i] || {};
@@ -5732,7 +5750,7 @@ const connectWebSocket = () => {
       const data = payload.data || {};
       const ownerId = String(data.playerId || '');
       const ownerTeam = getTeamByPlayerId(ownerId);
-      const ownerPalette = getTeamPalette(ownerTeam);
+      const ownerPalette = getAbilityPalette('poison', ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
       let firstImpact = null;
       for (let i = 0; i < strikes.length; i += 1) {
