@@ -7083,6 +7083,88 @@ const percentileFromSamples = (samples, p) => {
   return ordered[idx];
 };
 
+const logTuningSnapshot = () => {
+  const now = performance.now();
+  const frameAvg = tuningPerfStats.frameMsSamples.length > 0
+    ? tuningPerfStats.frameMsSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.frameMsSamples.length
+    : 0;
+  const frameP95 = percentileFromSamples(tuningPerfStats.frameMsSamples, 0.95);
+  const ackAvg = tuningPerfStats.ackRttSamples.length > 0
+    ? tuningPerfStats.ackRttSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.ackRttSamples.length
+    : 0;
+  const ackP95 = percentileFromSamples(tuningPerfStats.ackRttSamples, 0.95);
+  const predAvg = reconcileStats.errorSamples.length > 0
+    ? reconcileStats.errorSamples.reduce((sum, value) => sum + value, 0) / reconcileStats.errorSamples.length
+    : 0;
+  const predP95 = percentileFromSamples(reconcileStats.errorSamples, 0.95);
+  const pendingAgesMs = pendingMoveInputs.slice(-8).map((entry) => Math.max(0, now - Number(entry.sentAt || now)));
+  const snapshot = {
+    at: new Date().toISOString(),
+    room: {
+      id: state.joinedRoom?.room?.id || null,
+      mode: state.joinedRoom?.room?.mode || null,
+      status: state.joinedRoom?.room?.status || null,
+      weather: state.joinedRoom?.room?.weather || null,
+      players: Array.isArray(state.joinedRoom?.room?.players) ? state.joinedRoom.room.players.length : null,
+    },
+    net: {
+      latencyMs: Number.isFinite(state.latencyMs) ? Number(state.latencyMs.toFixed(2)) : null,
+      ackRttAvgMs: Number(ackAvg.toFixed(2)),
+      ackRttP95Ms: Number(ackP95.toFixed(2)),
+      wsOutMsgPerSec: Number(tuningPerfStats.wsOutMsgsPerSec.toFixed(2)),
+      wsOutKbps: Number(tuningPerfStats.wsOutKbps.toFixed(2)),
+      moveSendPerSec: Number(tuningPerfStats.moveMsgsPerSec.toFixed(2)),
+      pendingInputs: pendingMoveInputs.length,
+      pendingInputAgesMs: pendingAgesMs.map((v) => Number(v.toFixed(1))),
+      lateAckPerSec: Number(reconcileStats.lateAcksPerSec.toFixed(2)),
+    },
+    reconcile: {
+      predErrAvg: Number(predAvg.toFixed(3)),
+      predErrP95: Number(predP95.toFixed(3)),
+      correctionsPerSec: Number(reconcileStats.correctionsPerSec.toFixed(2)),
+      softPerSec: Number(tuningPerfStats.softCorrectionsPerSec.toFixed(2)),
+      hardPerSec: Number(tuningPerfStats.hardCorrectionsPerSec.toFixed(2)),
+      streak: tuningPerfStats.correctionStreak,
+      streakMax: tuningPerfStats.correctionStreakMax,
+      hasTarget: Boolean(localReconcileTarget),
+      targetExpiresInMs: Math.max(0, Math.ceil(localReconcileExpiresAt - now)),
+      collisionBypassMs: Math.max(0, Math.ceil(localCollisionBypassUntil - now)),
+    },
+    movement: {
+      canPlay: canPlay(),
+      pos: {
+        x: Number(camera.position.x.toFixed(3)),
+        y: Number(camera.position.y.toFixed(3)),
+        z: Number(camera.position.z.toFixed(3)),
+      },
+      velocity: {
+        x: Number(moveVelocity.x.toFixed(3)),
+        z: Number(moveVelocity.z.toFixed(3)),
+        speed: Number(tuningPerfStats.localSpeed.toFixed(3)),
+      },
+      keys: { ...keys },
+      isJumping,
+      isFiring,
+      isThirdPerson,
+    },
+    render: {
+      fps: state.fps,
+      frameMsAvg: Number(frameAvg.toFixed(2)),
+      frameMsP95: Number(frameP95.toFixed(2)),
+      drawCalls: renderPerfStats.drawCalls,
+      triangles: renderPerfStats.triangles,
+      geometries: renderPerfStats.geometries,
+      textures: renderPerfStats.textures,
+      vfx: renderPerfStats.vfx,
+      vfxQuality: Number(vfxQuality.toFixed(2)),
+    },
+  };
+  window.__koketriaLastSnapshot = snapshot;
+  console.groupCollapsed('[koketria][snapshot:J]', snapshot.at);
+  console.log(snapshot);
+  console.groupEnd();
+};
+
 const sendLocalPlayerState = (force = false) => {
   if (!state.joinedRoom) {
     return;
@@ -7604,6 +7686,12 @@ window.addEventListener('keydown', (event) => {
       requestLatencyProbe(true);
     }
     renderPerfPanel();
+  }
+
+  if (event.code === 'KeyJ') {
+    event.preventDefault();
+    logTuningSnapshot();
+    return;
   }
 
   if (event.code === 'F9') {
