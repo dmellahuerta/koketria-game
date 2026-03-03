@@ -3093,8 +3093,18 @@ const tracerMaterial = new THREE.MeshBasicMaterial({
 });
 const impactGeometry = new THREE.SphereGeometry(0.11, 8, 8);
 const impactMaterial = new THREE.MeshBasicMaterial({ color: 0x7dff92, transparent: true, opacity: 0.9 });
+const hitWaveGeometry = new THREE.RingGeometry(0.16, 0.24, 28);
+const hitWaveMaterial = new THREE.MeshBasicMaterial({
+  color: 0x9fffb6,
+  transparent: true,
+  opacity: 0.9,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
 const activeTracers = [];
 const activeImpacts = [];
+const activeHitWaves = [];
 const activeHolyProjectiles = [];
 const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
@@ -5394,6 +5404,30 @@ const createImpact = (position, color = 0x7dff92) => {
   return impact;
 };
 
+const createHitWave = (position, color = 0x9fffb6, options = {}) => {
+  if (!position) {
+    return null;
+  }
+  const budget = getVfxSpawnBudget(position);
+  if (budget < 0.999 && Math.random() > budget) {
+    return null;
+  }
+  if (activeHitWaves.length >= getDynamicMaxImpacts()) {
+    return null;
+  }
+  const wave = new THREE.Mesh(hitWaveGeometry, hitWaveMaterial.clone());
+  wave.material.color = new THREE.Color(color);
+  wave.position.copy(position);
+  wave.position.y += Number.isFinite(options.yOffset) ? options.yOffset : 0.04;
+  wave.rotation.x = -Math.PI / 2;
+  wave.scale.setScalar(Number.isFinite(options.startScale) ? options.startScale : 0.9);
+  wave.userData.life = Number.isFinite(options.life) ? options.life : 0.2;
+  wave.userData.expand = Number.isFinite(options.expand) ? options.expand : 5.8;
+  scene.add(wave);
+  activeHitWaves.push(wave);
+  return wave;
+};
+
 const testSegmentSphereHit = (segStart, segEnd, center, radius) => {
   tmpSegDir.subVectors(segEnd, segStart);
   const segLen = tmpSegDir.length();
@@ -5744,6 +5778,7 @@ const connectWebSocket = () => {
       } else {
         createTracer(origin, visualEnd, shooterPalette.tracer);
         createImpact(visualEnd, shooterPalette.impactB);
+        createHitWave(visualEnd, shooterPalette.impactA);
       }
       registerRemoteShootSound(origin, shooterCharacter);
       return;
@@ -7265,6 +7300,7 @@ const shoot = () => {
   } else {
     createTracer(origin, hitPoint, myPalette.tracer);
     createImpact(hitPoint, myPalette.impactB);
+    createHitWave(hitPoint, myPalette.impactA);
   }
 
   sendWs({
@@ -7883,6 +7919,18 @@ const updateEffects = (delta) => {
     }
   }
 
+  for (let i = activeHitWaves.length - 1; i >= 0; i -= 1) {
+    const wave = activeHitWaves[i];
+    wave.userData.life -= delta;
+    wave.scale.multiplyScalar(1 + (wave.userData.expand * delta));
+    wave.material.opacity = Math.max(0, wave.userData.life * 6);
+    if (wave.userData.life <= 0) {
+      scene.remove(wave);
+      wave.material.dispose();
+      activeHitWaves.splice(i, 1);
+    }
+  }
+
   for (let i = 0; i < shootables.length; i += 1) {
     const target = shootables[i];
     if (target.material.emissiveIntensity > 0.5) {
@@ -7956,6 +8004,7 @@ const updateHolyProjectiles = (delta) => {
         coreBlast.scale.setScalar(1.7);
         coreBlast.userData.life = 0.36;
       }
+      createHitWave(impactCenter, projectile.colors.tracer);
 
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.05)),
@@ -8063,6 +8112,7 @@ const updateHammerProjectiles = (delta) => {
           blastB.scale.setScalar(1.9);
           blastB.userData.life = 0.35;
         }
+        createHitWave(impactCenter, projectile.colors.tracer);
 
         createTracer(
           impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.15)),
@@ -8153,6 +8203,7 @@ const updatePoisonProjectiles = (delta) => {
         cloudB.scale.setScalar(1.9);
         cloudB.userData.life = 0.38;
       }
+      createHitWave(impactCenter, projectile.colors.tracer);
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(0.95)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-0.95)),
@@ -8238,6 +8289,7 @@ const updateLunarProjectiles = (delta) => {
         blastAura.scale.setScalar(2.8);
         blastAura.userData.life = 0.46;
       }
+      createHitWave(impactCenter, projectile.colors.tracer);
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.35)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-1.35)),
