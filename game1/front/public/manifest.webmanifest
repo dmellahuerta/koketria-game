@@ -1,0 +1,20 @@
+{
+  "name": "Koketria Game",
+  "short_name": "Koketria",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a0f1f",
+  "theme_color": "#0a0f1f",
+  "description": "Koketria Game - shooter multijugador",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

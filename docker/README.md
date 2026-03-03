@@ -139,6 +139,8 @@ Servicios públicos:
 - Backend interno: `backend_v2:3001` (no expuesto directo)
 - Web PWA: habilitada solo en producción HTTPS para `misterrii.com` (dev no registra service worker).
   Si no aparece el prompt de instalación, limpia datos del sitio en Chrome móvil y recarga `https://misterrii.com` 1-2 veces.
+- Game PWA: habilitada solo en producción HTTPS para `https://koketria.misterrii.com` (dev no registra service worker).
+  Si no aparece instalación, limpia datos del sitio y recarga 1-2 veces.
 
 Cache de navegador en producción:
 

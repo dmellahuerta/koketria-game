@@ -3,6 +3,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
+const shouldRegisterServiceWorker = import.meta.env.PROD
+  && 'serviceWorker' in navigator
+  && window.isSecureContext;
+
+if (shouldRegisterServiceWorker) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
 const app = document.querySelector('#app');
 app.innerHTML = `
   <section id="bootLoader">
