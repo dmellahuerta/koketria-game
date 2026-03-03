@@ -1914,8 +1914,13 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                     segment_len,
                 );
                 let max_hit_distance = wall_hit_dist.unwrap_or(segment_len).min(segment_len);
+                let segment_end = Vec3 {
+                    x: hammer.position.x + (segment_dir.x * max_hit_distance),
+                    y: hammer.position.y + (segment_dir.y * max_hit_distance),
+                    z: hammer.position.z + (segment_dir.z * max_hit_distance),
+                };
 
-                let victim_hit = find_pumori_hammer_hit(
+                let mut victim_hit = find_pumori_hammer_hit(
                     &inner,
                     &room_id,
                     &caster_id,
@@ -1923,6 +1928,14 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                     &segment_dir,
                     max_hit_distance,
                 );
+                if victim_hit.is_none() {
+                    victim_hit = find_pumori_hammer_overlap_hit(
+                        &inner,
+                        &room_id,
+                        &caster_id,
+                        &segment_end,
+                    );
+                }
 
                 hammer.position = next_pos;
 
@@ -3054,6 +3067,55 @@ fn find_pumori_hammer_hit(
         match &best {
             Some((_id, cur)) if dist >= *cur => {}
             _ => best = Some((candidate_id.clone(), dist)),
+        }
+    }
+    best.map(|(id, _)| id)
+}
+
+fn find_pumori_hammer_overlap_hit(
+    inner: &Inner,
+    room_id: &str,
+    caster_id: &str,
+    hammer_pos: &Vec3,
+) -> Option<String> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    let mut best: Option<(String, f64)> = None;
+    for candidate_id in &room.players {
+        if candidate_id == caster_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, caster_id, candidate_id) {
+            continue;
+        }
+        let Some(candidate) = inner.clients.get(candidate_id) else {
+            continue;
+        };
+        if !candidate.combat.alive {
+            continue;
+        }
+
+        let center = &candidate.state.position;
+        let head_center = Vec3 {
+            x: center.x,
+            y: center.y + HEAD_CENTER_OFFSET_Y,
+            z: center.z,
+        };
+        let body_center = Vec3 {
+            x: center.x,
+            y: center.y + BODY_CENTER_OFFSET_Y,
+            z: center.z,
+        };
+        let head_d2 = distance_sq(hammer_pos, &head_center);
+        let body_d2 = distance_sq(hammer_pos, &body_center);
+        let in_head = head_d2 <= (PUMORI_HAMMER_HEAD_RADIUS * PUMORI_HAMMER_HEAD_RADIUS);
+        let in_body = body_d2 <= (PUMORI_HAMMER_BODY_RADIUS * PUMORI_HAMMER_BODY_RADIUS);
+        if !in_head && !in_body {
+            continue;
+        }
+        let metric = if in_head { head_d2 } else { body_d2 };
+        match &best {
+            Some((_id, cur)) if metric >= *cur => {}
+            _ => best = Some((candidate_id.clone(), metric)),
         }
     }
     best.map(|(id, _)| id)
