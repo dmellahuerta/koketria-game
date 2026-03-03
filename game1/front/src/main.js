@@ -3262,10 +3262,16 @@ const remoteAnimMoveSpeedOn = 0.55;
 const remoteAnimMoveSpeedOff = 0.32;
 const remoteAnimSwitchCooldownMs = 140;
 const remoteMovingSignalHoldMs = 220;
+const localReconcileSoftError = 0.09;
+const localReconcileHardSnapDistance = 2.6;
+const localReconcileRatePerSecond = 9.5;
+const localReconcileExpireMs = 220;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
 let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
+let localReconcileTarget = null;
+let localReconcileExpiresAt = 0;
 
 const getEstimatedServerNowMs = () => Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
 
@@ -5588,6 +5594,8 @@ const applyOwnStateFromRoom = (roomState) => {
   if (pos) {
     camera.position.set(pos.x, pos.y, pos.z);
     constrainPlayerToWorld();
+    localReconcileTarget = null;
+    localReconcileExpiresAt = 0;
     isJumping = Boolean(selfPlayer.state?.jumping);
     if (!isJumping && camera.position.y <= (playerGroundY + 0.001)) {
       jumpVelocity = 0;
@@ -5786,6 +5794,32 @@ const connectWebSocket = () => {
         renderPerfPanel();
       }
       updateServerTimeOffset(payload.data?.serverTs);
+      return;
+    }
+
+    if (payload.type === 'player_move_ack') {
+      const pos = payload.data?.position;
+      if (
+        pos
+        && Number.isFinite(Number(pos.x))
+        && Number.isFinite(Number(pos.y))
+        && Number.isFinite(Number(pos.z))
+      ) {
+        const ackPos = new THREE.Vector3(Number(pos.x), Number(pos.y), Number(pos.z));
+        const dx = ackPos.x - camera.position.x;
+        const dy = ackPos.y - camera.position.y;
+        const dz = ackPos.z - camera.position.z;
+        const error = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        if (error >= localReconcileHardSnapDistance) {
+          camera.position.copy(ackPos);
+          constrainPlayerToWorld();
+          localReconcileTarget = null;
+          localReconcileExpiresAt = 0;
+        } else if (error >= localReconcileSoftError) {
+          localReconcileTarget = ackPos;
+          localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
+        }
+      }
       return;
     }
 
@@ -7667,6 +7701,30 @@ const updateMovement = (delta) => {
   }
 };
 
+const applyLocalMovementReconciliation = (delta) => {
+  if (!localReconcileTarget) {
+    return;
+  }
+  if (!canPlay()) {
+    localReconcileTarget = null;
+    localReconcileExpiresAt = 0;
+    return;
+  }
+  const now = performance.now();
+  if (now > localReconcileExpiresAt) {
+    localReconcileTarget = null;
+    localReconcileExpiresAt = 0;
+    return;
+  }
+  const factor = Math.max(0.01, Math.min(1, delta * localReconcileRatePerSecond));
+  camera.position.lerp(localReconcileTarget, factor);
+  constrainPlayerToWorld();
+  if (camera.position.distanceToSquared(localReconcileTarget) <= (localReconcileSoftError * localReconcileSoftError)) {
+    localReconcileTarget = null;
+    localReconcileExpiresAt = 0;
+  }
+};
+
 const updateJump = (delta) => {
   if (!isJumping && camera.position.y <= (playerGroundY + 0.001) && jumpVelocity <= 0) {
     return;
@@ -8708,6 +8766,7 @@ const animate = () => {
   applyMobileMoveKeys();
   updateMovement(delta);
   updateJump(delta);
+  applyLocalMovementReconciliation(delta);
   updateHealthRegen(delta);
   updateLocalAvatar(delta);
   updateThirdPersonCamera();

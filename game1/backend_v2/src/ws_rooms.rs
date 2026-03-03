@@ -1612,6 +1612,28 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 push_state_snapshot(entry, ts);
             }
 
+            inner.send_to(
+                client_id,
+                json!({
+                  "type":"player_move_ack",
+                  "ok": true,
+                  "data": {
+                    "position": {
+                      "x": next_state.position.x,
+                      "y": next_state.position.y,
+                      "z": next_state.position.z
+                    },
+                    "rotation": {
+                      "yaw": next_state.rotation.yaw,
+                      "pitch": next_state.rotation.pitch
+                    },
+                    "jumping": next_state.jumping,
+                    "moving": next_state.moving,
+                    "ts": ts
+                  }
+                }),
+            );
+
             inner.broadcast_room(
                 &room_id,
                 json!({
