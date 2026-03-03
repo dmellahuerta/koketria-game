@@ -3246,8 +3246,15 @@ const debugHitboxColors = {
   body: 0x4de2ff,
   torso: 0xb28cff,
 };
-const remoteInterpolationMs = 170;
-const remoteExtrapolationMs = 160;
+const remoteInterpolationBaseMs = 170;
+const remoteInterpolationMinMs = 120;
+const remoteInterpolationMaxMs = 280;
+const remoteInterpolationLatencyFactor = 0.38;
+const remoteExtrapolationBaseMs = 160;
+const remoteExtrapolationMinMs = 90;
+const remoteExtrapolationMaxMs = 240;
+const remoteExtrapolationLatencyFactor = 0.28;
+const remoteNetSmoothingPerSecond = 4.2;
 const remoteHardCatchupDistance = 4.8;
 const remoteMediumCatchupDistance = 2.4;
 const remoteSnapDistance = 9.5;
@@ -3257,6 +3264,8 @@ const remoteAnimSwitchCooldownMs = 140;
 const remoteMovingSignalHoldMs = 220;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
+let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
+let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 
 const getEstimatedServerNowMs = () => Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
 
@@ -3274,6 +3283,21 @@ const updateServerTimeOffset = (serverTs) => {
   const delta = sample - serverTimeOffsetMs;
   const boundedDelta = Math.max(-30, Math.min(30, delta));
   serverTimeOffsetMs += boundedDelta * 0.35;
+};
+
+const updateRemoteNetTimings = (delta) => {
+  const rtt = Number.isFinite(state.latencyMs) ? Math.max(0, state.latencyMs) : 0;
+  const targetInterpolation = Math.max(
+    remoteInterpolationMinMs,
+    Math.min(remoteInterpolationMaxMs, remoteInterpolationBaseMs + (rtt * remoteInterpolationLatencyFactor)),
+  );
+  const targetExtrapolation = Math.max(
+    remoteExtrapolationMinMs,
+    Math.min(remoteExtrapolationMaxMs, remoteExtrapolationBaseMs + (rtt * remoteExtrapolationLatencyFactor)),
+  );
+  const smoothing = Math.max(0.01, Math.min(1, delta * remoteNetSmoothingPerSecond));
+  remoteInterpolationDynamicMs += (targetInterpolation - remoteInterpolationDynamicMs) * smoothing;
+  remoteExtrapolationDynamicMs += (targetExtrapolation - remoteExtrapolationDynamicMs) * smoothing;
 };
 
 const ammoPickupGeometry = new THREE.CapsuleGeometry(0.2, 0.18, 4, 8);
@@ -7850,9 +7874,10 @@ const updateKoketriaNature = (delta) => {
 };
 
 const updateRemotePlayers = (delta) => {
+  updateRemoteNetTimings(delta);
   const baseFactor = Math.min(1, delta * 8);
   const now = performance.now();
-  const renderTs = getEstimatedServerNowMs() - remoteInterpolationMs;
+  const renderTs = getEstimatedServerNowMs() - remoteInterpolationDynamicMs;
 
   for (const entry of state.remotePlayers.values()) {
     const snapshots = entry.netSnapshots || [];
@@ -7888,7 +7913,7 @@ const updateRemotePlayers = (delta) => {
         const last = snapshots[snapshots.length - 1];
         const prev = snapshots[snapshots.length - 2];
         const lateByMs = renderTs - last.ts;
-        if (lateByMs <= remoteExtrapolationMs) {
+        if (lateByMs <= remoteExtrapolationDynamicMs) {
           const dt = Math.max(1, last.ts - prev.ts);
           const ratio = lateByMs / dt;
           targetState = {
