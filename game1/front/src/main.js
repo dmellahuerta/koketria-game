@@ -3319,6 +3319,7 @@ let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
 let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
+let localCollisionBypassUntil = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 const reconcileStats = {
@@ -5900,10 +5901,11 @@ const connectWebSocket = () => {
         if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
           camera.position.copy(correctedTarget);
-          constrainPlayerToWorld();
+          camera.position.y = Math.max(playerGroundY, camera.position.y);
           pendingMoveInputs.length = 0;
           moveVelocity.x = 0;
           moveVelocity.z = 0;
+          localCollisionBypassUntil = performance.now() + 700;
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         } else if (error >= localReconcileSoftError) {
@@ -7048,6 +7050,9 @@ const applyWorldCollisions = (targetX, targetZ) => {
   const bounded = clampPointToMapBounds(targetX, targetZ, playerCollisionRadius + 0.05);
   const clampedX = bounded.x;
   const clampedZ = bounded.z;
+  if (performance.now() < localCollisionBypassUntil) {
+    return { x: clampedX, z: clampedZ };
+  }
 
   let resolvedX = currentX;
   let resolvedZ = currentZ;
@@ -7888,7 +7893,7 @@ const applyLocalMovementReconciliation = (delta) => {
   }
   const factor = Math.max(0.01, Math.min(1, delta * localReconcileRatePerSecond));
   camera.position.lerp(localReconcileTarget, factor);
-  constrainPlayerToWorld();
+  camera.position.y = Math.max(playerGroundY, camera.position.y);
   if (camera.position.distanceToSquared(localReconcileTarget) <= (localReconcileSoftError * localReconcileSoftError)) {
     localReconcileTarget = null;
     localReconcileExpiresAt = 0;
