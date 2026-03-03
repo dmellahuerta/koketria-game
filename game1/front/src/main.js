@@ -409,6 +409,7 @@ const state = {
   showMatchInfo: false,
   showScoreboard: false,
   showPerf: false,
+  showHitboxDebug: false,
   fps: 0,
   latencyMs: null,
 };
@@ -3240,6 +3241,11 @@ const dir = new THREE.Vector3();
 const clock = new THREE.Clock();
 const remoteFacingYawOffset = Math.PI;
 const DEBUG_WEAPON_ATTACH = false;
+const debugHitboxColors = {
+  head: 0xff4d4d,
+  body: 0x4de2ff,
+  torso: 0xb28cff,
+};
 const remoteInterpolationMs = 170;
 const remoteExtrapolationMs = 160;
 const remoteHardCatchupDistance = 4.8;
@@ -4770,10 +4776,12 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   liveEntry.group.add(hpBar.holder);
   liveEntry.healthBar = hpBar;
   updateRemoteHealthBar(liveEntry);
+  ensureRemoteHitboxDebug(liveEntry);
   setRemoteIdle(liveEntry);
 };
 
 const disposeRemotePlayer = (entry) => {
+  disposeRemoteHitboxDebug(entry);
   if (entry.teamOutline) {
     disposeTeamMarker(entry.teamOutline);
     entry.teamOutline = null;
@@ -4841,6 +4849,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     healthBar: null,
     team: null,
     teamOutline: null,
+    hitboxDebug: null,
   });
 
   const entry = state.remotePlayers.get(id);
@@ -4860,6 +4869,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     entry.character = availableCharacters[0] || activeCharacter || 'silentman';
   }
   ensureRemoteTeamOutline(entry);
+  ensureRemoteHitboxDebug(entry);
   upgradeRemotePlayerToCharacter(entry);
 };
 
@@ -6617,6 +6627,75 @@ const disposeTeamMarker = (marker) => {
   }
 };
 
+const disposeRemoteHitboxDebug = (entry) => {
+  if (!entry?.hitboxDebug) {
+    return;
+  }
+  if (entry.hitboxDebug.group?.parent) {
+    entry.hitboxDebug.group.parent.remove(entry.hitboxDebug.group);
+  }
+  const meshes = Array.isArray(entry.hitboxDebug.meshes) ? entry.hitboxDebug.meshes : [];
+  for (let i = 0; i < meshes.length; i += 1) {
+    const mesh = meshes[i];
+    if (!mesh) {
+      continue;
+    }
+    if (mesh.geometry) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.material) {
+      mesh.material.dispose();
+    }
+  }
+  entry.hitboxDebug = null;
+};
+
+const ensureRemoteHitboxDebug = (entry) => {
+  if (!entry?.group) {
+    return;
+  }
+  if (!entry.hitboxDebug) {
+    const group = new THREE.Group();
+    const mk = (radius, y, color) => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 14, 10),
+        new THREE.MeshBasicMaterial({
+          color,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      mesh.position.set(0, y, 0);
+      return mesh;
+    };
+    const head = mk(headshotRadius, remoteHeadCenterOffsetY, debugHitboxColors.head);
+    const body = mk(bodyshotRadius, remoteBodyCenterOffsetY, debugHitboxColors.body);
+    const torso = mk(torsoRadius, remoteTorsoCenterOffsetY, debugHitboxColors.torso);
+    group.add(head);
+    group.add(body);
+    group.add(torso);
+    group.visible = false;
+    group.renderOrder = 1800;
+    entry.group.add(group);
+    entry.hitboxDebug = {
+      group,
+      meshes: [head, body, torso],
+    };
+  } else if (entry.hitboxDebug.group.parent !== entry.group) {
+    entry.group.add(entry.hitboxDebug.group);
+  }
+  entry.hitboxDebug.group.visible = Boolean(state.showHitboxDebug);
+};
+
+const refreshRemoteHitboxDebugVisibility = () => {
+  for (const entry of state.remotePlayers.values()) {
+    ensureRemoteHitboxDebug(entry);
+  }
+};
+
 const createTeamOutline = (team) => {
   const normalizedTeam = normalizePlayerTeam(team);
   const color = normalizedTeam === 'red' ? 0xff7f7f : 0x7fa8ff;
@@ -7184,6 +7263,13 @@ window.addEventListener('keydown', (event) => {
       requestLatencyProbe(true);
     }
     renderPerfPanel();
+  }
+
+  if (event.code === 'F9') {
+    event.preventDefault();
+    state.showHitboxDebug = !state.showHitboxDebug;
+    refreshRemoteHitboxDebugVisibility();
+    return;
   }
 
   if (event.code === 'KeyF') {
