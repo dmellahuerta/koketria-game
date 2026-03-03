@@ -6010,10 +6010,6 @@ const connectWebSocket = () => {
         } else if (error >= localReconcileSoftError) {
           const nowMs = performance.now();
           const hasMoveIntent = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
-          if (hasMoveIntent && tuningPerfStats.localSpeed > 1.5) {
-            // Prioritize immediate movement feel over minor server drift while actively moving.
-            return;
-          }
           if (hasMoveIntent && tuningPerfStats.localSpeed > 2 && error < localReconcileSoftMovingIgnoreError) {
             return;
           }
