@@ -140,6 +140,8 @@ const MAX_HEALTH: f64 = 100.0;
 const MAX_SHIELD: f64 = 100.0;
 const START_SHIELD: f64 = 0.0;
 const MAX_MANA: f64 = 100.0;
+const MANA_PICKUP_AMOUNT: f64 = 20.0;
+const SHIELD_PICKUP_AMOUNT: f64 = 25.0;
 const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
 const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
@@ -1387,6 +1389,40 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     entry.combat.pending_health_regen +=
                         HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
                 }
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            };
+            inner.send_to(client_id, payload);
+        }
+        "player_pickup_mana" => {
+            let Some(_room_id) = client.room_id.clone() else {
+                return;
+            };
+            let payload = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                update_combat_regen(&mut entry.combat, now_ms());
+                if !entry.combat.alive {
+                    return;
+                }
+                entry.combat.mana = (entry.combat.mana + MANA_PICKUP_AMOUNT).min(MAX_MANA);
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            };
+            inner.send_to(client_id, payload);
+        }
+        "player_pickup_shield" => {
+            let Some(_room_id) = client.room_id.clone() else {
+                return;
+            };
+            let payload = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                update_combat_regen(&mut entry.combat, now_ms());
+                if !entry.combat.alive {
+                    return;
+                }
+                entry.combat.shield = (entry.combat.shield + SHIELD_PICKUP_AMOUNT).min(MAX_SHIELD);
                 player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
             };
             inner.send_to(client_id, payload);

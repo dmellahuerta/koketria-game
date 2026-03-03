@@ -3116,6 +3116,7 @@ const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
+const resourceSyncIntervalMs = 180;
 const hitWaveYOffset = 0.04;
 const hitWaveStartScale = 0.9;
 const hitWaveLife = 0.2;
@@ -3220,6 +3221,7 @@ let isReloading = false;
 let reloadCooldown = 0;
 let isJumping = false;
 let jumpVelocity = 0;
+let lastResourceSyncAt = 0;
 let isRespawning = false;
 let respawnEndsAt = 0;
 let respawnSecondsLeft = getRespawnDurationSeconds();
@@ -7231,10 +7233,7 @@ const shoot = () => {
     return;
   }
 
-  if (usingMana) {
-    mana = Math.max(0, mana - manaCostPerShot);
-    manaHudValue = Math.round(mana);
-  } else {
+  if (!usingMana) {
     ammoInMag -= 1;
   }
   startShootSound();
@@ -7341,12 +7340,11 @@ const collectAmmoPickup = (pickup, nowMs) => {
   pickup.mesh.visible = false;
 
   if (isManaCharacter(activeCharacter)) {
-    mana = Math.min(maxMana, mana + manaPickupAmount);
-    manaHudValue = Math.round(mana);
+    sendWs({ type: 'player_pickup_mana' });
   } else {
     ammoReserve = Math.min(maxAmmoTotal, ammoReserve + ammoPickupAmount);
+    updateHud();
   }
-  updateHud();
 };
 
 const collectShieldPickup = (pickup, nowMs) => {
@@ -7354,47 +7352,18 @@ const collectShieldPickup = (pickup, nowMs) => {
   pickup.respawnAt = nowMs + shieldPickupRespawnMs;
   pickup.mesh.visible = false;
 
-  shield = Math.min(maxShield, shield + shieldPickupAmount);
-  updateHud();
+  sendWs({ type: 'player_pickup_shield' });
 };
 
 const collectHealthPickup = (pickup, nowMs) => {
   pickup.active = false;
   pickup.respawnAt = nowMs + healthPickupRespawnMs;
   pickup.mesh.visible = false;
-
-  const maxRecoverable = Math.max(0, maxHealth - (health + pendingHealthRegen));
-  const amountToQueue = Math.min(maxRecoverable, healthPickupRegenAmount);
-  if (amountToQueue <= 0) {
-    return;
-  }
-
-  pendingHealthRegen += amountToQueue;
   sendWs({ type: 'player_pickup_health' });
 };
 
 const updateHealthRegen = (delta) => {
-  if (!canPlay() || isRespawning || health <= 0 || pendingHealthRegen <= 0) {
-    return;
-  }
-
-  const canHeal = Math.max(0, maxHealth - health);
-  if (canHeal <= 0.0001) {
-    pendingHealthRegen = 0;
-    return;
-  }
-
-  const healStep = Math.min(canHeal, pendingHealthRegen, healthRegenPerSecond * delta);
-  if (healStep <= 0.0001) {
-    return;
-  }
-
-  const prevShownHealth = Math.round(health);
-  health += healStep;
-  pendingHealthRegen = Math.max(0, pendingHealthRegen - healStep);
-  if (Math.round(health) !== prevShownHealth) {
-    updateHud();
-  }
+  void delta;
 };
 
 const clampPendingHealthRegenToMissing = () => {
@@ -7570,7 +7539,7 @@ const updateAmmoPickups = (delta) => {
       }
     }
 
-    if (!canPlay() || (isManaCharacter(activeCharacter) ? mana >= maxMana : ammoReserve >= maxAmmoTotal)) {
+    if (!canPlay() || (!isManaCharacter(activeCharacter) && ammoReserve >= maxAmmoTotal)) {
       continue;
     }
 
@@ -7607,7 +7576,7 @@ const updateShieldPickups = (delta) => {
       }
     }
 
-    if (!canPlay() || shield >= maxShield) {
+    if (!canPlay()) {
       continue;
     }
 
@@ -7646,11 +7615,6 @@ const updateHealthPickups = (delta) => {
     }
 
     if (!canPlay() || isRespawning) {
-      continue;
-    }
-
-    const maxRecoverable = Math.max(0, maxHealth - (health + pendingHealthRegen));
-    if (maxRecoverable <= 0.0001) {
       continue;
     }
 
@@ -8463,17 +8427,9 @@ const updateShooting = (delta) => {
     return;
   }
 
-  if (usingMana) {
-    const beforeHudValue = manaHudValue;
-    mana = Math.min(maxMana, mana + (manaRegenPerSecond * delta));
-    manaHudValue = Math.round(mana);
-    if (isReloading) {
-      isReloading = false;
-      reloadCooldown = 0;
-    }
-    if (manaHudValue !== beforeHudValue) {
-      updateHud();
-    }
+  if (usingMana && isReloading) {
+    isReloading = false;
+    reloadCooldown = 0;
   }
 
   if (!usingMana && isReloading) {
@@ -8546,6 +8502,21 @@ const updateWinnerCountdown = () => {
   }
 };
 
+const updateResourceSync = () => {
+  if (!state.joinedRoom || state.joinedRoom.room?.status !== 'in_game') {
+    return;
+  }
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const now = performance.now();
+  if (now - lastResourceSyncAt < resourceSyncIntervalMs) {
+    return;
+  }
+  lastResourceSyncAt = now;
+  sendWs({ type: 'player_resources' });
+};
+
 const shouldRenderLobbyPreview = () => {
   return !state.joinedRoom
     && lobbySection
@@ -8585,6 +8556,7 @@ const animate = () => {
   updateLunarProjectiles(delta);
   updatePumoriOrbitSpecials(delta);
   updateShooting(delta);
+  updateResourceSync();
   updateRespawnCountdown();
   updateWinnerCountdown();
   updateEffects(delta);
