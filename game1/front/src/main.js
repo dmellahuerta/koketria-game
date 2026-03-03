@@ -7005,18 +7005,29 @@ const findNearestWalkablePoint = (originX, originZ) => {
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
-  const edge = mapHalfExtent - playerCollisionRadius;
-  const clampedX = Math.max(-edge, Math.min(edge, targetX));
-  const clampedZ = Math.max(-edge, Math.min(edge, targetZ));
+  const bounded = clampPointToMapBounds(targetX, targetZ, playerCollisionRadius + 0.05);
+  const clampedX = bounded.x;
+  const clampedZ = bounded.z;
 
   let resolvedX = currentX;
   let resolvedZ = currentZ;
 
-  if (!collidesWithPillar(clampedX, currentZ)) {
+  if (isWalkablePoint(clampedX, currentZ)) {
     resolvedX = clampedX;
   }
-  if (!collidesWithPillar(resolvedX, clampedZ)) {
+  if (isWalkablePoint(resolvedX, clampedZ)) {
     resolvedZ = clampedZ;
+  }
+
+  // If both axis attempts fail (common near pillar corners), softly nudge to nearest walkable spot.
+  if (!isWalkablePoint(resolvedX, resolvedZ)) {
+    const fallback = findNearestWalkablePoint(clampedX, clampedZ);
+    const dx = fallback.x - currentX;
+    const dz = fallback.z - currentZ;
+    if ((dx * dx) + (dz * dz) <= 3.24) {
+      resolvedX = fallback.x;
+      resolvedZ = fallback.z;
+    }
   }
 
   return { x: resolvedX, z: resolvedZ };
@@ -7781,18 +7792,38 @@ const updateMovement = (delta) => {
   if (Math.abs(moveVelocity.z) < 0.0001) moveVelocity.z = 0;
 
   if (moveVelocity.lengthSq() > 0) {
-    const desiredX = camera.position.x + (moveVelocity.x * delta);
-    const desiredZ = camera.position.z + (moveVelocity.z * delta);
-    const next = applyWorldCollisions(desiredX, desiredZ);
-    const moved = Math.abs(next.x - camera.position.x) > 0.0001 || Math.abs(next.z - camera.position.z) > 0.0001;
-    if (Math.abs(next.x - desiredX) > 0.0002) {
-      moveVelocity.x = 0;
+    const totalDx = moveVelocity.x * delta;
+    const totalDz = moveVelocity.z * delta;
+    const travel = Math.sqrt((totalDx * totalDx) + (totalDz * totalDz));
+    const steps = Math.max(1, Math.min(6, Math.ceil(travel / 0.35)));
+    const stepDx = totalDx / steps;
+    const stepDz = totalDz / steps;
+    let moved = false;
+
+    for (let i = 0; i < steps; i += 1) {
+      const startX = camera.position.x;
+      const startZ = camera.position.z;
+      const desiredX = startX + stepDx;
+      const desiredZ = startZ + stepDz;
+      const next = applyWorldCollisions(desiredX, desiredZ);
+      const stepMovedX = Math.abs(next.x - startX) > 0.0001;
+      const stepMovedZ = Math.abs(next.z - startZ) > 0.0001;
+      if (!stepMovedX && !stepMovedZ) {
+        moveVelocity.x = 0;
+        moveVelocity.z = 0;
+        break;
+      }
+      if (!stepMovedX) {
+        moveVelocity.x = 0;
+      }
+      if (!stepMovedZ) {
+        moveVelocity.z = 0;
+      }
+      camera.position.x = next.x;
+      camera.position.z = next.z;
+      moved = true;
     }
-    if (Math.abs(next.z - desiredZ) > 0.0002) {
-      moveVelocity.z = 0;
-    }
-    camera.position.x = next.x;
-    camera.position.z = next.z;
+
     camera.position.y = Math.max(playerGroundY, camera.position.y);
     if (moved) {
       sendLocalPlayerState();
