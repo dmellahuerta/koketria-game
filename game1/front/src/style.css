@@ -51,46 +51,28 @@ canvas {
   z-index: 8;
   pointer-events: none;
   background:
-    radial-gradient(circle at 50% 20%, rgba(36, 120, 48, 0.12), rgba(2, 10, 4, 0.88) 62%),
-    #020703;
-}
-
-#lobbyMatrixBackdrop::before,
-#lobbyMatrixBackdrop::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
+    radial-gradient(circle at 20% 20%, rgba(46, 255, 111, 0.09), transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(46, 255, 111, 0.07), transparent 45%),
     repeating-linear-gradient(
       to bottom,
-      rgba(132, 255, 156, 0.2) 0px,
-      rgba(132, 255, 156, 0.2) 2px,
-      rgba(132, 255, 156, 0) 10px,
-      rgba(132, 255, 156, 0) 18px
+      rgba(46, 255, 111, 0.08) 0px,
+      rgba(46, 255, 111, 0.08) 1px,
+      transparent 1px,
+      transparent 5px
     );
-  background-size: 3px 18px;
-  opacity: 0.24;
-  animation: matrix-fall 22s linear infinite;
-}
-
-#lobbyMatrixBackdrop::after {
-  background-size: 2px 14px;
-  opacity: 0.16;
-  filter: blur(0.2px);
-  animation-duration: 30s;
-  animation-direction: reverse;
+  animation: matrix-rain 14s linear infinite;
 }
 
 #app:not(.in-room) #lobbyMatrixBackdrop {
   display: block;
 }
 
-@keyframes matrix-fall {
-  from {
-    background-position: 0 -180px;
+@keyframes matrix-rain {
+  0% {
+    transform: translateY(-10%);
   }
-  to {
-    background-position: 0 180px;
+  100% {
+    transform: translateY(10%);
   }
 }
 
