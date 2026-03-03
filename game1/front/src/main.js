@@ -3241,7 +3241,7 @@ const remoteMovingSignalHoldMs = 220;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
 
-const getEstimatedServerNowMs = () => Date.now();
+const getEstimatedServerNowMs = () => Date.now() + (hasServerTimeSync ? serverTimeOffsetMs : 0);
 
 const updateServerTimeOffset = (serverTs) => {
   const ts = Number(serverTs);
@@ -5191,7 +5191,7 @@ const getPlayerPositionById = (playerId) => {
   return null;
 };
 
-const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
+const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0) => {
   const ownerId = String(playerId || '');
   if (!ownerId) {
     return;
@@ -5203,6 +5203,8 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
   }
 
   const now = performance.now();
+  const safeElapsedMs = Math.max(0, Number(elapsedMs) || 0);
+  const visualStartAt = now - safeElapsedMs;
   const hammers = [];
   const duration = Math.max(500, Number(durationMs) || 10_000);
   const ownerTeam = getTeamByPlayerId(ownerId);
@@ -5211,10 +5213,10 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs) => {
     ownerId,
     team: ownerTeam,
     hammers,
-    createdAt: now,
-    endAt: now + duration,
+    createdAt: visualStartAt,
+    endAt: visualStartAt + duration,
     spawnIntervalMs: 220,
-    nextSpawnAt: now,
+    nextSpawnAt: visualStartAt,
     spawnCount: 0,
     maxOrbitRadius: 22,
     maxActiveHammers: 28,
@@ -5626,6 +5628,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'pong') {
       const probeId = String(payload.data?.probeId || '');
+      updateServerTimeOffset(payload.data?.serverTs);
       if (pendingLatencyProbe && probeId === pendingLatencyProbe.id) {
         state.latencyMs = performance.now() - pendingLatencyProbe.sentAt;
         pendingLatencyProbe = null;
@@ -5840,10 +5843,14 @@ const connectWebSocket = () => {
     if (payload.type === 'special_pumori_orbit_start') {
       const ownerId = String(payload.data?.playerId || '');
       const durationMs = Number(payload.data?.durationMs || 10_000);
+      const castTs = Number(payload.data?.ts);
       if (!ownerId) {
         return;
       }
-      startPumoriOrbitSpecialVisual(ownerId, durationMs);
+      const elapsedMs = Number.isFinite(castTs)
+        ? Math.max(0, getEstimatedServerNowMs() - castTs)
+        : 0;
+      startPumoriOrbitSpecialVisual(ownerId, durationMs, elapsedMs);
       return;
     }
 
