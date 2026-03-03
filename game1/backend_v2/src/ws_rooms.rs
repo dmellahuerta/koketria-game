@@ -160,8 +160,8 @@ const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const SILENT_SPECIAL_COOLDOWN_MS: i64 = 5_000;
 const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const PUMORI_SPECIAL_COOLDOWN_MS: i64 = 30_000;
-const LUNAR_SPECIAL_DURATION_MS: i64 = 10_000;
-const NEOORPHEN_SPECIAL_DURATION_MS: i64 = 10_000;
+const LUNAR_SPECIAL_DURATION_MS: i64 = 5_000;
+const NEOORPHEN_SPECIAL_DURATION_MS: i64 = 5_000;
 const LUNAR_SPECIAL_WAVE_INTERVAL_MS: i64 = 420;
 const NEOORPHEN_SPECIAL_WAVE_INTERVAL_MS: i64 = 320;
 const LUNAR_STRIKES_PER_WAVE: usize = 16;
@@ -195,6 +195,9 @@ const LAG_COMP_RTT_FACTOR: f64 = 0.35;
 const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
 const SPECIAL_HIT_DAMAGE: f64 = 17.0;
+const LUNAR_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE / 3.0;
+const NEOORPHEN_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE / 3.0;
+const PUMORI_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE * 0.5;
 const NORMAL_SHOCKWAVE_RADIUS: f64 = 4.2;
 const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.18;
 const NORMAL_SHOCKWAVE_MAX_FACTOR: f64 = 0.9;
@@ -1216,7 +1219,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     client_id.to_string(),
                     victim_id,
                     false,
-                    SPECIAL_HIT_DAMAGE,
+                    HIT_DAMAGE,
                     Some(now_hit),
                     delay_ms,
                     true,
@@ -2028,7 +2031,7 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                         &caster_id,
                         &victim_id,
                         false,
-                        SPECIAL_HIT_DAMAGE,
+                        PUMORI_SPECIAL_HIT_DAMAGE,
                         now,
                     ) {
                         winner = true;
@@ -2394,7 +2397,7 @@ async fn run_lunar_rain_special(
             caster_id.clone(),
             impacts,
             LUNAR_STRIKE_AOE_RADIUS,
-            SPECIAL_HIT_DAMAGE,
+            LUNAR_SPECIAL_HIT_DAMAGE,
             LUNAR_SPECIAL_IMPACT_DELAY_MS,
         ));
     }
@@ -2469,7 +2472,7 @@ async fn run_neoorphen_meteor_special(
             caster_id.clone(),
             impacts,
             NEOORPHEN_STRIKE_AOE_RADIUS,
-            SPECIAL_HIT_DAMAGE,
+            NEOORPHEN_SPECIAL_HIT_DAMAGE,
             NEOORPHEN_SPECIAL_IMPACT_DELAY_MS,
         ));
     }
