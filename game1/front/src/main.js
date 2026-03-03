@@ -1481,6 +1481,16 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.domElement.classList.add('game-render-canvas');
 app.appendChild(renderer.domElement);
+let isMainWebglContextLost = false;
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  isMainWebglContextLost = true;
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  isMainWebglContextLost = false;
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  applyWeather(currentWeather || 'night');
+});
 
 const ambient = new THREE.AmbientLight(0x66ff88, 0.3);
 scene.add(ambient);
@@ -8419,6 +8429,9 @@ const shouldRenderVersusPreviews = () => {
 
 const animate = () => {
   requestAnimationFrame(animate);
+  if (isMainWebglContextLost) {
+    return;
+  }
   const delta = Math.min(clock.getDelta(), 0.05);
   syncMobileControlsVisibility();
   updatePerfMetrics();
@@ -8478,10 +8491,19 @@ const animate = () => {
       if (slot.model) {
         slot.model.rotation.y += delta * slot.rotateSpeed;
       }
-      slot.renderer.render(slot.scene, slot.camera);
+      try {
+        slot.renderer.render(slot.scene, slot.camera);
+      } catch {
+        disposeVersusPreviewSlot(slot.key);
+      }
     }
   }
-  renderer.render(scene, getRenderCamera());
+  try {
+    renderer.render(scene, getRenderCamera());
+  } catch {
+    isMainWebglContextLost = true;
+    return;
+  }
   renderPerfStats.drawCalls = renderer.info.render.calls || 0;
   renderPerfStats.triangles = renderer.info.render.triangles || 0;
   renderPerfStats.geometries = renderer.info.memory.geometries || 0;
