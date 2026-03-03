@@ -205,7 +205,17 @@ const NEO_SPECIAL_MAX_RADIUS: f64 = 24.0;
 const PUMORI_ORBIT_DURATION_MS: i64 = 10_000;
 const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
-const PUMORI_ORBIT_DAMAGE_RING_THICKNESS: f64 = 3.8;
+const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
+const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
+
+#[derive(Clone)]
+struct PumoriOrbitHammer {
+    spawn_at_ms: i64,
+    base_angle: f64,
+    max_radius: f64,
+    position: Vec3,
+    active: bool,
+}
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
@@ -1800,7 +1810,16 @@ fn apply_hit_and_emit(
 
 async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, caster_id: String) {
     let ticks = (PUMORI_ORBIT_DURATION_MS / PUMORI_ORBIT_DAMAGE_TICK_MS).max(1);
-    for tick in 0..ticks {
+    let cast_start_ms = now_ms();
+    let cast_end_ms = cast_start_ms + PUMORI_ORBIT_DURATION_MS;
+    let mut next_spawn_at_ms = cast_start_ms;
+    let mut spawn_count: usize = 0;
+    let mut orbit_hammers: Vec<PumoriOrbitHammer> = Vec::new();
+    let mut rng =
+        SeededRng::new((cast_start_ms as u64) ^ hash_room_id(&room_id) ^ hash_room_id(&caster_id));
+    let phase = rng.next_f64() * std::f64::consts::TAU;
+
+    for _ in 0..ticks {
         sleep(Duration::from_millis(PUMORI_ORBIT_DAMAGE_TICK_MS as u64)).await;
 
         let winner = {
@@ -1818,52 +1837,115 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
                 return;
             }
             let center = caster.state.position.clone();
-            let progress = ((tick + 1) as f64 / ticks as f64).clamp(0.0, 1.0);
-            let outer_radius =
-                PUMORI_ORBIT_DAMAGE_RADIUS * (0.18 + (0.82 * progress));
-            let inner_radius = (outer_radius - PUMORI_ORBIT_DAMAGE_RING_THICKNESS).max(0.0);
-            let candidate_ids: Vec<String> = room
-                .players
-                .iter()
-                .filter(|id| id.as_str() != caster_id)
-                .cloned()
-                .collect();
+            let now = now_ms();
+            let life_ratio = clamp(
+                (now - cast_start_ms) as f64 / (PUMORI_ORBIT_DURATION_MS as f64),
+                0.0,
+                1.0,
+            );
+            let elapsed_s = ((now - cast_start_ms) as f64) / 1000.0;
 
-            let mut hit_ids = Vec::new();
-            for victim_id in candidate_ids {
-                if is_friendly_fire_blocked(&inner, &room_id, &caster_id, &victim_id) {
+            while next_spawn_at_ms <= now && next_spawn_at_ms < cast_end_ms {
+                let active_count = orbit_hammers.iter().filter(|h| h.active).count();
+                if active_count < PUMORI_ORBIT_MAX_ACTIVE_HAMMERS {
+                    let spawn_progress = clamp(
+                        (next_spawn_at_ms - cast_start_ms) as f64 / (PUMORI_ORBIT_DURATION_MS as f64),
+                        0.0,
+                        1.0,
+                    );
+                    let max_radius =
+                        (PUMORI_ORBIT_DAMAGE_RADIUS * (0.22 + (spawn_progress * 0.78))).max(2.2);
+                    orbit_hammers.push(PumoriOrbitHammer {
+                        spawn_at_ms: next_spawn_at_ms,
+                        base_angle: (rng.next_f64() * std::f64::consts::TAU)
+                            + (((spawn_count % 4) as f64) * (std::f64::consts::PI * 0.5)),
+                        max_radius,
+                        position: center.clone(),
+                        active: true,
+                    });
+                }
+                spawn_count += 1;
+                next_spawn_at_ms += PUMORI_ORBIT_SPAWN_INTERVAL_MS;
+            }
+
+            let mut winner = false;
+            for (idx, hammer) in orbit_hammers.iter_mut().enumerate() {
+                if !hammer.active {
                     continue;
                 }
-                let Some(victim) = inner.clients.get(&victim_id) else {
+
+                let appeared_ratio =
+                    clamp((now - hammer.spawn_at_ms) as f64 / 1200.0, 0.0, 1.0);
+                let expanding_radius = hammer.max_radius * (0.25 + (0.75 * life_ratio * appeared_ratio));
+                let angle = phase
+                    + (elapsed_s * 5.4)
+                    + hammer.base_angle
+                    + ((idx as f64) * 0.11);
+                let radius = expanding_radius + ((elapsed_s * 3.4) + idx as f64).sin() * 0.12;
+                let next_pos = Vec3 {
+                    x: center.x + (angle.cos() * radius),
+                    y: center.y + 1.15 + ((elapsed_s * 3.1) + idx as f64).sin() * 0.22,
+                    z: center.z + (angle.sin() * radius),
+                };
+
+                let segment = sub(&next_pos, &hammer.position);
+                let segment_len =
+                    (segment.x * segment.x + segment.y * segment.y + segment.z * segment.z).sqrt();
+                if segment_len <= 1e-4 {
+                    hammer.position = next_pos;
+                    continue;
+                }
+                let Some(segment_dir) = normalize_vec3(segment) else {
+                    hammer.position = next_pos;
                     continue;
                 };
-                if !victim.combat.alive {
+
+                let wall_hit_dist = resolve_wall_hit_distance(
+                    &inner,
+                    &room_id,
+                    &hammer.position,
+                    &segment_dir,
+                    segment_len,
+                );
+                let max_hit_distance = wall_hit_dist.unwrap_or(segment_len).min(segment_len);
+
+                let victim_hit =
+                    find_best_hit(
+                        &inner,
+                        &room_id,
+                        &caster_id,
+                        &hammer.position,
+                        &segment_dir,
+                        max_hit_distance,
+                        now,
+                    )
+                    .map(|(victim_id, _headshot, _dist)| victim_id);
+
+                hammer.position = next_pos;
+
+                if let Some(victim_id) = victim_hit {
+                    hammer.active = false;
+                    if apply_hit_and_emit(
+                        &mut inner,
+                        &room_id,
+                        &caster_id,
+                        &victim_id,
+                        false,
+                        SPECIAL_HIT_DAMAGE,
+                        now,
+                    ) {
+                        winner = true;
+                        break;
+                    }
                     continue;
                 }
-                let dx = victim.state.position.x - center.x;
-                let dz = victim.state.position.z - center.z;
-                let distance = (dx * dx + dz * dz).sqrt();
-                if distance >= inner_radius && distance <= outer_radius {
-                    hit_ids.push(victim_id);
+
+                if wall_hit_dist.is_some() {
+                    hammer.active = false;
                 }
             }
 
-            let now = now_ms();
-            let mut winner = false;
-            for victim_id in hit_ids {
-                if apply_hit_and_emit(
-                    &mut inner,
-                    &room_id,
-                    &caster_id,
-                    &victim_id,
-                    false,
-                    SPECIAL_HIT_DAMAGE,
-                    now,
-                ) {
-                    winner = true;
-                    break;
-                }
-            }
+            orbit_hammers.retain(|h| h.active);
             winner
         };
 
