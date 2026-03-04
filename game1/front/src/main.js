@@ -8310,6 +8310,8 @@ const shoot = () => {
 };
 
 const pickupRequestCooldownMs = 300;
+const pickupTakeRadius = 1.35;
+const pickupTakeRadiusSq = pickupTakeRadius * pickupTakeRadius;
 
 const tryRequestPickup = (pickup, eventType) => {
   if (!pickup || !Number.isFinite(Number(pickup.index))) {
@@ -8323,6 +8325,10 @@ const tryRequestPickup = (pickup, eventType) => {
   sendWs({
     type: eventType,
     index: Number(pickup.index),
+    position: {
+      x: Number(camera.position.x || 0),
+      z: Number(camera.position.z || 0),
+    },
   });
 };
 
@@ -8592,7 +8598,7 @@ const updateAmmoPickups = (delta) => {
     const dx = camera.position.x - pickup.mesh.position.x;
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
-    if (horizontalDistanceSq <= 1.1 * 1.1) {
+    if (horizontalDistanceSq <= pickupTakeRadiusSq) {
       if (isManaCharacter(activeCharacter)) {
         tryRequestPickup(pickup, 'player_pickup_mana');
       } else {
@@ -8634,7 +8640,7 @@ const updateShieldPickups = (delta) => {
     const dx = camera.position.x - pickup.mesh.position.x;
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
-    if (horizontalDistanceSq <= 1.1 * 1.1) {
+    if (horizontalDistanceSq <= pickupTakeRadiusSq) {
       tryRequestPickup(pickup, 'player_pickup_shield');
     }
   }
@@ -8673,7 +8679,7 @@ const updateHealthPickups = (delta) => {
     const dx = camera.position.x - pickup.mesh.position.x;
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
-    if (horizontalDistanceSq <= 1.1 * 1.1) {
+    if (horizontalDistanceSq <= pickupTakeRadiusSq) {
       tryRequestPickup(pickup, 'player_pickup_health');
     }
   }

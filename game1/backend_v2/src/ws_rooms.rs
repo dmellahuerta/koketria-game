@@ -289,7 +289,8 @@ const MANA_PICKUP_COUNT: usize = 50;
 const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
 const PICKUP_RESPAWN_MS: i64 = 60_000;
-const PICKUP_TAKE_RADIUS: f64 = 1.1;
+const PICKUP_TAKE_RADIUS: f64 = 1.35;
+const PICKUP_CLIENT_POS_MAX_DRIFT: f64 = 3.0;
 const BOT_MAX_PER_ROOM: usize = 8;
 const BOT_MOVE_TICK_MS: u64 = 60;
 const BOT_SHOOT_TICK_MS: u64 = 1250;
@@ -1768,6 +1769,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
             let now = now_ms();
             let Some(player_state) = inner.clients.get(client_id).cloned() else {
                 return;
@@ -1784,6 +1796,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     pickup_index,
                     player_state.state.position.x,
                     player_state.state.position.z,
+                    client_pickup_position,
                     now,
                 )
             } else {
@@ -1827,6 +1840,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
             let now = now_ms();
             let Some(player_state) = inner.clients.get(client_id).cloned() else {
                 return;
@@ -1846,6 +1870,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     pickup_index,
                     player_state.state.position.x,
                     player_state.state.position.z,
+                    client_pickup_position,
                     now,
                 )
             } else {
@@ -1894,6 +1919,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
             let now = now_ms();
             let Some(player_state) = inner.clients.get(client_id).cloned() else {
                 return;
@@ -1910,6 +1946,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     pickup_index,
                     player_state.state.position.x,
                     player_state.state.position.z,
+                    client_pickup_position,
                     now,
                 )
             } else {
@@ -1952,6 +1989,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
             let now = now_ms();
             let Some(player_state) = inner.clients.get(client_id).cloned() else {
                 return;
@@ -1968,6 +2016,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     pickup_index,
                     player_state.state.position.x,
                     player_state.state.position.z,
+                    client_pickup_position,
                     now,
                 )
             } else {
@@ -5302,15 +5351,32 @@ fn consume_pickup(
     pickup_index: usize,
     player_x: f64,
     player_z: f64,
+    client_position: Option<(f64, f64)>,
     now: i64,
 ) -> Option<i64> {
     let pickup = pickups.get_mut(pickup_index)?;
     if pickup.respawn_at_ms > now {
         return None;
     }
-    let dx = player_x - pickup.x;
-    let dz = player_z - pickup.z;
-    if ((dx * dx) + (dz * dz)).sqrt() > PICKUP_TAKE_RADIUS {
+
+    let server_dx = player_x - pickup.x;
+    let server_dz = player_z - pickup.z;
+    let mut can_take = ((server_dx * server_dx) + (server_dz * server_dz)).sqrt() <= PICKUP_TAKE_RADIUS;
+
+    if !can_take {
+        if let Some((client_x, client_z)) = client_position {
+            let drift_dx = client_x - player_x;
+            let drift_dz = client_z - player_z;
+            let drift = ((drift_dx * drift_dx) + (drift_dz * drift_dz)).sqrt();
+            if drift <= PICKUP_CLIENT_POS_MAX_DRIFT {
+                let client_dx = client_x - pickup.x;
+                let client_dz = client_z - pickup.z;
+                can_take = ((client_dx * client_dx) + (client_dz * client_dz)).sqrt()
+                    <= PICKUP_TAKE_RADIUS;
+            }
+        }
+    }
+    if !can_take {
         return None;
     }
     let respawn_at = now + PICKUP_RESPAWN_MS;
