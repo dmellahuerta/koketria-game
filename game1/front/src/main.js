@@ -3899,7 +3899,8 @@ const rebuildMapFromSeed = (seed) => {
     const h = 3 + pillarRnd() * 24;
     const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), blockMat.clone());
     box.position.set((pillarRnd() - 0.5) * 220, h / 2, (pillarRnd() - 0.5) * 220);
-    box.userData.hp = 1 + Math.floor(pillarRnd() * 3);
+    // Keep RNG sequence aligned with backend map generation.
+    box.userData.hp = 1;
     scene.add(box);
     shootables.push(box);
     pillarBounds.push({
