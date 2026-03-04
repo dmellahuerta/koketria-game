@@ -6416,6 +6416,7 @@ const connectWebSocket = () => {
     if (payload.type === 'player_resources') {
       const nextMana = Number(payload.data?.mana);
       const nextHealth = Number(payload.data?.health);
+      const nextShield = Number(payload.data?.shield);
       const nextAmmoInMag = Number(payload.data?.ammoInMag);
       const nextAmmoReserve = Number(payload.data?.ammoReserve);
       const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
@@ -6430,6 +6431,10 @@ const connectWebSocket = () => {
       }
       if (Number.isFinite(nextHealth)) {
         health = Math.max(0, Math.min(maxHealth, nextHealth));
+        changed = true;
+      }
+      if (Number.isFinite(nextShield)) {
+        shield = Math.max(0, Math.min(maxShield, Math.round(nextShield)));
         changed = true;
       }
       if (Number.isFinite(nextAmmoInMag)) {
