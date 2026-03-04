@@ -509,7 +509,7 @@ canvas {
 
 #lobby .lobby-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 33%);
+  grid-template-columns: minmax(240px, 28%) minmax(300px, 44%) minmax(240px, 28%);
   gap: 14px;
   align-items: stretch;
 }
@@ -537,6 +537,22 @@ canvas {
   gap: 8px;
   min-height: 280px;
   max-height: calc(92vh - 56px);
+}
+
+.lobby-left-side .room-list {
+  max-height: 32vh;
+}
+
+.lobby-left-side .lobby-users-list {
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+.lobby-chat-side .lobby-chat-log {
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 .lobby-side h3 {

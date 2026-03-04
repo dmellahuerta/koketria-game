@@ -54,6 +54,12 @@ app.innerHTML = `
 
   <section id="lobby" class="hidden">
     <div class="lobby-layout">
+      <aside class="lobby-side lobby-left-side">
+        <h3>Salas activas</h3>
+        <div id="roomList" class="room-list"></div>
+        <h3>Conectados en Lobby</h3>
+        <div id="lobbyUsersList" class="lobby-users-list"></div>
+      </aside>
       <div class="lobby-main">
         <h1>Koketria Game</h1>
         <p id="connectionStatus">Conectando al backend...</p>
@@ -77,13 +83,9 @@ app.innerHTML = `
           <input id="lobbyMusicVolume" type="range" min="0" max="1" step="0.01" />
           <span id="lobbyMusicVolumeValue">100%</span>
         </div>
-        <h2>Salas activas</h2>
-        <div id="roomList" class="room-list"></div>
         <p id="lobbyError" class="error hidden"></p>
       </div>
-      <aside class="lobby-side">
-        <h3>Conectados en Lobby</h3>
-        <div id="lobbyUsersList" class="lobby-users-list"></div>
+      <aside class="lobby-side lobby-chat-side">
         <h3>Chat Lobby</h3>
         <div id="lobbyChatLog" class="lobby-chat-log"></div>
         <div class="lobby-chat-input">
