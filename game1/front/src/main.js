@@ -7121,7 +7121,7 @@ const createRemoteHealthBar = () => {
     return { bg: bgMesh, fill: fillMesh };
   };
 
-  const barsOffsetX = (remoteHealthBarWidth * 0.5) - (remoteResourceBarWidth * 0.6);
+  const barsOffsetX = 0;
   const shieldBar = makeVerticalBar(
     barsOffsetX - ((remoteResourceBarWidth + remoteResourceBarGap) * 0.5),
     0x67d5ff,
