@@ -292,6 +292,7 @@ const BOT_MOVE_TICK_MS: u64 = 60;
 const BOT_SHOOT_TICK_MS: u64 = 1250;
 const BOT_RESPAWN_TICK_MS: u64 = 700;
 const BOT_SPECIAL_TICK_MS: u64 = 650;
+const BOT_PILLAR_COLLISION_RADIUS_FACTOR: f64 = 1.2;
 
 fn parse_addbot_count(text: &str) -> Option<usize> {
     let mut parts = text.split_whitespace();
@@ -2409,13 +2410,14 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     } else {
                         (bot.state.position.x, bot.state.position.z)
                     };
-                    let (x, z) = resolve_player_position(
+                    let (x, z) = resolve_player_position_with_radius(
                         &inner,
                         &room_id,
                         bot.state.position.x,
                         bot.state.position.z,
                         req_x,
                         req_z,
+                        PLAYER_COLLISION_RADIUS * BOT_PILLAR_COLLISION_RADIUS_FACTOR,
                     );
                     let move_dx = x - bot.state.position.x;
                     let move_dz = z - bot.state.position.z;
@@ -4954,7 +4956,12 @@ fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&
             z: angle.sin() * ring,
         };
         if let Some(room_meta) = meta {
-            if !is_valid_player_position(room_meta, candidate.x, candidate.z) {
+            if !is_valid_player_position(
+                room_meta,
+                candidate.x,
+                candidate.z,
+                PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
+            ) {
                 continue;
             }
         }
@@ -4988,14 +4995,34 @@ fn resolve_player_position(
     desired_x: f64,
     desired_z: f64,
 ) -> (f64, f64) {
+    resolve_player_position_with_radius(
+        inner,
+        room_id,
+        prev_x,
+        prev_z,
+        desired_x,
+        desired_z,
+        PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
+    )
+}
+
+fn resolve_player_position_with_radius(
+    inner: &Inner,
+    room_id: &str,
+    prev_x: f64,
+    prev_z: f64,
+    desired_x: f64,
+    desired_z: f64,
+    collision_radius: f64,
+) -> (f64, f64) {
     let Some(meta) = inner.room_meta.get(room_id) else {
         return (desired_x, desired_z);
     };
 
-    if is_valid_player_position(meta, desired_x, desired_z) {
+    if is_valid_player_position(meta, desired_x, desired_z, collision_radius) {
         return (desired_x, desired_z);
     }
-    if is_valid_player_position(meta, prev_x, prev_z) {
+    if is_valid_player_position(meta, prev_x, prev_z, collision_radius) {
         return (prev_x, prev_z);
     }
 
@@ -5004,7 +5031,7 @@ fn resolve_player_position(
         let t = (i as f64) / 10.0;
         let x = prev_x + (desired_x - prev_x) * t;
         let z = prev_z + (desired_z - prev_z) * t;
-        if is_valid_player_position(meta, x, z) {
+        if is_valid_player_position(meta, x, z, collision_radius) {
             last_valid = (x, z);
         } else {
             break;
@@ -5013,14 +5040,9 @@ fn resolve_player_position(
     last_valid
 }
 
-fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64) -> bool {
+fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64, collision_radius: f64) -> bool {
     is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS + 0.05)
-        && !collides_with_map_box(
-            meta,
-            x,
-            z,
-            PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
-        )
+        && !collides_with_map_box(meta, x, z, collision_radius)
 }
 
 fn collides_with_map_box(meta: &RoomMeta, x: f64, z: f64, radius: f64) -> bool {
