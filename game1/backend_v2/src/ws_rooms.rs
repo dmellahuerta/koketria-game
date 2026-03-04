@@ -1616,9 +1616,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .clients
                 .get(client_id)
                 .map(|entry| {
-                    !entry.combat.alive
-                        && entry.combat.respawn_available_at_ms > 0
-                        && now >= entry.combat.respawn_available_at_ms
+                    if entry.combat.alive {
+                        return false;
+                    }
+                    // Fallback defensivo: si por desincronización no hay timestamp,
+                    // permitimos respawn inmediato en vez de quedar bloqueado.
+                    if entry.combat.respawn_available_at_ms <= 0 {
+                        return true;
+                    }
+                    now >= entry.combat.respawn_available_at_ms
                 })
                 .unwrap_or(false);
             if !can_respawn {
