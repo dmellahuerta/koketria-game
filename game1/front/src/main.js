@@ -227,6 +227,8 @@ app.innerHTML = `
       <p>Velocidad local: <span id="localSpeedValue">0.00</span></p>
       <p>Bypass colisión ms: <span id="collisionBypassValue">0</span></p>
       <p>Map sync: <span id="mapSyncValue">-</span></p>
+      <p>Objetivo comp: <span id="perfGoalValue">-</span></p>
+      <p>Runtime: <span id="runtimeHealthValue">OK</span></p>
     </div>
   </div>
 
@@ -433,6 +435,8 @@ const corrStreakValue = document.querySelector('#corrStreakValue');
 const localSpeedValue = document.querySelector('#localSpeedValue');
 const collisionBypassValue = document.querySelector('#collisionBypassValue');
 const mapSyncValue = document.querySelector('#mapSyncValue');
+const perfGoalValue = document.querySelector('#perfGoalValue');
+const runtimeHealthValue = document.querySelector('#runtimeHealthValue');
 const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
@@ -515,6 +519,24 @@ const tuningPerfStats = {
   lastCorrectionAt: 0,
   lastFrameAt: performance.now(),
   localSpeed: 0,
+  freezeEventsInWindow: 0,
+  freezeEventsPerSec: 0,
+};
+const competitiveTargets = {
+  maxCorrectionsPerSec: 6,
+  maxPredErrP95: 2,
+};
+const runtimeHealth = {
+  animateErrors: 0,
+  lastAnimateErrorAt: 0,
+  lastLoggedAt: 0,
+  webglContextLosses: 0,
+  freezeWarnUntil: 0,
+  freezeSample: {
+    at: 0,
+    x: 0,
+    z: 0,
+  },
 };
 
 const chatMessages = [];
@@ -1084,6 +1106,16 @@ const renderPerfPanel = () => {
   } else {
     mapSyncValue.textContent = seedMatch ? 'SEED OK / HASH N/A' : 'SEED MISMATCH';
   }
+  const corrOk = reconcileStats.correctionsPerSec < competitiveTargets.maxCorrectionsPerSec;
+  const predOk = p95Err < competitiveTargets.maxPredErrP95;
+  const freezeOk = tuningPerfStats.freezeEventsPerSec < 0.1 && performance.now() >= runtimeHealth.freezeWarnUntil;
+  perfGoalValue.textContent = (corrOk && predOk && freezeOk)
+    ? 'OK'
+    : `WARN corr:${corrOk ? 'ok' : 'bad'} pred:${predOk ? 'ok' : 'bad'} freeze:${freezeOk ? 'ok' : 'bad'}`;
+  const runtimeOk = runtimeHealth.animateErrors <= 0 && runtimeHealth.webglContextLosses <= 0;
+  runtimeHealthValue.textContent = runtimeOk
+    ? 'OK'
+    : `WARN errors:${runtimeHealth.animateErrors} contextLost:${runtimeHealth.webglContextLosses}`;
   perfPanel.classList.remove('hidden');
 };
 
@@ -1202,6 +1234,29 @@ const updatePerfMetrics = () => {
     }
   }
   tuningPerfStats.localSpeed = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
+  const wantsMove = Boolean(keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD);
+  const freezeSample = runtimeHealth.freezeSample;
+  if (freezeSample.at <= 0) {
+    freezeSample.at = now;
+    freezeSample.x = camera.position.x;
+    freezeSample.z = camera.position.z;
+  } else if (wantsMove && canPlay()) {
+    const sampleElapsed = now - freezeSample.at;
+    if (sampleElapsed >= 300) {
+      const distance = Math.hypot(camera.position.x - freezeSample.x, camera.position.z - freezeSample.z);
+      if (distance < 0.03 && tuningPerfStats.localSpeed > 6.5 && now >= localCollisionBypassUntil) {
+        tuningPerfStats.freezeEventsInWindow += 1;
+        runtimeHealth.freezeWarnUntil = now + 1800;
+      }
+      freezeSample.at = now;
+      freezeSample.x = camera.position.x;
+      freezeSample.z = camera.position.z;
+    }
+  } else {
+    freezeSample.at = now;
+    freezeSample.x = camera.position.x;
+    freezeSample.z = camera.position.z;
+  }
   if (tuningPerfStats.lastCorrectionAt > 0 && now - tuningPerfStats.lastCorrectionAt > 900) {
     tuningPerfStats.correctionStreak = 0;
   }
@@ -1219,6 +1274,7 @@ const updatePerfMetrics = () => {
     tuningPerfStats.shotAcksPerSec = (tuningPerfStats.shotAcksInWindow * 1000) / elapsed;
     tuningPerfStats.softCorrectionsPerSec = (tuningPerfStats.softCorrectionsInWindow * 1000) / elapsed;
     tuningPerfStats.hardCorrectionsPerSec = (tuningPerfStats.hardCorrectionsInWindow * 1000) / elapsed;
+    tuningPerfStats.freezeEventsPerSec = (tuningPerfStats.freezeEventsInWindow * 1000) / elapsed;
     reconcileStats.correctionsInWindow = 0;
     reconcileStats.lateAcksInWindow = 0;
     tuningPerfStats.wsOutMsgsInWindow = 0;
@@ -1227,6 +1283,7 @@ const updatePerfMetrics = () => {
     tuningPerfStats.shotAcksInWindow = 0;
     tuningPerfStats.softCorrectionsInWindow = 0;
     tuningPerfStats.hardCorrectionsInWindow = 0;
+    tuningPerfStats.freezeEventsInWindow = 0;
     const fps = state.fps;
     if (fps >= 58) {
       vfxQuality = 1;
@@ -1775,6 +1832,7 @@ let isMainWebglContextLost = false;
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
   isMainWebglContextLost = true;
+  runtimeHealth.webglContextLosses += 1;
 });
 renderer.domElement.addEventListener('webglcontextrestored', () => {
   isMainWebglContextLost = false;
@@ -10148,94 +10206,103 @@ const animate = () => {
   if (isMainWebglContextLost) {
     return;
   }
-  const delta = Math.min(clock.getDelta(), 0.05);
-  syncMobileControlsVisibility();
-  updatePerfMetrics();
-  applyMobileMoveKeys();
-  updateMovement(delta);
-  updateJump(delta);
-  applyLocalMovementReconciliation(delta);
-  updateHealthRegen(delta);
-  updateLocalAvatar(delta);
-  updateThirdPersonCamera();
-  updateAmmoPickups(delta);
-  updateShieldPickups(delta);
-  updateHealthPickups(delta);
-  updateDevCollectionRequests();
-  updateRain(delta);
-  updateSnow(delta);
-  updateKoketriaNature(delta);
-  updateRemotePlayers(delta);
-  updateHolyProjectiles(delta);
-  updateHammerProjectiles(delta);
-  updatePoisonProjectiles(delta);
-  updateLunarProjectiles(delta);
-  updatePumoriOrbitSpecials(delta);
-  updateShooting(delta);
-  updateResourceSync();
-  updateRespawnCountdown();
-  updateWinnerCountdown();
-  updateEffects(delta);
-  updateCrosshair();
-  updateDamageIndicator();
-  renderSpecialStat(false);
-  updateRemoteShootSound(delta);
-  updateBleedEffect(delta);
-  if (shouldRenderLobbyPreview() && previewState.mixer) {
-    previewState.mixer.update(delta);
-  }
-  if (shouldRenderLobbyPreview() && previewState.model) {
-    previewState.model.rotation.y += delta * 0.45;
-  }
-  if (shouldRenderLobbyPreview() && previewState.renderer && previewState.scene && previewState.camera) {
-    resizeCharacterPreview();
-    previewState.renderer.render(previewState.scene, previewState.camera);
-  }
-  if (shouldRenderVersusPreviews() && versusPreviewSlots.size > 0) {
-    for (const slot of versusPreviewSlots.values()) {
-      if (!slot.renderer || !slot.scene || !slot.camera || !slot.node?.isConnected) {
-        continue;
-      }
-      const width = Math.max(60, slot.node.clientWidth || 92);
-      const height = Math.max(60, slot.node.clientHeight || 92);
-      const dom = slot.renderer.domElement;
-      if (dom && (dom.width !== width || dom.height !== height)) {
-        slot.renderer.setSize(width, height, false);
-      }
-      slot.camera.aspect = width / height;
-      slot.camera.updateProjectionMatrix();
-      if (slot.mixer) {
-        slot.mixer.update(delta);
-      }
-      if (slot.model) {
-        slot.model.rotation.y += delta * slot.rotateSpeed;
-      }
-      try {
-        slot.renderer.render(slot.scene, slot.camera);
-      } catch {
-        disposeVersusPreviewSlot(slot.key);
+  try {
+    const delta = Math.min(clock.getDelta(), 0.05);
+    syncMobileControlsVisibility();
+    updatePerfMetrics();
+    applyMobileMoveKeys();
+    updateMovement(delta);
+    updateJump(delta);
+    applyLocalMovementReconciliation(delta);
+    updateHealthRegen(delta);
+    updateLocalAvatar(delta);
+    updateThirdPersonCamera();
+    updateAmmoPickups(delta);
+    updateShieldPickups(delta);
+    updateHealthPickups(delta);
+    updateDevCollectionRequests();
+    updateRain(delta);
+    updateSnow(delta);
+    updateKoketriaNature(delta);
+    updateRemotePlayers(delta);
+    updateHolyProjectiles(delta);
+    updateHammerProjectiles(delta);
+    updatePoisonProjectiles(delta);
+    updateLunarProjectiles(delta);
+    updatePumoriOrbitSpecials(delta);
+    updateShooting(delta);
+    updateResourceSync();
+    updateRespawnCountdown();
+    updateWinnerCountdown();
+    updateEffects(delta);
+    updateCrosshair();
+    updateDamageIndicator();
+    renderSpecialStat(false);
+    updateRemoteShootSound(delta);
+    updateBleedEffect(delta);
+    if (shouldRenderLobbyPreview() && previewState.mixer) {
+      previewState.mixer.update(delta);
+    }
+    if (shouldRenderLobbyPreview() && previewState.model) {
+      previewState.model.rotation.y += delta * 0.45;
+    }
+    if (shouldRenderLobbyPreview() && previewState.renderer && previewState.scene && previewState.camera) {
+      resizeCharacterPreview();
+      previewState.renderer.render(previewState.scene, previewState.camera);
+    }
+    if (shouldRenderVersusPreviews() && versusPreviewSlots.size > 0) {
+      for (const slot of versusPreviewSlots.values()) {
+        if (!slot.renderer || !slot.scene || !slot.camera || !slot.node?.isConnected) {
+          continue;
+        }
+        const width = Math.max(60, slot.node.clientWidth || 92);
+        const height = Math.max(60, slot.node.clientHeight || 92);
+        const dom = slot.renderer.domElement;
+        if (dom && (dom.width !== width || dom.height !== height)) {
+          slot.renderer.setSize(width, height, false);
+        }
+        slot.camera.aspect = width / height;
+        slot.camera.updateProjectionMatrix();
+        if (slot.mixer) {
+          slot.mixer.update(delta);
+        }
+        if (slot.model) {
+          slot.model.rotation.y += delta * slot.rotateSpeed;
+        }
+        try {
+          slot.renderer.render(slot.scene, slot.camera);
+        } catch {
+          disposeVersusPreviewSlot(slot.key);
+        }
       }
     }
+    try {
+      renderer.render(scene, getRenderCamera());
+    } catch {
+      isMainWebglContextLost = true;
+      return;
+    }
+    renderPerfStats.drawCalls = renderer.info.render.calls || 0;
+    renderPerfStats.triangles = renderer.info.render.triangles || 0;
+    renderPerfStats.geometries = renderer.info.memory.geometries || 0;
+    renderPerfStats.textures = renderer.info.memory.textures || 0;
+    renderPerfStats.vfx = activeTracers.length
+      + activeImpacts.length
+      + activeHitWaves.length
+      + activePickupSparks.length
+      + activeHolyProjectiles.length
+      + activeHammerProjectiles.length
+      + activePoisonProjectiles.length
+      + activeLunarProjectiles.length
+      + getPumoriOrbitVfxCount();
+  } catch (error) {
+    runtimeHealth.animateErrors += 1;
+    runtimeHealth.lastAnimateErrorAt = performance.now();
+    if ((runtimeHealth.lastLoggedAt + 1000) < runtimeHealth.lastAnimateErrorAt) {
+      runtimeHealth.lastLoggedAt = runtimeHealth.lastAnimateErrorAt;
+      console.error('[koketria][animate]', error);
+    }
   }
-  try {
-    renderer.render(scene, getRenderCamera());
-  } catch {
-    isMainWebglContextLost = true;
-    return;
-  }
-  renderPerfStats.drawCalls = renderer.info.render.calls || 0;
-  renderPerfStats.triangles = renderer.info.render.triangles || 0;
-  renderPerfStats.geometries = renderer.info.memory.geometries || 0;
-  renderPerfStats.textures = renderer.info.memory.textures || 0;
-  renderPerfStats.vfx = activeTracers.length
-    + activeImpacts.length
-    + activeHitWaves.length
-    + activePickupSparks.length
-    + activeHolyProjectiles.length
-    + activeHammerProjectiles.length
-    + activePoisonProjectiles.length
-    + activeLunarProjectiles.length
-    + getPumoriOrbitVfxCount();
 };
 
 window.addEventListener('resize', () => {
