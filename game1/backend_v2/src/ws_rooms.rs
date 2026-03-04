@@ -1267,7 +1267,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 effective_distance,
                 rewind_ts,
             );
-            if let Some((victim_id, headshot, hit_dist)) = hit {
+            if let Some((victim_id, _headshot, hit_dist)) = hit {
                 if is_mana {
                     let projectile_speed =
                         projectile_speed_units_per_second(character_for_shot.as_deref());
@@ -1283,7 +1283,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         room_id.clone(),
                         client_id.to_string(),
                         victim_id.clone(),
-                        headshot,
+                        false,
                         HIT_DAMAGE,
                         impact_point,
                         Some(now),
@@ -1298,13 +1298,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                           "ok": true,
                           "data": {
                             "victimId": victim_id,
-                            "headshot": headshot,
+                            "headshot": false,
                             "ts": now
                           }
                         }),
                     );
                     let winner = apply_hit_and_emit(
-                        &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
+                        &mut inner, &room_id, client_id, &victim_id, false, HIT_DAMAGE, now,
                     );
                     if winner {
                         tokio::spawn(schedule_match_reset(
@@ -3055,12 +3055,13 @@ fn apply_hit_and_emit(
     room_id: &str,
     attacker_id: &str,
     victim_id: &str,
-    headshot: bool,
+    _headshot: bool,
     base_damage: f64,
     ts: i64,
 ) -> bool {
     let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
+    let headshot = false;
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
             return false;
@@ -3068,9 +3069,7 @@ fn apply_hit_and_emit(
         if !victim.combat.alive {
             return false;
         }
-        if headshot {
-            victim.combat.health = 0.0;
-        } else if victim.combat.shield > 0.0 {
+        if victim.combat.shield > 0.0 {
             let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
             let shield_cost = (base_damage * SHIELD_DAMAGE_COST_FACTOR).ceil();
             victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
@@ -3376,7 +3375,7 @@ async fn apply_delayed_authoritative_hit(
         if !inner.clients.contains_key(&attacker_id) {
             return;
         }
-        let Some(revalidated_headshot) = classify_point_hit_on_player_with_history(
+        let Some(_revalidated_headshot) = classify_point_hit_on_player_with_history(
             victim,
             &impact_point,
             headshot,
@@ -3406,7 +3405,7 @@ async fn apply_delayed_authoritative_hit(
         if send_hit_confirm {
             let mut data = json!({
               "victimId": victim_id,
-              "headshot": revalidated_headshot,
+              "headshot": false,
               "ts": ts
             });
             if let Some(shot_ts_value) = shot_ts {
@@ -3426,7 +3425,7 @@ async fn apply_delayed_authoritative_hit(
             &room_id,
             &attacker_id,
             &victim_id,
-            revalidated_headshot,
+            false,
             base_damage,
             ts,
         )
