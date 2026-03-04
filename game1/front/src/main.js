@@ -3429,6 +3429,8 @@ const remoteExtrapolationBaseMs = 175;
 const remoteExtrapolationMinMs = 110;
 const remoteExtrapolationMaxMs = 280;
 const remoteExtrapolationLatencyFactor = 0.33;
+const remoteExtrapolationMaxSpeed = 10.8;
+const remoteExtrapolationDamping = 0.82;
 const remoteNetSmoothingPerSecond = 3.2;
 const remoteHardCatchupDistance = 4.8;
 const remoteMediumCatchupDistance = 2.4;
@@ -5236,6 +5238,12 @@ const syncRemotePlayer = (player) => {
     jumping: Boolean(player.state?.jumping),
     moving,
   };
+  const lastSnapshot = entry.netSnapshots.length > 0
+    ? entry.netSnapshots[entry.netSnapshots.length - 1]
+    : null;
+  if (lastSnapshot && snapshot.ts <= Number(lastSnapshot.ts)) {
+    return;
+  }
   entry.netSnapshots.push(snapshot);
   if (entry.netSnapshots.length > 32) {
     entry.netSnapshots.splice(0, entry.netSnapshots.length - 32);
@@ -8629,11 +8637,27 @@ const updateRemotePlayers = (delta) => {
         const lateByMs = renderTs - last.ts;
         if (lateByMs <= remoteExtrapolationDynamicMs) {
           const dt = Math.max(1, last.ts - prev.ts);
-          const ratio = lateByMs / dt;
+          const dtSeconds = dt / 1000;
+          const rawVx = (last.x - prev.x) / dtSeconds;
+          const rawVy = (last.y - prev.y) / dtSeconds;
+          const rawVz = (last.z - prev.z) / dtSeconds;
+          const rawSpeed = Math.hypot(rawVx, rawVy, rawVz);
+          const speedClamp = rawSpeed > 0
+            ? Math.min(1, remoteExtrapolationMaxSpeed / rawSpeed)
+            : 1;
+          const factorByLate = Math.max(0, Math.min(1, 1 - (lateByMs / Math.max(1, remoteExtrapolationDynamicMs))));
+          const damp = remoteExtrapolationDamping * factorByLate;
+          const vx = rawVx * speedClamp * damp;
+          const vy = rawVy * speedClamp * damp;
+          const vz = rawVz * speedClamp * damp;
+          const lateSeconds = lateByMs / 1000;
+          const extrapX = last.x + (vx * lateSeconds);
+          const extrapY = last.y + (vy * lateSeconds);
+          const extrapZ = last.z + (vz * lateSeconds);
           targetState = {
-            x: last.x + ((last.x - prev.x) * ratio),
-            y: last.y + ((last.y - prev.y) * ratio),
-            z: last.z + ((last.z - prev.z) * ratio),
+            x: last.moving ? extrapX : last.x,
+            y: last.moving ? extrapY : last.y,
+            z: last.moving ? extrapZ : last.z,
             yaw: last.yaw,
             pitch: last.pitch,
             jumping: last.jumping,
