@@ -31,6 +31,7 @@ struct RoomMeta {
     weather: String,
     battle_theme: String,
     map_seed: i64,
+    map_collision_hash: String,
     map_profile: MapProfile,
     map_collision: Vec<MapBox>,
 }
@@ -271,10 +272,12 @@ impl RoomMeta {
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
         Self {
             weather: pick_from(WEATHER_TYPES, seed, None).to_string(),
             battle_theme: pick_from(BATTLE_THEMES, seed ^ 0x9E37_79B9, None).to_string(),
             map_seed,
+            map_collision_hash,
             map_profile,
             map_collision,
         }
@@ -342,7 +345,8 @@ impl Inner {
           "maxPlayers": room.max_players,
           "weather": meta.map(|m| m.weather.clone()).unwrap_or_else(|| "night".to_string()),
           "battleTheme": meta.map(|m| m.battle_theme.clone()).unwrap_or_else(|| "battle1".to_string()),
-          "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1)
+          "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1),
+          "mapCollisionHash": meta.map(|m| m.map_collision_hash.clone()).unwrap_or_else(|| "".to_string())
         }))
     }
 
@@ -3879,6 +3883,46 @@ fn create_map_collision(seed: u64) -> Vec<MapBox> {
         });
     }
     boxes
+}
+
+fn map_collision_hash(profile: &MapProfile, boxes: &[MapBox]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash = fnv1a_update_u64(hash, boxes.len() as u64);
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.axis_x));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.axis_z));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp3));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq3));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase3));
+
+    for b in boxes {
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.min_x));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.max_x));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.min_z));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.max_z));
+    }
+    format!("{hash:016x}")
+}
+
+fn quantized_map_value(v: f64) -> i64 {
+    (v * 1000.0).round() as i64
+}
+
+fn fnv1a_update_u64(mut hash: u64, value: u64) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+fn fnv1a_update_i64(hash: u64, value: i64) -> u64 {
+    fnv1a_update_u64(hash, value as u64)
 }
 
 fn map_boundary_radius(profile: &MapProfile, theta: f64) -> f64 {

@@ -202,6 +202,7 @@ app.innerHTML = `
       <p>Streak corr max: <span id="corrStreakValue">0 / 0</span></p>
       <p>Velocidad local: <span id="localSpeedValue">0.00</span></p>
       <p>Bypass colisión ms: <span id="collisionBypassValue">0</span></p>
+      <p>Map sync: <span id="mapSyncValue">-</span></p>
     </div>
   </div>
 
@@ -395,6 +396,7 @@ const lateAckRateValue = document.querySelector('#lateAckRateValue');
 const corrStreakValue = document.querySelector('#corrStreakValue');
 const localSpeedValue = document.querySelector('#localSpeedValue');
 const collisionBypassValue = document.querySelector('#collisionBypassValue');
+const mapSyncValue = document.querySelector('#mapSyncValue');
 const hostControls = document.querySelector('#hostControls');
 const startGameBtn = document.querySelector('#startGameBtn');
 const endGameBtn = document.querySelector('#endGameBtn');
@@ -912,6 +914,19 @@ const renderPerfPanel = () => {
   corrStreakValue.textContent = `${tuningPerfStats.correctionStreak} / ${tuningPerfStats.correctionStreakMax}`;
   localSpeedValue.textContent = tuningPerfStats.localSpeed.toFixed(2);
   collisionBypassValue.textContent = String(Math.max(0, Math.ceil(localCollisionBypassUntil - performance.now())));
+  const serverSeed = Number.isFinite(Number(state.joinedRoom?.room?.mapSeed))
+    ? Number(state.joinedRoom.room.mapSeed)
+    : null;
+  const seedMatch = serverSeed !== null && Number.isFinite(currentMapSeed) && Number(currentMapSeed) === serverSeed;
+  const hasServerHash = Boolean(serverMapCollisionHash);
+  const hashMatch = hasServerHash && currentMapCollisionHash === serverMapCollisionHash;
+  if (hasServerHash) {
+    mapSyncValue.textContent = (seedMatch && hashMatch)
+      ? `OK (${String(serverMapCollisionHash).slice(0, 8)})`
+      : `MISMATCH seed:${seedMatch ? 'ok' : 'bad'} hash:${hashMatch ? 'ok' : 'bad'}`;
+  } else {
+    mapSyncValue.textContent = seedMatch ? 'SEED OK / HASH N/A' : 'SEED MISMATCH';
+  }
   perfPanel.classList.remove('hidden');
 };
 
@@ -1654,6 +1669,8 @@ const mapHalfExtent = 156;
 const terrainBaseY = -2.25;
 let currentMapSeed = null;
 let currentMapProfile = null;
+let currentMapCollisionHash = null;
+let serverMapCollisionHash = null;
 
 const rainCount = 5600;
 const rainPos = new Float32Array(rainCount * 3);
@@ -3499,6 +3516,52 @@ const hashStringToSeed = (value) => {
   return (hash >>> 0) || 1;
 };
 
+const mapHashOffset = 0xcbf29ce484222325n;
+const mapHashPrime = 0x100000001b3n;
+const mapHashMask = 0xFFFFFFFFFFFFFFFFn;
+
+const fnv1aUpdateU64 = (hash, value) => {
+  let next = BigInt.asUintN(64, hash);
+  const raw = BigInt.asUintN(64, BigInt(value));
+  for (let i = 0n; i < 8n; i += 1n) {
+    const byte = (raw >> (i * 8n)) & 0xFFn;
+    next ^= byte;
+    next = (next * mapHashPrime) & mapHashMask;
+  }
+  return next;
+};
+
+const quantizeMapValue = (value) => {
+  return BigInt(Math.round(Number(value) * 1000));
+};
+
+const computeMapCollisionHash = (profile, bounds) => {
+  if (!profile || !Array.isArray(bounds)) {
+    return '';
+  }
+  let hash = mapHashOffset;
+  hash = fnv1aUpdateU64(hash, BigInt(bounds.length));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.axisX));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.axisZ));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.amp1));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.amp2));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.amp3));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.freq1));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.freq2));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.freq3));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.phase1));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.phase2));
+  hash = fnv1aUpdateU64(hash, quantizeMapValue(profile.phase3));
+  for (let i = 0; i < bounds.length; i += 1) {
+    const box = bounds[i];
+    hash = fnv1aUpdateU64(hash, quantizeMapValue(box.minX));
+    hash = fnv1aUpdateU64(hash, quantizeMapValue(box.maxX));
+    hash = fnv1aUpdateU64(hash, quantizeMapValue(box.minZ));
+    hash = fnv1aUpdateU64(hash, quantizeMapValue(box.maxZ));
+  }
+  return hash.toString(16).padStart(16, '0');
+};
+
 const createMapProfile = (seed) => {
   const rnd = createSeededRng((Number(seed) ^ 0x5f356495) >>> 0);
   return {
@@ -3841,15 +3904,16 @@ const triggerNaturePulse = (origin) => {
   }
 };
 
-const rebuildMapFromSeed = (seed) => {
+const rebuildMapFromSeed = (seed, force = false) => {
   const normalizedSeed = Number(seed);
   if (!Number.isFinite(normalizedSeed)) {
     return;
   }
-  if (currentMapSeed === normalizedSeed) {
+  if (currentMapSeed === normalizedSeed && !force) {
     return;
   }
   currentMapSeed = normalizedSeed;
+  currentMapProfile = createMapProfile(normalizedSeed);
 
   for (let i = shootables.length - 1; i >= 0; i -= 1) {
     const mesh = shootables[i];
@@ -3974,6 +4038,8 @@ const rebuildMapFromSeed = (seed) => {
       respawnAt: 0,
     });
   }
+
+  currentMapCollisionHash = computeMapCollisionHash(currentMapProfile, pillarBounds);
 };
 
 const normalizeCharacterId = (characterId) => {
@@ -5808,7 +5874,15 @@ const applyRoomState = (roomState, options = {}) => {
   const roomSeed = Number.isFinite(roomState.room?.mapSeed)
     ? roomState.room.mapSeed
     : hashStringToSeed(roomState.room?.id);
-  rebuildMapFromSeed(roomSeed);
+  const backendMapHash = String(roomState.room?.mapCollisionHash || '').trim().toLowerCase();
+  serverMapCollisionHash = backendMapHash || null;
+  const shouldForceMapRebuild = Boolean(
+    serverMapCollisionHash
+      && currentMapSeed === Number(roomSeed)
+      && currentMapCollisionHash
+      && currentMapCollisionHash !== serverMapCollisionHash,
+  );
+  rebuildMapFromSeed(roomSeed, shouldForceMapRebuild);
   syncRemotePlayersFromRoom(roomState);
   syncLocalTeamFromRoom(roomState);
   applyWeather(roomState.room?.weather);
@@ -7103,6 +7177,15 @@ const logTuningSnapshot = () => {
     : 0;
   const predP95 = percentileFromSamples(reconcileStats.errorSamples, 0.95);
   const pendingAgesMs = pendingMoveInputs.slice(-8).map((entry) => Math.max(0, now - Number(entry.sentAt || now)));
+  const snapshotServerSeed = Number.isFinite(Number(state.joinedRoom?.room?.mapSeed))
+    ? Number(state.joinedRoom.room.mapSeed)
+    : null;
+  const snapshotSeedMatch = snapshotServerSeed !== null
+    && Number.isFinite(currentMapSeed)
+    && Number(currentMapSeed) === snapshotServerSeed;
+  const snapshotHashMatch = Boolean(serverMapCollisionHash)
+    && Boolean(currentMapCollisionHash)
+    && currentMapCollisionHash === serverMapCollisionHash;
   const snapshot = {
     at: new Date().toISOString(),
     room: {
@@ -7151,6 +7234,14 @@ const logTuningSnapshot = () => {
       isJumping,
       isFiring,
       isThirdPerson,
+    },
+    mapSync: {
+      seedClient: Number.isFinite(currentMapSeed) ? Number(currentMapSeed) : null,
+      seedServer: snapshotServerSeed,
+      seedMatch: snapshotSeedMatch,
+      collisionHashClient: currentMapCollisionHash || null,
+      collisionHashServer: serverMapCollisionHash || null,
+      collisionHashMatch: snapshotHashMatch,
     },
     render: {
       fps: state.fps,
