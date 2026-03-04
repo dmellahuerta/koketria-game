@@ -3377,6 +3377,10 @@ const remoteTorsoCenterOffsetY = playerGroundY + (bodyCenterOffsetY * 0.45);
 const remoteHealthBarYOffset = 2.45;
 const remoteHealthBarWidth = 0.9;
 const remoteHealthBarHeight = 0.09;
+const remoteResourceBarHeight = 0.28;
+const remoteResourceBarWidth = 0.05;
+const remoteResourceBarGap = 0.03;
+const remoteResourceBarsYOffset = remoteHealthBarYOffset - 0.21;
 const remoteHealthBarMaxVisibleDistance = 320;
 let kills = 0;
 let health = maxHealth;
@@ -5100,6 +5104,22 @@ const disposeRemotePlayer = (entry) => {
       entry.healthBar.fill.geometry.dispose();
       entry.healthBar.fill.material.dispose();
     }
+    if (entry.healthBar.shieldBg) {
+      entry.healthBar.shieldBg.geometry.dispose();
+      entry.healthBar.shieldBg.material.dispose();
+    }
+    if (entry.healthBar.shieldFill) {
+      entry.healthBar.shieldFill.geometry.dispose();
+      entry.healthBar.shieldFill.material.dispose();
+    }
+    if (entry.healthBar.manaBg) {
+      entry.healthBar.manaBg.geometry.dispose();
+      entry.healthBar.manaBg.material.dispose();
+    }
+    if (entry.healthBar.manaFill) {
+      entry.healthBar.manaFill.geometry.dispose();
+      entry.healthBar.manaFill.material.dispose();
+    }
     if (entry.healthBar.text) {
       entry.healthBar.text.geometry.dispose();
       entry.healthBar.text.material.dispose();
@@ -5138,6 +5158,8 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     animationUntil: 0,
     isDead: false,
     health: maxHealth,
+    shield: startShield,
+    mana: maxMana,
     isJumping: false,
     deadAt: 0,
     targetPosition: new THREE.Vector3(0, 0, 0),
@@ -5223,8 +5245,20 @@ const syncRemotePlayer = (player) => {
   if (moving) {
     entry.movingUntil = Math.max(Number(entry.movingUntil || 0), performance.now() + remoteMovingSignalHoldMs);
   }
+  let resourcesChanged = false;
   if (Number.isFinite(Number(player.health))) {
     entry.health = Math.max(0, Math.min(maxHealth, Math.round(Number(player.health))));
+    resourcesChanged = true;
+  }
+  if (Number.isFinite(Number(player.shield))) {
+    entry.shield = Math.max(0, Math.min(maxShield, Math.round(Number(player.shield))));
+    resourcesChanged = true;
+  }
+  if (Number.isFinite(Number(player.mana))) {
+    entry.mana = Math.max(0, Math.min(maxMana, Math.round(Number(player.mana))));
+    resourcesChanged = true;
+  }
+  if (resourcesChanged) {
     updateRemoteHealthBar(entry);
   }
   const hasAliveFlag = typeof player.alive === 'boolean';
@@ -6571,6 +6605,12 @@ const connectWebSocket = () => {
       remote.health = Number.isFinite(Number(payload.data?.health))
         ? Math.max(0, Math.min(maxHealth, Math.round(Number(payload.data.health))))
         : maxHealth;
+      if (Number.isFinite(Number(payload.data?.shield))) {
+        remote.shield = Math.max(0, Math.min(maxShield, Math.round(Number(payload.data.shield))));
+      }
+      if (Number.isFinite(Number(payload.data?.mana))) {
+        remote.mana = Math.max(0, Math.min(maxMana, Math.round(Number(payload.data.mana))));
+      }
       remote.animationUntil = 0;
       setRemoteIdle(remote);
       const remoteRespawnPos = payload.data?.position;
@@ -7046,6 +7086,51 @@ const createRemoteHealthBar = () => {
   fill.position.set(0, remoteHealthBarYOffset, 0.001);
   holder.add(fill);
 
+  const makeVerticalBar = (x, color) => {
+    const bgMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(remoteResourceBarWidth, remoteResourceBarHeight),
+      new THREE.MeshBasicMaterial({
+        color: 0x151515,
+        transparent: true,
+        opacity: 0.82,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    bgMesh.renderOrder = 999;
+    bgMesh.position.set(x, remoteResourceBarsYOffset, 0);
+    holder.add(bgMesh);
+
+    const fillMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(remoteResourceBarWidth - 0.012, remoteResourceBarHeight - 0.012),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    fillMesh.renderOrder = 1000;
+    fillMesh.position.set(x, remoteResourceBarsYOffset, 0.001);
+    holder.add(fillMesh);
+    return { bg: bgMesh, fill: fillMesh };
+  };
+
+  const barsOffsetX = (remoteHealthBarWidth * 0.5) - (remoteResourceBarWidth * 0.6);
+  const shieldBar = makeVerticalBar(
+    barsOffsetX - ((remoteResourceBarWidth + remoteResourceBarGap) * 0.5),
+    0x67d5ff,
+  );
+  const manaBar = makeVerticalBar(
+    barsOffsetX + ((remoteResourceBarWidth + remoteResourceBarGap) * 0.5),
+    0x5f8dff,
+  );
+
   const textCanvas = document.createElement('canvas');
   textCanvas.width = 256;
   textCanvas.height = 64;
@@ -7071,7 +7156,18 @@ const createRemoteHealthBar = () => {
   holder.add(text);
 
   return {
-    holder, bg, fill, text, textCanvas, textCtx, textTexture, lastText: '',
+    holder,
+    bg,
+    fill,
+    shieldBg: shieldBar.bg,
+    shieldFill: shieldBar.fill,
+    manaBg: manaBar.bg,
+    manaFill: manaBar.fill,
+    text,
+    textCanvas,
+    textCtx,
+    textTexture,
+    lastText: '',
   };
 };
 
@@ -7198,7 +7294,11 @@ const updateRemoteHealthBar = (entry) => {
     return;
   }
   const safeHealth = Number.isFinite(Number(entry.health)) ? Number(entry.health) : maxHealth;
+  const safeShield = Number.isFinite(Number(entry.shield)) ? Number(entry.shield) : startShield;
+  const safeMana = Number.isFinite(Number(entry.mana)) ? Number(entry.mana) : maxMana;
   const normalized = Math.max(0, Math.min(1, safeHealth / maxHealth));
+  const normalizedShield = Math.max(0, Math.min(1, safeShield / maxShield));
+  const normalizedMana = Math.max(0, Math.min(1, safeMana / maxMana));
   entry.healthBar.fill.scale.x = Math.max(0.001, normalized);
   entry.healthBar.fill.position.x = ((normalized - 1) * (remoteHealthBarWidth - 0.02)) * 0.5;
   if (normalized > 0.66) {
@@ -7207,6 +7307,16 @@ const updateRemoteHealthBar = (entry) => {
     entry.healthBar.fill.material.color.set(0xffe36a);
   } else {
     entry.healthBar.fill.material.color.set(0xff6767);
+  }
+  if (entry.healthBar.shieldFill) {
+    entry.healthBar.shieldFill.scale.y = Math.max(0.001, normalizedShield);
+    entry.healthBar.shieldFill.position.y = remoteResourceBarsYOffset
+      + (((normalizedShield - 1) * (remoteResourceBarHeight - 0.012)) * 0.5);
+  }
+  if (entry.healthBar.manaFill) {
+    entry.healthBar.manaFill.scale.y = Math.max(0.001, normalizedMana);
+    entry.healthBar.manaFill.position.y = remoteResourceBarsYOffset
+      + (((normalizedMana - 1) * (remoteResourceBarHeight - 0.012)) * 0.5);
   }
   const team = normalizePlayerTeam(entry.team);
   const hpText = `${String(entry.name || 'Player')} ${Math.round(safeHealth)}`;
