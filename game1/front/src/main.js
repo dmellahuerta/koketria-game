@@ -1897,14 +1897,17 @@ const mapPillarCount = 180;
 const mapBorderSegments = 42;
 const mapAxisXBase = 118;
 const mapAxisZBase = 96;
-const mapBoundaryMinRadius = 0.88;
-const mapBoundaryMaxRadius = 1.12;
+const mapBoundaryMinRadius = 0.96;
+const mapBoundaryMaxRadius = 1.04;
 const mapHalfExtent = 156;
 const terrainBaseY = -2.25;
+const mapBoundsPadding = playerCollisionRadius;
 let currentMapSeed = null;
 let currentMapProfile = null;
 let currentMapCollisionHash = null;
 let serverMapCollisionHash = null;
+let lastCollisionBlockReason = 'none';
+let lastCollisionBlockAt = 0;
 
 const rainCount = 5600;
 const rainPos = new Float32Array(rainCount * 3);
@@ -3890,6 +3893,21 @@ const isInsideMapBounds = (x, z, padding = 0) => {
   );
   const normalizedPadding = padding / Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
   return norm <= (boundary - normalizedPadding);
+};
+
+const getMapEdgeMargin = (x, z, padding = 0) => {
+  if (!currentMapProfile) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const theta = getMapTheta(currentMapProfile, x, z);
+  const boundary = getMapBoundaryRadius(currentMapProfile, theta);
+  const norm = Math.sqrt(
+    (x * x) / (currentMapProfile.axisX * currentMapProfile.axisX)
+    + (z * z) / (currentMapProfile.axisZ * currentMapProfile.axisZ),
+  );
+  const normalizedPadding = padding / Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
+  const marginNorm = (boundary - normalizedPadding) - norm;
+  return marginNorm * Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
 };
 
 const clampPointToMapBounds = (x, z, padding = 0) => {
@@ -7845,6 +7863,8 @@ const logTuningSnapshot = () => {
   const snapshotHashMatch = Boolean(serverMapCollisionHash)
     && Boolean(currentMapCollisionHash)
     && currentMapCollisionHash === serverMapCollisionHash;
+  const edgeMarginNow = getMapEdgeMargin(camera.position.x, camera.position.z, mapBoundsPadding);
+  const nearestPillarNow = getNearestExpandedPillarDistance(camera.position.x, camera.position.z);
   const snapshot = {
     at: new Date().toISOString(),
     room: {
@@ -7899,6 +7919,12 @@ const logTuningSnapshot = () => {
       isJumping,
       isFiring,
       isThirdPerson,
+    },
+    collisionDebug: {
+      lastBlockReason: lastCollisionBlockReason,
+      lastBlockAgoMs: lastCollisionBlockAt > 0 ? Math.max(0, Math.round(now - lastCollisionBlockAt)) : null,
+      mapEdgeMargin: Number.isFinite(edgeMarginNow) ? Number(edgeMarginNow.toFixed(3)) : null,
+      nearestPillarDist: Number.isFinite(nearestPillarNow) ? Number(nearestPillarNow.toFixed(3)) : null,
     },
     mapSync: {
       seedClient: Number.isFinite(currentMapSeed) ? Number(currentMapSeed) : null,
@@ -7984,15 +8010,44 @@ const collidesWithPillar = (x, z) => {
   return false;
 };
 
-const isWalkablePoint = (x, z) => {
-  if (!isInsideMapBounds(x, z, playerCollisionRadius + 0.05)) {
-    return false;
+const getNearestExpandedPillarDistance = (x, z) => {
+  if (pillarBounds.length <= 0) {
+    return Number.POSITIVE_INFINITY;
   }
-  return !collidesWithPillar(x, z);
+  const pillarRadius = playerCollisionRadius * playerPillarCollisionFactor;
+  let nearest = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < pillarBounds.length; i += 1) {
+    const pillar = pillarBounds[i];
+    const minX = pillar.minX - pillarRadius;
+    const maxX = pillar.maxX + pillarRadius;
+    const minZ = pillar.minZ - pillarRadius;
+    const maxZ = pillar.maxZ + pillarRadius;
+    const dx = x < minX ? (minX - x) : (x > maxX ? (x - maxX) : 0);
+    const dz = z < minZ ? (minZ - z) : (z > maxZ ? (z - maxZ) : 0);
+    const distance = Math.hypot(dx, dz);
+    if (distance < nearest) {
+      nearest = distance;
+    }
+  }
+  return nearest;
+};
+
+const getWalkabilityState = (x, z) => {
+  const insideMap = isInsideMapBounds(x, z, mapBoundsPadding);
+  const pillarHit = collidesWithPillar(x, z);
+  return {
+    insideMap,
+    pillarHit,
+    walkable: insideMap && !pillarHit,
+  };
+};
+
+const isWalkablePoint = (x, z) => {
+  return getWalkabilityState(x, z).walkable;
 };
 
 const findNearestWalkablePoint = (originX, originZ) => {
-  const start = clampPointToMapBounds(originX, originZ, playerCollisionRadius + 0.05);
+  const start = clampPointToMapBounds(originX, originZ, mapBoundsPadding);
   if (isWalkablePoint(start.x, start.z)) {
     return start;
   }
@@ -8005,7 +8060,7 @@ const findNearestWalkablePoint = (originX, originZ) => {
       const candidate = clampPointToMapBounds(
         start.x + (Math.cos(theta) * radius),
         start.z + (Math.sin(theta) * radius),
-        playerCollisionRadius + 0.05,
+        mapBoundsPadding,
       );
       if (isWalkablePoint(candidate.x, candidate.z)) {
         return candidate;
@@ -8019,12 +8074,27 @@ const findNearestWalkablePoint = (originX, originZ) => {
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
-  const bounded = clampPointToMapBounds(targetX, targetZ, playerCollisionRadius + 0.05);
+  const bounded = clampPointToMapBounds(targetX, targetZ, mapBoundsPadding);
   const desiredX = bounded.x;
   const desiredZ = bounded.z;
+  const desiredState = getWalkabilityState(desiredX, desiredZ);
+  if (!desiredState.walkable) {
+    if (!desiredState.insideMap && desiredState.pillarHit) {
+      lastCollisionBlockReason = 'map+pillar';
+    } else if (!desiredState.insideMap) {
+      lastCollisionBlockReason = 'map';
+    } else if (desiredState.pillarHit) {
+      lastCollisionBlockReason = 'pillar';
+    } else {
+      lastCollisionBlockReason = 'unknown';
+    }
+    lastCollisionBlockAt = performance.now();
+  } else {
+    lastCollisionBlockReason = 'none';
+  }
 
   // Mirror backend_v2 resolve_player_position to avoid client/server drift.
-  if (isWalkablePoint(desiredX, desiredZ)) {
+  if (desiredState.walkable) {
     return { x: desiredX, z: desiredZ };
   }
   // Axis slide fallback reduces corner snagging against AABB pillars.
