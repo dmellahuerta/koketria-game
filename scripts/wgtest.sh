@@ -14,7 +14,7 @@ if [[ ! -f "$WEB_GAME_CLIENT" ]]; then
   exit 1
 fi
 
-URL="${WG_URL:-http://localhost:5173/?testControls=1}"
+URL="${WG_URL:-http://localhost:5173/?env=test&testControls=1}"
 CLICK_SELECTOR="${WG_CLICK_SELECTOR:-.room-card button}"
 ITERATIONS="${WG_ITERATIONS:-2}"
 PAUSE_MS="${WG_PAUSE_MS:-250}"

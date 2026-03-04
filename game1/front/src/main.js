@@ -3323,12 +3323,16 @@ const getDynamicMaxImpacts = () => {
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let devCollectNearestRequestKind = null;
 let devCollectCycleIndex = 0;
+const appEnv = String(import.meta.env.VITE_APP_ENV || import.meta.env.MODE || 'dev').toLowerCase();
+const isProdAppEnv = appEnv === 'prod' || appEnv === 'production';
+const isTestAppEnv = appEnv === 'test';
 const isTestControlsEnabled = () => (
-  import.meta.env.DEV
-  && (
+  !isProdAppEnv
+  && (isTestAppEnv
+    || (
     window.__KOKETRIA_TEST_CONTROLS__ === true
     || (new URLSearchParams(window.location.search)).get('testControls') === '1'
-  )
+  ))
 );
 let isLocked = false;
 let yaw = 0;

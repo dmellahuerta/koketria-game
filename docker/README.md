@@ -70,6 +70,10 @@ docker compose -f docker/docker-compose.yml logs -f backend_v2
 
 - `VITE_API_BASE_URL` (ya configurada en compose): base HTTP del backend.
 - `VITE_WS_URL` (opcional): si la defines, el frontend usará esta URL para WebSocket.
+- `VITE_APP_ENV`:
+  - `dev`: entorno de desarrollo normal (tu uso diario).
+  - `test`: entorno de pruebas automatizadas (habilita controles de test cuando corresponde).
+  - `prod`: producción (desactiva controles de test).
 
 ## Variables del backend
 
