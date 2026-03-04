@@ -12,6 +12,7 @@ use axum::{
     routing::get,
 };
 use tokio::{fs, net::TcpListener};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 #[derive(Clone)]
@@ -57,6 +58,12 @@ async fn main() -> Result<()> {
         .route("/characters", get(characters))
         .route("/weapons", get(weapons))
         .route("/ws", get(ws_upgrade))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state);
 
     let addr: SocketAddr = format!("{listen_host}:{listen_port}")
