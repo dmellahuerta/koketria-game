@@ -87,6 +87,11 @@ struct ClientSession {
     latency_probe_sent_at: i64,
     latency_probe_id: u64,
     state_history: Vec<StateSnapshot>,
+    last_shoot_req_at_ms: i64,
+    last_special_req_at_ms: i64,
+    last_pickup_req_at_ms: i64,
+    last_reload_req_at_ms: i64,
+    last_respawn_req_at_ms: i64,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -261,6 +266,11 @@ const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
+const SHOOT_REQ_MIN_INTERVAL_MS: i64 = 20;
+const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
+const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
+const RELOAD_REQ_MIN_INTERVAL_MS: i64 = 120;
+const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
 const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.018;
 const HITBOX_MOTION_INFLATE_MAX: f64 = 0.28;
 const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.06;
@@ -519,6 +529,11 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                     ts: now_ms(),
                     position: initial_state.position.clone(),
                 }],
+                last_shoot_req_at_ms: 0,
+                last_special_req_at_ms: 0,
+                last_pickup_req_at_ms: 0,
+                last_reload_req_at_ms: 0,
+                last_respawn_req_at_ms: 0,
                 tx: out_tx.clone(),
             },
         );
@@ -628,6 +643,10 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
     let Some(client) = inner.clients.get(client_id).cloned() else {
         return;
     };
+    let now = now_ms();
+    if !accept_rate_limited_event(&mut inner, client_id, event_type, now) {
+        return;
+    }
 
     match event_type {
         "list_rooms" => {
@@ -2009,6 +2028,56 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 client_id, event_type
             );
         }
+    }
+}
+
+fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &str, now: i64) -> bool {
+    let Some(client) = inner.clients.get_mut(client_id) else {
+        return false;
+    };
+    match event_type {
+        "player_shoot" => {
+            if now - client.last_shoot_req_at_ms < SHOOT_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_shoot_req_at_ms = now;
+            true
+        }
+        "player_special_lunar_rain"
+        | "player_special_silent_cone"
+        | "player_special_neoorphen_meteor"
+        | "player_special_pumori_orbit" => {
+            if now - client.last_special_req_at_ms < SPECIAL_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_special_req_at_ms = now;
+            true
+        }
+        "player_pickup_ammo"
+        | "player_pickup_mana"
+        | "player_pickup_shield"
+        | "player_pickup_health" => {
+            if now - client.last_pickup_req_at_ms < PICKUP_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_pickup_req_at_ms = now;
+            true
+        }
+        "player_reload" => {
+            if now - client.last_reload_req_at_ms < RELOAD_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_reload_req_at_ms = now;
+            true
+        }
+        "player_respawn" => {
+            if now - client.last_respawn_req_at_ms < RESPAWN_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_respawn_req_at_ms = now;
+            true
+        }
+        _ => true,
     }
 }
 
