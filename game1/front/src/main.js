@@ -3323,6 +3323,13 @@ const getDynamicMaxImpacts = () => {
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 let devCollectNearestRequestKind = null;
 let devCollectCycleIndex = 0;
+const isTestControlsEnabled = () => (
+  import.meta.env.DEV
+  && (
+    window.__KOKETRIA_TEST_CONTROLS__ === true
+    || (new URLSearchParams(window.location.search)).get('testControls') === '1'
+  )
+);
 let isLocked = false;
 let yaw = 0;
 let pitch = 0;
@@ -8080,29 +8087,6 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (import.meta.env.DEV && event.code === 'KeyB') {
-    event.preventDefault();
-    const cycle = ['shield', 'mana', 'health', 'auto'];
-    devCollectNearestRequestKind = cycle[devCollectCycleIndex % cycle.length];
-    devCollectCycleIndex = (devCollectCycleIndex + 1) % cycle.length;
-    return;
-  }
-  if (import.meta.env.DEV && event.code === 'KeyN') {
-    event.preventDefault();
-    devCollectNearestRequestKind = 'mana';
-    return;
-  }
-  if (import.meta.env.DEV && event.code === 'KeyV') {
-    event.preventDefault();
-    devCollectNearestRequestKind = 'shield';
-    return;
-  }
-  if (import.meta.env.DEV && event.code === 'KeyH') {
-    event.preventDefault();
-    devCollectNearestRequestKind = 'health';
-    return;
-  }
-
   if (isEditableFocused) {
     return;
   }
@@ -8112,6 +8096,29 @@ window.addEventListener('keydown', (event) => {
       event.preventDefault();
       closeChatInput();
     }
+    return;
+  }
+
+  if (isTestControlsEnabled() && event.code === 'KeyB') {
+    event.preventDefault();
+    const cycle = ['shield', 'mana', 'health', 'auto'];
+    devCollectNearestRequestKind = cycle[devCollectCycleIndex % cycle.length];
+    devCollectCycleIndex = (devCollectCycleIndex + 1) % cycle.length;
+    return;
+  }
+  if (isTestControlsEnabled() && event.code === 'KeyN') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'mana';
+    return;
+  }
+  if (isTestControlsEnabled() && event.code === 'KeyV') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'shield';
+    return;
+  }
+  if (isTestControlsEnabled() && event.code === 'KeyH') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'health';
     return;
   }
 
