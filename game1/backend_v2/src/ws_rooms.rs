@@ -2364,8 +2364,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
             );
 
-            let (health_wire, shield_wire, mana_wire) =
-                resources_for_move.unwrap_or((MAX_HEALTH as i64, MAX_SHIELD as i64, MAX_MANA as i64));
+            let (health_wire, shield_wire, mana_wire) = resources_for_move.unwrap_or((
+                MAX_HEALTH as i64,
+                START_SHIELD as i64,
+                MAX_MANA as i64,
+            ));
             inner.broadcast_room(
                 &room_id,
                 json!({
