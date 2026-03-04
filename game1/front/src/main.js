@@ -3475,12 +3475,16 @@ const shieldPickups = [];
 const healthPickups = [];
 
 const createSeededRng = (seed) => {
-  let t = Number(seed) >>> 0;
+  // Keep deterministic parity with backend_v2 SeededRng (u64 LCG).
+  let state = (BigInt(Number(seed) >>> 0) ^ 0xD1B54A32D192ED03n) & 0xFFFFFFFFFFFFFFFFn;
+  const mul = 6364136223846793005n;
+  const inc = 1n;
+  const mask64 = 0xFFFFFFFFFFFFFFFFn;
+  const maxU32 = 4294967295;
   return () => {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    state = (state * mul + inc) & mask64;
+    const u32 = Number((state >> 32n) & 0xFFFFFFFFn);
+    return u32 / maxU32;
   };
 };
 
