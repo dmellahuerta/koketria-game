@@ -3377,10 +3377,11 @@ const remoteTorsoCenterOffsetY = playerGroundY + (bodyCenterOffsetY * 0.45);
 const remoteHealthBarYOffset = 2.45;
 const remoteHealthBarWidth = 0.9;
 const remoteHealthBarHeight = 0.09;
-const remoteResourceBarWidth = 0.34;
+const remoteResourceBarWidth = remoteHealthBarWidth;
 const remoteResourceBarHeight = 0.04;
-const remoteResourceBarsYOffset = remoteHealthBarYOffset - 0.15;
-const remoteResourceBarGapY = 0.08;
+const remoteResourceBarsYOffset = remoteHealthBarYOffset
+  - ((remoteHealthBarHeight + remoteResourceBarHeight) * 0.5);
+const remoteResourceBarGapY = remoteResourceBarHeight;
 const remoteHealthBarMaxVisibleDistance = 320;
 let kills = 0;
 let health = maxHealth;
