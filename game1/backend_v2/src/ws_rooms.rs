@@ -92,6 +92,7 @@ struct ClientSession {
     last_pickup_req_at_ms: i64,
     last_reload_req_at_ms: i64,
     last_respawn_req_at_ms: i64,
+    is_bot: bool,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -282,6 +283,10 @@ const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
 const PICKUP_RESPAWN_MS: i64 = 60_000;
 const PICKUP_TAKE_RADIUS: f64 = 1.1;
+const BOT_MAX_PER_ROOM: usize = 8;
+const BOT_MOVE_TICK_MS: u64 = 100;
+const BOT_SHOOT_TICK_MS: u64 = 1250;
+const BOT_RESPAWN_TICK_MS: u64 = 700;
 
 fn compute_rewind_timestamp(
     now_ms_v: i64,
@@ -537,6 +542,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 last_pickup_req_at_ms: 0,
                 last_reload_req_at_ms: 0,
                 last_respawn_req_at_ms: 0,
+                is_bot: false,
                 tx: out_tx.clone(),
             },
         );
@@ -962,6 +968,35 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .take(180)
                 .collect::<String>();
             if text.is_empty() {
+                return;
+            }
+            if text.eq_ignore_ascii_case("/addbot") {
+                let added = handle_add_bot_command(&mut inner, &room_id);
+                match added {
+                    Some(bot_id) => {
+                        inner.broadcast_room(
+                            &room_id,
+                            system_chat_payload(
+                                &format!("Bot agregado: {}", bot_id),
+                                now_ms(),
+                            ),
+                            None,
+                        );
+                        let state_cloned = Arc::clone(state);
+                        tokio::spawn(async move {
+                            run_room_bot(state_cloned, bot_id).await;
+                        });
+                    }
+                    None => {
+                        inner.send_to(
+                            client_id,
+                            system_chat_payload(
+                                "No se pudo agregar bot (modo o capacidad).",
+                                now_ms(),
+                            ),
+                        );
+                    }
+                }
                 return;
             }
             inner.broadcast_room(
@@ -2192,6 +2227,281 @@ fn leave_room_internal(
         );
     }
     maybe_versus_winner_team.map(|team| (room_id, team))
+}
+
+fn system_chat_payload(text: &str, ts: i64) -> Value {
+    json!({
+      "type":"chat_message",
+      "ok": true,
+      "data": {
+        "playerId": "system",
+        "playerName": "SYSTEM",
+        "text": text,
+        "ts": ts
+      }
+    })
+}
+
+fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    if room.mode != RoomMode::FreeForAll {
+        return None;
+    }
+    let bot_count = room
+        .players
+        .iter()
+        .filter(|id| inner.clients.get(*id).map(|c| c.is_bot).unwrap_or(false))
+        .count();
+    if bot_count >= BOT_MAX_PER_ROOM || room.players.len() >= room.max_players {
+        return None;
+    }
+
+    inner.client_seq = inner.client_seq.wrapping_add(1);
+    let bot_id = format!("bot-{}", inner.client_seq);
+    let mut rng = SeededRng::new((now_ms() as u64) ^ hash_room_id(room_id) ^ hash_room_id(&bot_id));
+    let names = [
+        "Agent_Neo",
+        "HexRider",
+        "ZeroPulse",
+        "NovaByte",
+        "K0ketron",
+        "NoxShard",
+        "Valkyr",
+        "EchoRune",
+        "GhostIO",
+        "RiftNine",
+    ];
+    let characters = ["silentman", "pumori", "neoorphen", "pezunalunar"];
+    let name_idx = ((rng.next_f64() * names.len() as f64).floor() as usize).min(names.len() - 1);
+    let num = 10 + ((rng.next_f64() * 90.0).floor() as i64).clamp(0, 89);
+    let character_idx =
+        ((rng.next_f64() * characters.len() as f64).floor() as usize).min(characters.len() - 1);
+    let bot_name = format!("{}-{}", names[name_idx], num);
+    let character = characters[character_idx].to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while rx.recv().await.is_some() {}
+    });
+
+    let initial_state = default_player_state();
+    inner.clients.insert(
+        bot_id.clone(),
+        ClientSession {
+            id: bot_id.clone(),
+            name: bot_name,
+            character: Some(character),
+            room_id: None,
+            state: initial_state.clone(),
+            state_ts: now_ms(),
+            combat: default_combat_state(),
+            kills: 0,
+            deaths: 0,
+            latency_ms: 0.0,
+            latency_probe_seq: 0,
+            latency_probe_sent_at: 0,
+            latency_probe_id: 0,
+            state_history: vec![StateSnapshot {
+                ts: now_ms(),
+                position: initial_state.position.clone(),
+            }],
+            last_shoot_req_at_ms: 0,
+            last_special_req_at_ms: 0,
+            last_pickup_req_at_ms: 0,
+            last_reload_req_at_ms: 0,
+            last_respawn_req_at_ms: 0,
+            is_bot: true,
+            tx,
+        },
+    );
+    join_room_internal(inner, &bot_id, room_id);
+    Some(bot_id)
+}
+
+async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
+    let mut move_ticker = interval(Duration::from_millis(BOT_MOVE_TICK_MS));
+    let mut shoot_ticker = interval(Duration::from_millis(BOT_SHOOT_TICK_MS));
+    let mut respawn_ticker = interval(Duration::from_millis(BOT_RESPAWN_TICK_MS));
+    move_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    shoot_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    respawn_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = move_ticker.tick() => {
+                let mut inner = state.inner.lock().await;
+                let (room_id, payload) = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    if room.mode != RoomMode::FreeForAll {
+                        break;
+                    }
+                    if !bot.combat.alive {
+                        continue;
+                    }
+                    let t = (now_ms() as f64 / 1000.0) + (hash_room_id(&bot_id) as f64 * 0.0003);
+                    let radius = 24.0 + ((hash_room_id(&bot_id) % 18) as f64);
+                    let x = radius * (t * 0.82).cos();
+                    let z = radius * (t * 0.82).sin();
+                    let yaw = ((-t * 0.82) + std::f64::consts::PI * 0.5).rem_euclid(std::f64::consts::TAU);
+                    let ts = now_ms();
+                    {
+                        let Some(bot_mut) = inner.clients.get_mut(&bot_id) else {
+                            continue;
+                        };
+                        bot_mut.state.position.x = x;
+                        bot_mut.state.position.y = SPAWN_BASE_Y;
+                        bot_mut.state.position.z = z;
+                        bot_mut.state.rotation.yaw = yaw;
+                        bot_mut.state.rotation.pitch = 0.0;
+                        bot_mut.state.moving = true;
+                        bot_mut.state.jumping = false;
+                        bot_mut.state_ts = ts;
+                        push_state_snapshot(bot_mut, ts);
+                    }
+                    let payload = json!({
+                      "type":"player_move",
+                      "ok": true,
+                      "data": {
+                        "playerId": bot_id,
+                        "state": {
+                          "position": { "x": x, "y": SPAWN_BASE_Y, "z": z },
+                          "rotation": { "yaw": yaw, "pitch": 0.0 },
+                          "jumping": false,
+                          "moving": true
+                        },
+                        "ts": ts
+                      }
+                    });
+                    (room_id, payload)
+                };
+                inner.broadcast_room(&room_id, payload, Some(&bot_id));
+            }
+            _ = shoot_ticker.tick() => {
+                let inner = state.inner.lock().await;
+                let (room_id, payload_opt) = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    if room.mode != RoomMode::FreeForAll || room.status != RoomStatus::InGame || !bot.combat.alive {
+                        (room_id, None)
+                    } else {
+                        let origin = server_eye_origin_from_state(&bot.state);
+                        let dir = server_aim_direction_from_rotation(&bot.state.rotation).unwrap_or(Vec3 {
+                            x: bot.state.rotation.yaw.cos(),
+                            y: 0.0,
+                            z: bot.state.rotation.yaw.sin(),
+                        });
+                        let wall_hit_distance = resolve_wall_hit_distance(&inner, &room_id, &origin, &dir, 95.0);
+                        let ground_hit_distance = resolve_ground_hit_distance(&origin, &dir, 95.0);
+                        let distance = match (wall_hit_distance, ground_hit_distance) {
+                            (Some(w), Some(g)) => w.min(g).min(95.0),
+                            (Some(w), None) => w.min(95.0),
+                            (None, Some(g)) => g.min(95.0),
+                            (None, None) => 95.0,
+                        };
+                        let payload = json!({
+                          "type":"player_shoot",
+                          "ok": true,
+                          "data": {
+                            "playerId": bot_id,
+                            "character": bot.character.clone(),
+                            "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+                            "direction": { "x": dir.x, "y": dir.y, "z": dir.z },
+                            "distance": distance,
+                            "ts": now_ms()
+                          }
+                        });
+                        (room_id, Some(payload))
+                    }
+                };
+                if let Some(payload) = payload_opt {
+                    inner.broadcast_room(&room_id, payload, Some(&bot_id));
+                }
+            }
+            _ = respawn_ticker.tick() => {
+                let mut inner = state.inner.lock().await;
+                let can_respawn = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    room.status == RoomStatus::InGame
+                        && !bot.combat.alive
+                        && now_ms() >= bot.combat.respawn_available_at_ms
+                };
+                if !can_respawn {
+                    continue;
+                }
+                let room_id = match inner.clients.get(&bot_id).and_then(|bot| bot.room_id.clone()) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let spawn = pick_spawn_position(&inner, &room_id, Some(&bot_id));
+                let (position, health, shield, mana, ammo_in_mag, ammo_reserve) = {
+                    let Some(bot) = inner.clients.get_mut(&bot_id) else {
+                        break;
+                    };
+                    bot.state = default_player_state();
+                    bot.state.position = spawn;
+                    bot.state_ts = now_ms();
+                    bot.combat = default_combat_state();
+                    bot.state_history.clear();
+                    bot.state_history.push(StateSnapshot {
+                        ts: bot.state_ts,
+                        position: bot.state.position.clone(),
+                    });
+                    (
+                        json!({ "x": bot.state.position.x, "y": bot.state.position.y, "z": bot.state.position.z }),
+                        bot.combat.health.round() as i64,
+                        bot.combat.shield.round() as i64,
+                        bot.combat.mana.round() as i64,
+                        bot.combat.ammo_in_mag,
+                        bot.combat.ammo_reserve,
+                    )
+                };
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"player_respawned",
+                      "ok": true,
+                      "data": {
+                        "playerId": bot_id,
+                        "position": position,
+                        "health": health,
+                        "shield": shield,
+                        "mana": mana,
+                        "ammoInMag": ammo_in_mag,
+                        "ammoReserve": ammo_reserve,
+                        "isReloading": false,
+                        "reloadRemainingMs": 0,
+                        "ts": now_ms()
+                      }
+                    }),
+                    None,
+                );
+                inner.broadcast_room_state(&room_id);
+            }
+        }
+    }
 }
 
 fn game_state_payload(inner: &Inner, room_id: &str) -> Value {

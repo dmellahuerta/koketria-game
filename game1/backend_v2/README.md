@@ -104,3 +104,18 @@ Se implementa `src/ws_rooms.rs` con soporte WS para:
   - cooldown por personaje
   - emision visual
   - daño autoritativo y K/D para specials
+
+## Bot de sala por chat
+
+En sala `freeforall`, cualquier jugador puede escribir en chat:
+
+```text
+/addbot
+```
+
+Esto agrega 1 bot (nombre/personaje aleatorio) que simula jugador:
+- movimiento continuo
+- disparo visual periódico
+- respawn automático
+
+Límite por sala: `8` bots.
