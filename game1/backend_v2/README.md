@@ -36,6 +36,29 @@ Variables opcionales:
 - `GOLDEN_PATH` (default `contract/golden/core_flow.json`)
 - `/ws` siempre corre sobre salas Rust.
 
+## Carga WS con bots (simula jugadores)
+
+Runner de carga sin dependencias extra:
+
+```bash
+cargo run --release --bin ws_load -- \
+  --url ws://127.0.0.1:3001/ws \
+  --room main \
+  --bots 20 \
+  --duration 180 \
+  --move-hz 16 \
+  --shoot-ms 1600 \
+  --ping-ms 1500
+```
+
+Parámetros principales:
+
+- `--bots`: cantidad de bots concurrentes.
+- `--duration`: duración en segundos.
+- `--move-hz`: frecuencia de `player_move` por bot.
+- `--shoot-ms`: intervalo de `player_shoot` por bot.
+- `--ping-ms`: intervalo de `ping` por bot.
+
 ## Salas y jugabilidad (Rust)
 
 Se agrego el dominio de salas/versus en:
