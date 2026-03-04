@@ -122,6 +122,9 @@ struct CombatState {
     health: f64,
     shield: f64,
     mana: f64,
+    ammo_in_mag: i64,
+    ammo_reserve: i64,
+    reload_ends_at_ms: i64,
     pending_health_regen: f64,
     last_health_regen_at: i64,
     last_mana_regen_at: i64,
@@ -154,6 +157,10 @@ const MAX_HEALTH: f64 = 100.0;
 const MAX_SHIELD: f64 = 100.0;
 const START_SHIELD: f64 = 0.0;
 const MAX_MANA: f64 = 100.0;
+const MAX_AMMO_IN_MAG: i64 = 30;
+const MAX_AMMO_TOTAL: i64 = 120;
+const AMMO_PICKUP_AMOUNT: i64 = 12;
+const RELOAD_TIME_MS: i64 = 1_200;
 const MANA_PICKUP_AMOUNT: f64 = 20.0;
 const SHIELD_PICKUP_AMOUNT: f64 = 25.0;
 const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
@@ -377,8 +384,16 @@ impl Inner {
     fn player_json(&self, room_id: &str, player_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
         let client = self.clients.get(player_id)?;
+        let now = now_ms();
         let team = room.teams.get(player_id).copied().map(|t| t.as_wire());
         let ready = room.ready.get(player_id).copied().unwrap_or(false);
+        let is_mana = is_mana_character(client.character.as_deref());
+        let is_reloading = !is_mana && client.combat.reload_ends_at_ms > now;
+        let reload_remaining_ms = if is_reloading {
+            client.combat.reload_ends_at_ms - now
+        } else {
+            0
+        };
         Some(json!({
           "id": client.id,
           "name": client.name,
@@ -390,11 +405,15 @@ impl Inner {
           "health": client.combat.health.round() as i64,
           "shield": client.combat.shield.round() as i64,
           "mana": client.combat.mana.round() as i64,
+          "ammoInMag": client.combat.ammo_in_mag,
+          "ammoReserve": client.combat.ammo_reserve,
+          "isReloading": is_reloading,
+          "reloadRemainingMs": reload_remaining_ms,
           "alive": client.combat.alive,
           "lunarRainCooldownMs": current_special_cooldown_remaining_ms(
             &client.combat,
             client.character.as_deref(),
-            now_ms()
+            now
           ),
           "pendingHealthRegen": client.combat.pending_health_regen,
           "state": player_state_json(&client.state),
@@ -989,7 +1008,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(reported_direction) = reported_direction else {
                 return;
             };
-            let mut maybe_resources_payload: Option<Value> = None;
+            let maybe_resources_payload: Option<Value>;
             let mut shot_blocked = false;
             let client_shot_ts = message.get("shotTs").and_then(Value::as_i64);
             let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
@@ -1023,6 +1042,30 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                             now,
                         ));
                     }
+                } else if shooter.combat.reload_ends_at_ms > now {
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
+                    shot_blocked = true;
+                } else if shooter.combat.ammo_in_mag <= 0 {
+                    if shooter.combat.ammo_reserve > 0 {
+                        shooter.combat.reload_ends_at_ms = now + RELOAD_TIME_MS;
+                    }
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
+                    shot_blocked = true;
+                } else {
+                    shooter.combat.ammo_in_mag = (shooter.combat.ammo_in_mag - 1).max(0);
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
                 }
                 if !shot_blocked {
                     shooter.combat.last_shot_at = now;
@@ -1468,7 +1511,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
             let spawn = pick_spawn_position(&inner, &room_id, Some(client_id));
-            let (position, health, shield, mana) = {
+            let (position, health, shield, mana, ammo_in_mag, ammo_reserve) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
@@ -1490,6 +1533,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     entry.combat.health.round() as i64,
                     entry.combat.shield.round() as i64,
                     entry.combat.mana.round() as i64,
+                    entry.combat.ammo_in_mag,
+                    entry.combat.ammo_reserve,
                 )
             };
             inner.broadcast_room(
@@ -1503,12 +1548,104 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "health": health,
                     "shield": shield,
                     "mana": mana,
+                    "ammoInMag": ammo_in_mag,
+                    "ammoReserve": ammo_reserve,
+                    "isReloading": false,
+                    "reloadRemainingMs": 0,
                     "ts": now_ms()
                   }
                 }),
                 None,
             );
             inner.broadcast_room_state(&room_id);
+        }
+        "player_reload" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let payload = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                let now = now_ms();
+                update_combat_regen(&mut entry.combat, now);
+                if !entry.combat.alive || is_mana_character(entry.character.as_deref()) {
+                    return;
+                }
+                if entry.combat.reload_ends_at_ms <= now
+                    && entry.combat.ammo_in_mag < MAX_AMMO_IN_MAG
+                    && entry.combat.ammo_reserve > 0
+                {
+                    entry.combat.reload_ends_at_ms = now + RELOAD_TIME_MS;
+                }
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+            };
+            inner.send_to(client_id, payload);
+        }
+        "player_pickup_ammo" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive || is_mana_character(player_state.character.as_deref()) {
+                return;
+            }
+            if player_state.combat.ammo_reserve >= MAX_AMMO_TOTAL {
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.mana_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.ammo_reserve =
+                        (entry.combat.ammo_reserve + AMMO_PICKUP_AMOUNT).min(MAX_AMMO_TOTAL);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Mana.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            }
         }
         "player_pickup_health" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -3154,6 +3291,9 @@ fn default_combat_state() -> CombatState {
         health: MAX_HEALTH,
         shield: START_SHIELD,
         mana: MAX_MANA,
+        ammo_in_mag: MAX_AMMO_IN_MAG,
+        ammo_reserve: (MAX_AMMO_TOTAL - MAX_AMMO_IN_MAG).max(0),
+        reload_ends_at_ms: 0,
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
@@ -3192,11 +3332,28 @@ fn update_combat_regen(combat: &mut CombatState, now_ms_v: i64) {
         combat.mana = (combat.mana + MANA_REGEN_PER_SECOND * dt_mana).min(MAX_MANA);
     }
 
+    if combat.reload_ends_at_ms > 0 && now_ms_v >= combat.reload_ends_at_ms {
+        combat.reload_ends_at_ms = 0;
+        let needed = (MAX_AMMO_IN_MAG - combat.ammo_in_mag).max(0);
+        let reloaded = needed.min(combat.ammo_reserve.max(0));
+        combat.ammo_in_mag += reloaded;
+        combat.ammo_reserve = (combat.ammo_reserve - reloaded).max(0);
+    }
+
     combat.health = combat.health.clamp(0.0, MAX_HEALTH);
     combat.shield = combat.shield.clamp(0.0, MAX_SHIELD);
+    combat.ammo_in_mag = combat.ammo_in_mag.clamp(0, MAX_AMMO_IN_MAG);
+    combat.ammo_reserve = combat.ammo_reserve.clamp(0, MAX_AMMO_TOTAL);
 }
 
 fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_ms_v: i64) -> Value {
+    let is_mana = is_mana_character(character);
+    let is_reloading = !is_mana && combat.reload_ends_at_ms > now_ms_v;
+    let reload_remaining_ms = if is_reloading {
+        (combat.reload_ends_at_ms - now_ms_v).max(0)
+    } else {
+        0
+    };
     json!({
       "type": "player_resources",
       "ok": true,
@@ -3204,6 +3361,10 @@ fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_m
         "health": combat.health,
         "shield": combat.shield.round() as i64,
         "mana": combat.mana.round() as i64,
+        "ammoInMag": combat.ammo_in_mag,
+        "ammoReserve": combat.ammo_reserve,
+        "isReloading": is_reloading,
+        "reloadRemainingMs": reload_remaining_ms,
         "pendingHealthRegen": combat.pending_health_regen,
         "lunarRainCooldownMs": current_special_cooldown_remaining_ms(combat, character, now_ms_v)
       }

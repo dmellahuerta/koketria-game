@@ -4488,9 +4488,7 @@ const reloadWeapon = () => {
     return;
   }
 
-  isReloading = true;
-  reloadCooldown = reloadTime;
-  updateHud();
+  sendWs({ type: 'player_reload' });
 };
 
 const triggerCharacterSpecial = () => {
@@ -5841,6 +5839,18 @@ const applyOwnStateFromRoom = (roomState) => {
     mana = Math.max(0, Math.min(maxMana, Math.round(selfPlayer.mana)));
     manaHudValue = Math.round(mana);
   }
+  if (Number.isFinite(Number(selfPlayer.ammoInMag))) {
+    ammoInMag = Math.max(0, Math.min(maxAmmoInMag, Math.round(Number(selfPlayer.ammoInMag))));
+  }
+  if (Number.isFinite(Number(selfPlayer.ammoReserve))) {
+    ammoReserve = Math.max(0, Math.min(maxAmmoTotal, Math.round(Number(selfPlayer.ammoReserve))));
+  }
+  if (typeof selfPlayer.isReloading === 'boolean') {
+    isReloading = Boolean(selfPlayer.isReloading);
+  }
+  if (Number.isFinite(Number(selfPlayer.reloadRemainingMs))) {
+    reloadCooldown = Math.max(0, Number(selfPlayer.reloadRemainingMs) / 1000);
+  }
   if (Number.isFinite(Number(selfPlayer.pendingHealthRegen))) {
     pendingHealthRegen = Math.max(0, Number(selfPlayer.pendingHealthRegen));
   }
@@ -6334,8 +6344,12 @@ const connectWebSocket = () => {
     if (payload.type === 'player_resources') {
       const nextMana = Number(payload.data?.mana);
       const nextHealth = Number(payload.data?.health);
+      const nextAmmoInMag = Number(payload.data?.ammoInMag);
+      const nextAmmoReserve = Number(payload.data?.ammoReserve);
       const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
       const nextLunarRainCooldownMs = Number(payload.data?.lunarRainCooldownMs);
+      const nextIsReloading = payload.data?.isReloading;
+      const nextReloadRemainingMs = Number(payload.data?.reloadRemainingMs);
       let changed = false;
       if (Number.isFinite(nextMana)) {
         mana = Math.max(0, Math.min(maxMana, Math.round(nextMana)));
@@ -6346,11 +6360,27 @@ const connectWebSocket = () => {
         health = Math.max(0, Math.min(maxHealth, nextHealth));
         changed = true;
       }
+      if (Number.isFinite(nextAmmoInMag)) {
+        ammoInMag = Math.max(0, Math.min(maxAmmoInMag, Math.round(nextAmmoInMag)));
+        changed = true;
+      }
+      if (Number.isFinite(nextAmmoReserve)) {
+        ammoReserve = Math.max(0, Math.min(maxAmmoTotal, Math.round(nextAmmoReserve)));
+        changed = true;
+      }
       if (Number.isFinite(nextPendingHealthRegen)) {
         pendingHealthRegen = Math.max(0, nextPendingHealthRegen);
       }
       if (Number.isFinite(nextLunarRainCooldownMs)) {
         setLunarRainCooldownRemainingMs(nextLunarRainCooldownMs);
+      }
+      if (typeof nextIsReloading === 'boolean') {
+        isReloading = Boolean(nextIsReloading);
+        changed = true;
+      }
+      if (Number.isFinite(nextReloadRemainingMs)) {
+        reloadCooldown = Math.max(0, nextReloadRemainingMs / 1000);
+        changed = true;
       }
       clampPendingHealthRegenToMissing();
       if (changed) {
@@ -6434,6 +6464,16 @@ const connectWebSocket = () => {
           mana = Math.round(payload.data.mana);
           manaHudValue = Math.round(mana);
         }
+        if (Number.isFinite(Number(payload.data?.ammoInMag))) {
+          ammoInMag = Math.max(0, Math.min(maxAmmoInMag, Math.round(Number(payload.data.ammoInMag))));
+        }
+        if (Number.isFinite(Number(payload.data?.ammoReserve))) {
+          ammoReserve = Math.max(0, Math.min(maxAmmoTotal, Math.round(Number(payload.data.ammoReserve))));
+        }
+        isReloading = Boolean(payload.data?.isReloading);
+        reloadCooldown = Number.isFinite(Number(payload.data?.reloadRemainingMs))
+          ? Math.max(0, Number(payload.data.reloadRemainingMs) / 1000)
+          : 0;
         pendingHealthRegen = 0;
         isRespawning = false;
         respawnEndsAt = 0;
@@ -7932,12 +7972,8 @@ const shoot = () => {
     return;
   }
 
-  if (!usingMana) {
-    ammoInMag -= 1;
-  }
   startShootSound();
   localAvatar.shootUntil = performance.now() + 420;
-  updateHud();
 
   camera.getWorldDirection(dir);
   const baseDirection = dir.clone().normalize();
@@ -8321,11 +8357,7 @@ const updateAmmoPickups = (delta) => {
       if (isManaCharacter(activeCharacter)) {
         tryRequestPickup(pickup, 'player_pickup_mana');
       } else {
-        pickup.active = false;
-        pickup.respawnAtMs = nowMs + ammoPickupRespawnMs;
-        pickup.mesh.visible = false;
-        ammoReserve = Math.min(maxAmmoTotal, ammoReserve + ammoPickupAmount);
-        updateHud();
+        tryRequestPickup(pickup, 'player_pickup_ammo');
       }
     }
   }
@@ -9206,18 +9238,6 @@ const updateShooting = (delta) => {
   if (usingMana && isReloading) {
     isReloading = false;
     reloadCooldown = 0;
-  }
-
-  if (!usingMana && isReloading) {
-    reloadCooldown -= delta;
-    if (reloadCooldown <= 0) {
-      const needed = maxAmmoInMag - ammoInMag;
-      const reloaded = Math.min(needed, ammoReserve);
-      ammoInMag += reloaded;
-      ammoReserve -= reloaded;
-      isReloading = false;
-      updateHud();
-    }
   }
 
   cooldown -= delta;
