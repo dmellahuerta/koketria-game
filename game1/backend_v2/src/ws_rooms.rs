@@ -3672,7 +3672,13 @@ async fn apply_delayed_area_wave_damage(
                     y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
                     z: victim.state.position.z,
                 };
-                if !has_line_of_sight(&inner, &room_id, impact, &victim_aim) {
+                if !has_line_of_sight_with_margin(
+                    &inner,
+                    &room_id,
+                    impact,
+                    &victim_aim,
+                    RADIAL_LOS_CLEARANCE_UNITS,
+                ) {
                     continue;
                 }
                 let dx = victim.state.position.x - impact.x;
@@ -4906,10 +4912,6 @@ fn resolve_ground_hit_distance(
         return None;
     }
     Some(t)
-}
-
-fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bool {
-    has_line_of_sight_with_margin(inner, room_id, from, to, 0.08)
 }
 
 fn has_line_of_sight_with_margin(
