@@ -258,6 +258,9 @@ const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
+const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.018;
+const HITBOX_MOTION_INFLATE_MAX: f64 = 0.28;
+const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.06;
 const MANA_PICKUP_COUNT: usize = 50;
 const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
@@ -3451,6 +3454,34 @@ fn client_position_at(client: &ClientSession, target_ts: i64) -> Vec3 {
     client.state.position.clone()
 }
 
+fn client_speed_at_ts(client: &ClientSession, target_ts: i64) -> f64 {
+    if client.state_history.len() < 2 {
+        return 0.0;
+    }
+    let mut prev_opt: Option<&StateSnapshot> = None;
+    let mut next_opt: Option<&StateSnapshot> = None;
+    for i in 1..client.state_history.len() {
+        let prev = &client.state_history[i - 1];
+        let next = &client.state_history[i];
+        if target_ts >= prev.ts && target_ts <= next.ts {
+            prev_opt = Some(prev);
+            next_opt = Some(next);
+            break;
+        }
+    }
+    let (prev, next) = match (prev_opt, next_opt) {
+        (Some(prev), Some(next)) => (prev, next),
+        _ => {
+            let len = client.state_history.len();
+            (&client.state_history[len - 2], &client.state_history[len - 1])
+        }
+    };
+    let dt_s = ((next.ts - prev.ts).max(1) as f64) / 1000.0;
+    let dx = next.position.x - prev.position.x;
+    let dz = next.position.z - prev.position.z;
+    ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35)
+}
+
 fn is_mana_character(character: Option<&str>) -> bool {
     matches!(
         normalize_character(character).as_str(),
@@ -3678,6 +3709,14 @@ fn find_best_hit(
         }
 
         let rewound = client_position_at(candidate, rewind_ts);
+        let target_speed = client_speed_at_ts(candidate, rewind_ts);
+        let motion_inflate =
+            (target_speed * HITBOX_MOTION_INFLATE_FACTOR).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
+        let head_radius = HEADSHOT_RADIUS + motion_inflate.min(HITBOX_MOTION_INFLATE_HEAD_MAX);
+        let body_radius = BODYSHOT_RADIUS + motion_inflate;
+        let torso_radius = TORSO_RADIUS + motion_inflate;
+        let torso_capsule_radius = TORSO_CAPSULE_RADIUS + motion_inflate;
+        let legs_capsule_radius = LEGS_CAPSULE_RADIUS + (motion_inflate * 0.85);
         let head_center = Vec3 {
             x: rewound.x,
             y: rewound.y + HEAD_CENTER_OFFSET_Y,
@@ -3698,7 +3737,7 @@ fn find_best_hit(
             origin,
             direction_norm,
             &head_center,
-            HEADSHOT_RADIUS,
+            head_radius,
             max_distance,
         ) {
             candidate_hit = Some((true, head_dist));
@@ -3707,7 +3746,7 @@ fn find_best_hit(
             origin,
             direction_norm,
             &body_center,
-            BODYSHOT_RADIUS,
+            body_radius,
             max_distance,
         ) {
             match candidate_hit {
@@ -3728,7 +3767,7 @@ fn find_best_hit(
                 y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
                 z: rewound.z,
             },
-            TORSO_RADIUS,
+            torso_radius,
             max_distance,
         ) {
             match candidate_hit {
@@ -3748,7 +3787,7 @@ fn find_best_hit(
             rewound.z,
             torso_min_y,
             torso_max_y,
-            TORSO_CAPSULE_RADIUS,
+            torso_capsule_radius,
             max_distance,
         ) {
             match candidate_hit {
@@ -3768,7 +3807,7 @@ fn find_best_hit(
             rewound.z,
             legs_min_y,
             legs_max_y,
-            LEGS_CAPSULE_RADIUS,
+            legs_capsule_radius,
             max_distance,
         ) {
             match candidate_hit {
