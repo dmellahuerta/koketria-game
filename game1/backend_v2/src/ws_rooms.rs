@@ -289,6 +289,19 @@ const BOT_SHOOT_TICK_MS: u64 = 1250;
 const BOT_RESPAWN_TICK_MS: u64 = 700;
 const BOT_SPECIAL_TICK_MS: u64 = 650;
 
+fn parse_addbot_count(text: &str) -> Option<usize> {
+    let mut parts = text.split_whitespace();
+    let cmd = parts.next()?;
+    if !cmd.eq_ignore_ascii_case("/addbot") {
+        return None;
+    }
+    let requested = parts
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    Some(requested.clamp(1, BOT_MAX_PER_ROOM))
+}
+
 fn compute_rewind_timestamp(
     now_ms_v: i64,
     client_shot_ts: Option<i64>,
@@ -971,31 +984,36 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if text.is_empty() {
                 return;
             }
-            if text.eq_ignore_ascii_case("/addbot") {
-                let added = handle_add_bot_command(&mut inner, &room_id);
-                match added {
-                    Some(bot_id) => {
-                        inner.broadcast_room(
-                            &room_id,
-                            system_chat_payload(
-                                &format!("Bot agregado: {}", bot_id),
-                                now_ms(),
-                            ),
-                            None,
-                        );
+            if let Some(requested) = parse_addbot_count(&text) {
+                let mut added_ids: Vec<String> = Vec::new();
+                for _ in 0..requested {
+                    let Some(bot_id) = handle_add_bot_command(&mut inner, &room_id) else {
+                        break;
+                    };
+                    added_ids.push(bot_id);
+                }
+                if added_ids.is_empty() {
+                    inner.send_to(
+                        client_id,
+                        system_chat_payload(
+                            "No se pudo agregar bots (modo o capacidad).",
+                            now_ms(),
+                        ),
+                    );
+                } else {
+                    inner.broadcast_room(
+                        &room_id,
+                        system_chat_payload(
+                            &format!("Bots agregados: {} / {}", added_ids.len(), requested),
+                            now_ms(),
+                        ),
+                        None,
+                    );
+                    for bot_id in added_ids {
                         let state_cloned = Arc::clone(state);
                         tokio::spawn(async move {
                             run_room_bot(state_cloned, bot_id).await;
                         });
-                    }
-                    None => {
-                        inner.send_to(
-                            client_id,
-                            system_chat_payload(
-                                "No se pudo agregar bot (modo o capacidad).",
-                                now_ms(),
-                            ),
-                        );
                     }
                 }
                 return;
@@ -2349,10 +2367,12 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     if !bot.combat.alive {
                         continue;
                     }
-                    let t = (now_ms() as f64 / 1000.0) + (hash_room_id(&bot_id) as f64 * 0.0003);
-                    let radius = 24.0 + ((hash_room_id(&bot_id) % 18) as f64);
-                    let x = radius * (t * 0.82).cos();
-                    let z = radius * (t * 0.82).sin();
+                    let seed = hash_room_id(&bot_id);
+                    let phase = (((seed % 6283) as f64) / 1000.0).rem_euclid(std::f64::consts::TAU);
+                    let t = now_ms() as f64 / 1000.0;
+                    let radius = 24.0 + ((seed % 18) as f64);
+                    let x = radius * ((t * 0.82) + phase).cos();
+                    let z = radius * ((t * 0.82) + phase).sin();
                     let yaw = ((-t * 0.82) + std::f64::consts::PI * 0.5).rem_euclid(std::f64::consts::TAU);
                     let ts = now_ms();
                     {

@@ -111,6 +111,7 @@ En sala `freeforall`, cualquier jugador puede escribir en chat:
 
 ```text
 /addbot
+/addbot 3
 ```
 
 Esto agrega 1 bot (nombre/personaje aleatorio) que simula jugador:
