@@ -3390,6 +3390,9 @@ let jumpVelocity = 0;
 let isRespawning = false;
 let respawnEndsAt = 0;
 let respawnSecondsLeft = getRespawnDurationSeconds();
+let respawnRequestPending = false;
+let lastRespawnRequestAt = 0;
+const respawnRequestRetryMs = 700;
 let isMatchEnding = false;
 let matchWinnerEndsAt = 0;
 let matchWinnerSecondsLeft = 0;
@@ -4279,6 +4282,8 @@ const showWinnerOverlay = (winner, countdownSeconds) => {
   isFiring = false;
   if (isRespawning) {
     isRespawning = false;
+    respawnRequestPending = false;
+    lastRespawnRequestAt = 0;
     respawnEndsAt = 0;
     respawnSecondsLeft = getRespawnDurationSeconds();
     updateRespawnOverlay();
@@ -4488,6 +4493,8 @@ const resetCombatStats = () => {
   jumpVelocity = 0;
   kills = 0;
   isRespawning = false;
+  respawnRequestPending = false;
+  lastRespawnRequestAt = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
   respawnEndsAt = 0;
   hideWinnerOverlay();
@@ -4551,39 +4558,40 @@ const triggerMobileJump = () => {
 };
 
 const respawnPlayer = () => {
-  health = maxHealth;
-  shield = startShield;
-  ammoInMag = maxAmmoInMag;
-  ammoReserve = maxAmmoTotal - maxAmmoInMag;
-  mana = maxMana;
-  manaHudValue = Math.round(maxMana);
-  pendingHealthRegen = 0;
-  lunarRainCooldownEndsAt = 0;
-  lastLunarCooldownShown = null;
-  isReloading = false;
-  reloadCooldown = 0;
-  isJumping = false;
-  jumpVelocity = 0;
-  isRespawning = false;
-  respawnSecondsLeft = getRespawnDurationSeconds();
-  respawnEndsAt = 0;
-  updateRespawnOverlay();
+  if (!isRespawning || !canPlay()) {
+    return;
+  }
+  const now = performance.now();
+  if (respawnRequestPending && now - lastRespawnRequestAt < respawnRequestRetryMs) {
+    return;
+  }
+  respawnRequestPending = true;
+  lastRespawnRequestAt = now;
   sendWs({ type: 'player_respawn' });
-  updateHud();
 };
 
-const startRespawnCountdown = () => {
+const startRespawnCountdown = (serverRespawnAtMs = null) => {
   if (!isMatchRunning()) {
     return;
   }
 
   isRespawning = true;
+  respawnRequestPending = false;
+  lastRespawnRequestAt = 0;
   isFiring = false;
   isJumping = false;
   jumpVelocity = 0;
-  const respawnDurationSeconds = getRespawnDurationSeconds();
-  respawnEndsAt = performance.now() + respawnDurationSeconds * 1000;
-  respawnSecondsLeft = respawnDurationSeconds;
+  const estimatedServerNow = getEstimatedServerNowMs();
+  const serverRespawnTs = Number(serverRespawnAtMs);
+  if (Number.isFinite(serverRespawnTs) && serverRespawnTs > estimatedServerNow) {
+    const msUntilRespawn = Math.max(200, serverRespawnTs - estimatedServerNow);
+    respawnEndsAt = performance.now() + msUntilRespawn;
+    respawnSecondsLeft = Math.max(1, Math.ceil(msUntilRespawn / 1000));
+  } else {
+    const respawnDurationSeconds = getRespawnDurationSeconds();
+    respawnEndsAt = performance.now() + respawnDurationSeconds * 1000;
+    respawnSecondsLeft = respawnDurationSeconds;
+  }
 
   if (document.pointerLockElement) {
     document.exitPointerLock();
@@ -5878,10 +5886,12 @@ const applyOwnStateFromRoom = (roomState) => {
   }
   clampPendingHealthRegenToMissing();
   if (selfPlayer.alive === false && !isRespawning && isMatchRunning()) {
-    startRespawnCountdown();
+    startRespawnCountdown(selfPlayer.respawnAvailableAtMs);
   }
   if (selfPlayer.alive === true && isRespawning) {
     isRespawning = false;
+    respawnRequestPending = false;
+    lastRespawnRequestAt = 0;
     respawnEndsAt = 0;
     respawnSecondsLeft = getRespawnDurationSeconds();
     updateRespawnOverlay();
@@ -6013,6 +6023,8 @@ const connectWebSocket = () => {
       applyWeather('night');
       setBattleTheme('battle1');
       resetCombatStats();
+      respawnRequestPending = false;
+      lastRespawnRequestAt = 0;
       hideWinnerOverlay();
       localAvatar.team = null;
       ensureLocalTeamOutline();
@@ -6454,7 +6466,7 @@ const connectWebSocket = () => {
         health = 0;
         pendingHealthRegen = 0;
         updateHud();
-        startRespawnCountdown();
+        startRespawnCountdown(payload.data?.respawnAvailableAtMs);
         return;
       }
 
@@ -6509,6 +6521,8 @@ const connectWebSocket = () => {
           : 0;
         pendingHealthRegen = 0;
         isRespawning = false;
+        respawnRequestPending = false;
+        lastRespawnRequestAt = 0;
         respawnEndsAt = 0;
         respawnSecondsLeft = getRespawnDurationSeconds();
         updateRespawnOverlay();
@@ -6604,6 +6618,8 @@ const connectWebSocket = () => {
         }
         if (payload.data.status !== 'in_game' && isRespawning) {
           isRespawning = false;
+          respawnRequestPending = false;
+          lastRespawnRequestAt = 0;
           respawnEndsAt = 0;
           respawnSecondsLeft = getRespawnDurationSeconds();
           updateRespawnOverlay();
@@ -9318,6 +9334,8 @@ const updateRespawnCountdown = () => {
   if (!isRespawning || !state.joinedRoom || !isMatchRunning()) {
     if (isRespawning && !isMatchRunning()) {
       isRespawning = false;
+      respawnRequestPending = false;
+      lastRespawnRequestAt = 0;
       respawnEndsAt = 0;
       respawnSecondsLeft = getRespawnDurationSeconds();
       updateRespawnOverlay();

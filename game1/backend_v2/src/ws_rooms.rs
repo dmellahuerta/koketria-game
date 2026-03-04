@@ -130,6 +130,7 @@ struct CombatState {
     last_mana_regen_at: i64,
     last_shot_at: i64,
     alive: bool,
+    respawn_available_at_ms: i64,
     lunar_cd_until_ms: i64,
     silent_cd_until_ms: i64,
     neoorphen_cd_until_ms: i64,
@@ -191,6 +192,8 @@ const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 5;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
+const FFA_RESPAWN_MS: i64 = 10_000;
+const VERSUS_RESPAWN_MS: i64 = 3_000;
 const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
 const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
 const SPAWN_BASE_Y: f64 = 1.7;
@@ -407,10 +410,11 @@ impl Inner {
           "deaths": client.deaths,
           "health": client.combat.health.round() as i64,
           "shield": client.combat.shield.round() as i64,
-          "mana": client.combat.mana.round() as i64,
-          "ammoInMag": client.combat.ammo_in_mag,
-          "ammoReserve": client.combat.ammo_reserve,
-          "isReloading": is_reloading,
+        "mana": client.combat.mana.round() as i64,
+        "ammoInMag": client.combat.ammo_in_mag,
+        "ammoReserve": client.combat.ammo_reserve,
+        "respawnAvailableAtMs": client.combat.respawn_available_at_ms,
+        "isReloading": is_reloading,
           "reloadRemainingMs": reload_remaining_ms,
           "alive": client.combat.alive,
           "lunarRainCooldownMs": current_special_cooldown_remaining_ms(
@@ -1525,6 +1529,25 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(room_id) = client.room_id.clone() else {
                 return;
             };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let now = now_ms();
+            let can_respawn = inner
+                .clients
+                .get(client_id)
+                .map(|entry| {
+                    !entry.combat.alive
+                        && entry.combat.respawn_available_at_ms > 0
+                        && now >= entry.combat.respawn_available_at_ms
+                })
+                .unwrap_or(false);
+            if !can_respawn {
+                return;
+            }
             let spawn = pick_spawn_position(&inner, &room_id, Some(client_id));
             let (position, health, shield, mana, ammo_in_mag, ammo_reserve) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
@@ -1845,16 +1868,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 );
             }
         }
-        "player_resources" => {
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
-            };
-            inner.send_to(client_id, payload);
-        }
+        "player_resources" => {}
         "player_move" => {
             let Some(room_id) = client.room_id.clone() else {
                 return;
@@ -2146,6 +2160,16 @@ fn kills_to_win_for_room(inner: &Inner, room_id: &str) -> i64 {
     }
 }
 
+fn respawn_delay_ms_for_room(inner: &Inner, room_id: &str) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return FFA_RESPAWN_MS;
+    };
+    if room.mode == RoomMode::VersusMatch {
+        return VERSUS_RESPAWN_MS;
+    }
+    FFA_RESPAWN_MS
+}
+
 fn team_kills(inner: &Inner, room_id: &str, team: Team) -> i64 {
     let Some(room) = inner.rooms.rooms.get(room_id) else {
         return 0;
@@ -2234,6 +2258,7 @@ fn apply_hit_and_emit(
     base_damage: f64,
     ts: i64,
 ) -> bool {
+    let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
@@ -2255,6 +2280,7 @@ fn apply_hit_and_emit(
         victim.combat.pending_health_regen = 0.0;
         if victim.combat.health <= 0.0 {
             victim.combat.alive = false;
+            victim.combat.respawn_available_at_ms = ts + respawn_delay_ms;
             died = true;
         }
         (victim.combat.health, victim.combat.shield)
@@ -2298,6 +2324,7 @@ fn apply_hit_and_emit(
             "playerId": victim_id,
             "killerId": attacker_id,
             "headshot": headshot,
+            "respawnAvailableAtMs": ts + respawn_delay_ms,
             "ts": ts
           }
         }),
@@ -3309,6 +3336,7 @@ fn default_combat_state() -> CombatState {
         ammo_in_mag: MAX_AMMO_IN_MAG,
         ammo_reserve: (MAX_AMMO_TOTAL - MAX_AMMO_IN_MAG).max(0),
         reload_ends_at_ms: 0,
+        respawn_available_at_ms: 0,
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
