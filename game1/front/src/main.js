@@ -3401,7 +3401,6 @@ const remoteAnimSwitchCooldownMs = 140;
 const remoteMovingSignalHoldMs = 220;
 const localReconcileSoftError = 0.12;
 const localReconcileHardSnapDistance = 3.2;
-const localReconcileEmergencySnapDistance = 6.5;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
 const localInputHistoryLimit = 180;
@@ -5985,15 +5984,18 @@ const connectWebSocket = () => {
         const error = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
         registerReconcileErrorSample(error);
         const correctedTarget = camera.position.clone().add(new THREE.Vector3(dx, dy, dz));
-        // Emergency stability mode: suppress soft corrections to avoid movement stalls.
-        // Apply reconciliation only for large desyncs.
-        if (error >= localReconcileEmergencySnapDistance) {
+        if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('hard');
           camera.position.copy(correctedTarget);
           constrainPlayerToWorld();
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
+        } else if (error >= localReconcileSoftError) {
+          reconcileStats.correctionsInWindow += 1;
+          registerCorrectionEvent('soft');
+          localReconcileTarget = correctedTarget;
+          localReconcileExpiresAt = performance.now() + localReconcileExpireMs;
         }
       }
       return;
