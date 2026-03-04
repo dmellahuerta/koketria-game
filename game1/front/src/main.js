@@ -1643,6 +1643,7 @@ const shootables = [];
 shootables.push(floor);
 const pillarBounds = [];
 const playerCollisionRadius = 0.55;
+const playerPillarCollisionFactor = 0.9;
 const mapPillarCount = 180;
 const mapBorderSegments = 42;
 const mapAxisXBase = 118;
@@ -7211,13 +7212,14 @@ const sendLocalPlayerState = (force = false) => {
 };
 
 const collidesWithPillar = (x, z) => {
+  const pillarRadius = playerCollisionRadius * playerPillarCollisionFactor;
   for (let i = 0; i < pillarBounds.length; i += 1) {
     const pillar = pillarBounds[i];
     if (
-      x + playerCollisionRadius > pillar.minX
-      && x - playerCollisionRadius < pillar.maxX
-      && z + playerCollisionRadius > pillar.minZ
-      && z - playerCollisionRadius < pillar.maxZ
+      x + pillarRadius > pillar.minX
+      && x - pillarRadius < pillar.maxX
+      && z + pillarRadius > pillar.minZ
+      && z - pillarRadius < pillar.maxZ
     ) {
       return true;
     }

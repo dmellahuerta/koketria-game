@@ -185,6 +185,7 @@ const MAP_AXIS_Z_BASE: f64 = 96.0;
 const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
+const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.9;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
 const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
 const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
@@ -3821,7 +3822,12 @@ fn resolve_player_position(
 
 fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64) -> bool {
     is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS + 0.05)
-        && !collides_with_map_box(meta, x, z, PLAYER_COLLISION_RADIUS)
+        && !collides_with_map_box(
+            meta,
+            x,
+            z,
+            PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
+        )
 }
 
 fn collides_with_map_box(meta: &RoomMeta, x: f64, z: f64, radius: f64) -> bool {
