@@ -32,3 +32,8 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - player yaw/pitch + vector forward(x,z)
   - para cada tipo de pickup: nearestIndex, nearestPosition, nearestDelta(x,z), nearestDistance.
 - Motivo: poder diseñar trayectorias Playwright precisas hacia pickups y validar toma/sincronía.
+
+- Nuevo helper local: `scripts/wgtest.sh`
+  - Encapsula `nodenv` + variables (`CODEX_HOME`, `WEB_GAME_CLIENT`, `WEB_GAME_ACTIONS`) para no repetir el comando largo.
+  - Uso base: `./scripts/wgtest.sh`
+  - Overrides útiles: `WG_URL`, `WG_ITERATIONS`, `WG_PAUSE_MS`, `WG_SCREENSHOT_DIR`, `WG_ACTIONS_FILE`.
