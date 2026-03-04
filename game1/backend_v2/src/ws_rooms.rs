@@ -448,6 +448,68 @@ impl Inner {
         }
     }
 
+    fn lobby_waiting_players_json(&self) -> Vec<Value> {
+        let mut players: Vec<Value> = self
+            .clients
+            .values()
+            .filter(|client| !client.is_bot && client.room_id.is_none())
+            .map(|client| {
+                json!({
+                  "id": client.id,
+                  "name": client.name,
+                  "character": client.character,
+                })
+            })
+            .collect();
+        players.sort_by(|a, b| {
+            let an = a
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let bn = b
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            an.cmp(&bn)
+        });
+        players
+    }
+
+    fn broadcast_lobby_waiting_clients(&self, payload: Value) {
+        let text = payload.to_string();
+        for client in self.clients.values() {
+            if client.is_bot || client.room_id.is_some() {
+                continue;
+            }
+            let _ = client.tx.send(text.clone());
+        }
+    }
+
+    fn broadcast_lobby_presence(&self) {
+        self.broadcast_lobby_waiting_clients(json!({
+          "type": "lobby_presence",
+          "ok": true,
+          "data": {
+            "players": self.lobby_waiting_players_json()
+          }
+        }));
+    }
+
+    fn broadcast_lobby_chat(&self, from_client_id: &str, from_name: &str, text: &str, ts: i64) {
+        self.broadcast_lobby_waiting_clients(json!({
+          "type":"lobby_chat_message",
+          "ok": true,
+          "data": {
+            "playerId": from_client_id,
+            "playerName": from_name,
+            "text": text,
+            "ts": ts
+          }
+        }));
+    }
+
     fn room_summary_json(&self, room_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
         let meta = self.room_meta.get(room_id);
@@ -624,13 +686,20 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
               "ts": now_ms(),
               "state": player_state_json(&initial_state)
             },
-            "rooms": inner.public_rooms_json()
+            "rooms": inner.public_rooms_json(),
+            "lobby": {
+              "players": inner.lobby_waiting_players_json()
+            }
           }
         });
         (client_id, connected_payload)
     };
     info!("[ws_rooms] connected client_id={}", client_id);
     let _ = out_tx.send(connected_payload.to_string());
+    {
+        let inner = state.inner.lock().await;
+        inner.broadcast_lobby_presence();
+    }
     let ping_state = Arc::clone(&state);
     let ping_client_id = client_id.clone();
     let ping_task = tokio::spawn(async move {
@@ -733,6 +802,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         let mut inner = state.inner.lock().await;
         let countdown = leave_room_internal(&mut inner, &client_id, false);
         inner.clients.remove(&client_id);
+        inner.broadcast_lobby_presence();
         countdown
     };
     if let Some((room_id, winner_team)) = maybe_versus_countdown {
@@ -765,6 +835,48 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 client_id,
                 json!({ "type": "rooms_list", "ok": true, "data": inner.public_rooms_json() }),
             );
+        }
+        "set_profile" => {
+            let mut changed = false;
+            if let Some(name) = message.get("playerName").and_then(Value::as_str) {
+                let trimmed = name.trim().chars().take(24).collect::<String>();
+                if trimmed.chars().count() >= 2 {
+                    if let Some(entry) = inner.clients.get_mut(client_id) {
+                        if entry.name != trimmed {
+                            entry.name = trimmed;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if let Some(character) = message.get("character").and_then(Value::as_str) {
+                let normalized = normalize_character(Some(character));
+                if let Some(entry) = inner.clients.get_mut(client_id) {
+                    if entry.character.as_deref() != Some(normalized.as_str()) {
+                        entry.character = Some(normalized);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                inner.broadcast_lobby_presence();
+            }
+            if let Some(entry) = inner.clients.get(client_id) {
+                inner.send_to(
+                    client_id,
+                    json!({
+                      "type": "profile_updated",
+                      "ok": true,
+                      "data": {
+                        "player": {
+                          "id": entry.id,
+                          "name": entry.name,
+                          "character": entry.character
+                        }
+                      }
+                    }),
+                );
+            }
         }
         "ping" => {
             // legacy ping from old clients, kept for compatibility.
@@ -1058,9 +1170,6 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             }
         }
         "chat_message" => {
-            let Some(room_id) = client.room_id.clone() else {
-                return;
-            };
             let text = message
                 .get("text")
                 .and_then(Value::as_str)
@@ -1072,6 +1181,10 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if text.is_empty() {
                 return;
             }
+            let Some(room_id) = client.room_id.clone() else {
+                inner.broadcast_lobby_chat(client_id, &client.name, &text, now_ms());
+                return;
+            };
             if let Some(requested) = parse_addbot_count(&text) {
                 let mut added_ids: Vec<String> = Vec::new();
                 for _ in 0..requested {
@@ -2534,6 +2647,7 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     }
     inner.broadcast_room_state(room_id);
     inner.broadcast_rooms_list_all();
+    inner.broadcast_lobby_presence();
 }
 
 fn leave_room_internal(
@@ -2572,6 +2686,7 @@ fn leave_room_internal(
     let maybe_versus_winner_team = infer_versus_winner_after_leave(inner, &room_id, leaving_team);
     inner.broadcast_room_state(&room_id);
     inner.broadcast_rooms_list_all();
+    inner.broadcast_lobby_presence();
     if send_left_room {
         inner.send_to(
             client_id,

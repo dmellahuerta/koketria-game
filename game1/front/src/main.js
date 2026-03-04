@@ -39,15 +39,26 @@ app.innerHTML = `
   </section>
   <div id="lobbyMatrixBackdrop" aria-hidden="true"></div>
 
+  <section id="nameGate" class="hidden">
+    <div class="name-gate-card">
+      <h1>Koketria Game</h1>
+      <p>Ingresa tu nombre para entrar al lobby</p>
+      <label>
+        Nombre de jugador
+        <input id="nameGateInput" maxlength="24" placeholder="Neo" autocomplete="off" />
+      </label>
+      <button id="nameGateSubmitBtn" type="button">Entrar al Lobby</button>
+      <p id="nameGateError" class="error hidden"></p>
+    </div>
+  </section>
+
   <section id="lobby" class="hidden">
     <div class="lobby-layout">
       <div class="lobby-main">
         <h1>Koketria Game</h1>
         <p id="connectionStatus">Conectando al backend...</p>
-        <label>
-          Nombre de jugador
-          <input id="playerName" maxlength="24" placeholder="Neo" />
-        </label>
+        <input id="playerName" type="hidden" />
+        <p id="playerNameBadge" class="player-name-badge">Jugador: -</p>
         <label>
           Personaje
           <select id="characterSelect">
@@ -69,6 +80,16 @@ app.innerHTML = `
         <div id="roomList" class="room-list"></div>
         <p id="lobbyError" class="error hidden"></p>
       </div>
+      <aside class="lobby-side">
+        <h3>Conectados en Lobby</h3>
+        <div id="lobbyUsersList" class="lobby-users-list"></div>
+        <h3>Chat Lobby</h3>
+        <div id="lobbyChatLog" class="lobby-chat-log"></div>
+        <div class="lobby-chat-input">
+          <input id="lobbyChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby..." autocomplete="off" />
+          <button id="lobbyChatSendBtn" type="button">Enviar</button>
+        </div>
+      </aside>
     </div>
   </section>
 
@@ -320,9 +341,14 @@ const bootLoader = document.querySelector('#bootLoader');
 const bootLoaderText = document.querySelector('#bootLoaderText');
 const bootLoaderFill = document.querySelector('#bootLoaderFill');
 const bootLoaderPercent = document.querySelector('#bootLoaderPercent');
+const nameGate = document.querySelector('#nameGate');
+const nameGateInput = document.querySelector('#nameGateInput');
+const nameGateSubmitBtn = document.querySelector('#nameGateSubmitBtn');
+const nameGateError = document.querySelector('#nameGateError');
 const lobbySection = document.querySelector('#lobby');
 const connectionStatus = document.querySelector('#connectionStatus');
 const playerNameInput = document.querySelector('#playerName');
+const playerNameBadge = document.querySelector('#playerNameBadge');
 const characterSelect = document.querySelector('#characterSelect');
 const characterPreview = document.querySelector('#characterPreview');
 const refreshRoomsBtn = document.querySelector('#refreshRoomsBtn');
@@ -332,6 +358,10 @@ const lobbyMusicVolume = document.querySelector('#lobbyMusicVolume');
 const lobbyMusicVolumeValue = document.querySelector('#lobbyMusicVolumeValue');
 const roomList = document.querySelector('#roomList');
 const lobbyError = document.querySelector('#lobbyError');
+const lobbyUsersList = document.querySelector('#lobbyUsersList');
+const lobbyChatLog = document.querySelector('#lobbyChatLog');
+const lobbyChatInput = document.querySelector('#lobbyChatInput');
+const lobbyChatSendBtn = document.querySelector('#lobbyChatSendBtn');
 const versusLobby = document.querySelector('#versusLobby');
 const versusLobbyMusicVolume = document.querySelector('#versusLobbyMusicVolume');
 const versusLobbyMusicVolumeValue = document.querySelector('#versusLobbyMusicVolumeValue');
@@ -444,6 +474,8 @@ const state = {
   self: null,
   rooms: [],
   joinedRoom: null,
+  profileReady: false,
+  lobbyUsers: [],
   remotePlayers: new Map(),
   lastStateSentAt: 0,
   showMatchInfo: false,
@@ -486,11 +518,14 @@ const tuningPerfStats = {
 const chatMessages = [];
 const maxChatMessages = 40;
 const chatMessageTtlMs = 8000;
+const lobbyChatMessages = [];
+const maxLobbyChatMessages = 80;
 const versusChatMessages = [];
 const maxVersusChatMessages = 60;
 let isChatTyping = false;
 let isOptionsOpen = false;
 const settingsStorageKey = 'koketria_settings_v1';
+const playerNameStorageKey = 'koketria_player_name_v1';
 const settings = {
   mouseSensitivity: 1,
   masterVolume: 1,
@@ -756,6 +791,92 @@ const setLobbyError = (message = '') => {
 
   lobbyError.classList.remove('hidden');
   lobbyError.textContent = message;
+};
+
+const setNameGateError = (message = '') => {
+  if (!nameGateError) {
+    return;
+  }
+  if (!message) {
+    nameGateError.classList.add('hidden');
+    nameGateError.textContent = '';
+    return;
+  }
+  nameGateError.classList.remove('hidden');
+  nameGateError.textContent = message;
+};
+
+const sanitizePlayerName = (value) => {
+  const trimmed = String(value || '').trim().replace(/\s+/g, ' ');
+  return trimmed.slice(0, 24);
+};
+
+const renderPlayerNameBadge = () => {
+  if (!playerNameBadge) {
+    return;
+  }
+  const fallback = sanitizePlayerName(playerNameInput?.value || '');
+  const name = sanitizePlayerName(state.self?.name || fallback || 'Sin nombre');
+  playerNameBadge.textContent = `Jugador: ${name}`;
+};
+
+const renderLobbyUsers = () => {
+  if (!lobbyUsersList) {
+    return;
+  }
+  const users = Array.isArray(state.lobbyUsers) ? state.lobbyUsers : [];
+  if (users.length === 0) {
+    lobbyUsersList.innerHTML = '<p class="room-empty">No hay jugadores esperando.</p>';
+    return;
+  }
+  lobbyUsersList.innerHTML = users.map((user) => {
+    const name = sanitizePlayerName(user?.name || 'Player');
+    const me = state.self && String(user?.id || '') === String(state.self.id || '') ? ' (Tú)' : '';
+    return `<p><strong>${name}${me}</strong></p>`;
+  }).join('');
+};
+
+const renderLobbyChat = () => {
+  if (!lobbyChatLog) {
+    return;
+  }
+  const recent = lobbyChatMessages.slice(-18);
+  lobbyChatLog.innerHTML = recent.map((msg) => {
+    const selfTag = msg.isSelf ? ' (Tú)' : '';
+    return `<p><strong>${msg.playerName}${selfTag}:</strong> ${msg.text}</p>`;
+  }).join('');
+  lobbyChatLog.scrollTop = lobbyChatLog.scrollHeight;
+};
+
+const pushLobbyChatMessage = (playerName, text) => {
+  const normalizedText = String(text || '').trim();
+  if (!normalizedText) {
+    return;
+  }
+  const normalizedName = sanitizePlayerName(playerName || 'Player');
+  const isSelf = Boolean(state.self && normalizedName === sanitizePlayerName(state.self.name || ''));
+  lobbyChatMessages.push({
+    playerName: normalizedName,
+    text: normalizedText.slice(0, 180),
+    isSelf,
+    ts: Date.now(),
+  });
+  if (lobbyChatMessages.length > maxLobbyChatMessages) {
+    lobbyChatMessages.splice(0, lobbyChatMessages.length - maxLobbyChatMessages);
+  }
+  renderLobbyChat();
+};
+
+const setProfileReady = (value) => {
+  state.profileReady = Boolean(value);
+  syncLobbyScreens();
+};
+
+const getCurrentPlayerName = () => sanitizePlayerName(playerNameInput?.value || state.self?.name || '');
+
+const canUseProfileForLobby = () => {
+  const name = getCurrentPlayerName();
+  return name.length >= 2;
 };
 
 const clampSetting = (value, min, max, fallback) => {
@@ -1247,12 +1368,17 @@ const isInVersusWaitingLobby = () => {
 };
 
 const syncLobbyScreens = () => {
+  const bootHidden = !bootLoader || bootLoader.classList.contains('hidden');
+  const showNameGate = bootHidden && !state.profileReady && !state.joinedRoom;
   const showVersusLobby = isInVersusWaitingLobby();
+  if (nameGate) {
+    nameGate.classList.toggle('hidden', !showNameGate);
+  }
   if (versusLobby) {
     versusLobby.classList.toggle('hidden', !showVersusLobby);
   }
   if (lobbySection) {
-    if (showVersusLobby) {
+    if (showNameGate || showVersusLobby) {
       lobbySection.classList.add('hidden');
     } else {
       lobbySection.classList.remove('hidden');
@@ -1550,11 +1676,16 @@ const renderRooms = () => {
     `;
 
     card.querySelector('button').addEventListener('click', () => {
+      if (!canUseProfileForLobby()) {
+        setNameGateError('Define tu nombre para unirte a una sala.');
+        setProfileReady(false);
+        return;
+      }
       setLobbyError();
       sendWs({
         type: 'join_room',
         roomId: room.id,
-        playerName: playerNameInput.value.trim(),
+        playerName: getCurrentPlayerName(),
         character: characterSelect.value || activeCharacter,
       });
     });
@@ -2607,9 +2738,10 @@ const bootLobbyLoader = async () => {
   if (bootLoader) {
     bootLoader.classList.add('hidden');
   }
-  if (lobbySection) {
-    lobbySection.classList.remove('hidden');
-  }
+  syncLobbyScreens();
+  renderPlayerNameBadge();
+  renderLobbyUsers();
+  renderLobbyChat();
   if (preloadWarnings.length > 0) {
     updateBootLoader(done, totalTasks, `Cargado con advertencias (${preloadWarnings.length})`);
   }
@@ -6058,22 +6190,64 @@ const connectWebSocket = () => {
 
     if (payload.type === 'connected') {
       state.self = payload.data.player;
-      playerNameInput.value = state.self.name;
+      const storedName = sanitizePlayerName(localStorage.getItem(playerNameStorageKey) || '');
+      const preferredName = storedName || sanitizePlayerName(state.self.name || '');
+      playerNameInput.value = preferredName;
+      if (nameGateInput) {
+        nameGateInput.value = preferredName;
+      }
+      state.lobbyUsers = Array.isArray(payload.data?.lobby?.players) ? payload.data.lobby.players : [];
       if (state.self.character && availableCharacters.includes(state.self.character)) {
         activeCharacter = state.self.character;
         characterSelect.value = state.self.character;
       }
       configureLocalAttackSound(state.self.character || activeCharacter);
       state.rooms = payload.data.rooms || [];
+      renderPlayerNameBadge();
+      renderLobbyUsers();
+      renderLobbyChat();
       mountPreviewModel();
       renderRooms();
       syncLobbyScreens();
+      if (state.profileReady) {
+        sendWs({
+          type: 'set_profile',
+          playerName: sanitizePlayerName(playerNameInput.value),
+          character: characterSelect.value || activeCharacter,
+        });
+      }
       return;
     }
 
     if (payload.type === 'rooms_list') {
       state.rooms = payload.data || [];
       renderRooms();
+      return;
+    }
+
+    if (payload.type === 'lobby_presence') {
+      state.lobbyUsers = Array.isArray(payload.data?.players) ? payload.data.players : [];
+      renderLobbyUsers();
+      return;
+    }
+
+    if (payload.type === 'lobby_chat_message') {
+      const msg = payload.data || {};
+      const playerName = String(msg.playerName || 'Player');
+      const text = String(msg.text || '');
+      pushLobbyChatMessage(playerName, text);
+      return;
+    }
+
+    if (payload.type === 'profile_updated') {
+      const nextName = sanitizePlayerName(payload.data?.player?.name || '');
+      if (nextName) {
+        if (state.self) {
+          state.self.name = nextName;
+        }
+        playerNameInput.value = nextName;
+        renderPlayerNameBadge();
+      }
       return;
     }
 
@@ -6799,6 +6973,8 @@ const connectWebSocket = () => {
     localAvatar.team = null;
     ensureLocalTeamOutline();
     versusChatMessages.length = 0;
+    state.lobbyUsers = [];
+    renderLobbyUsers();
     renderVersusChat();
     updateHud();
     syncLobbyScreens();
@@ -6821,22 +6997,96 @@ characterSelect.addEventListener('change', () => {
   ensureCharacterResource(activeCharacter);
   ensureLocalAvatar();
   mountPreviewModel();
+  if (state.profileReady) {
+    sendWs({
+      type: 'set_profile',
+      playerName: getCurrentPlayerName(),
+      character: activeCharacter,
+    });
+  }
   updateHud();
 });
 
+const submitNameGate = () => {
+  const candidate = sanitizePlayerName(nameGateInput?.value || '');
+  if (candidate.length < 2) {
+    setNameGateError('Ingresa un nombre de al menos 2 caracteres.');
+    return;
+  }
+  setNameGateError();
+  playerNameInput.value = candidate;
+  if (state.self) {
+    state.self.name = candidate;
+  }
+  localStorage.setItem(playerNameStorageKey, candidate);
+  renderPlayerNameBadge();
+  setProfileReady(true);
+  sendWs({
+    type: 'set_profile',
+    playerName: candidate,
+    character: characterSelect.value || activeCharacter,
+  });
+};
+
+nameGateSubmitBtn?.addEventListener('click', () => {
+  submitNameGate();
+});
+
+nameGateInput?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') {
+    return;
+  }
+  event.preventDefault();
+  submitNameGate();
+});
+
 refreshRoomsBtn.addEventListener('click', () => {
+  if (!state.profileReady) {
+    setNameGateError('Define tu nombre para entrar al lobby.');
+    return;
+  }
   sendWs({ type: 'list_rooms' });
   loadCatalogs();
 });
 
 createVersusBtn.addEventListener('click', () => {
+  if (!canUseProfileForLobby()) {
+    setNameGateError('Define tu nombre para crear una sala.');
+    setProfileReady(false);
+    return;
+  }
   setLobbyError();
   sendWs({
     type: 'create_room',
     mode: 'versusmatch',
-    playerName: playerNameInput.value.trim(),
+    playerName: getCurrentPlayerName(),
     character: characterSelect.value || activeCharacter,
   });
+});
+
+const sendLobbyChatMessage = () => {
+  if (!state.profileReady || state.joinedRoom) {
+    return;
+  }
+  const text = String(lobbyChatInput?.value || '').trim();
+  if (!text) {
+    return;
+  }
+  sendWs({ type: 'chat_message', text });
+  lobbyChatInput.value = '';
+  lobbyChatInput.focus();
+};
+
+lobbyChatSendBtn?.addEventListener('click', () => {
+  sendLobbyChatMessage();
+});
+
+lobbyChatInput?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') {
+    return;
+  }
+  event.preventDefault();
+  sendLobbyChatMessage();
 });
 
 versusTypeSelect.addEventListener('change', () => {
@@ -9940,6 +10190,11 @@ document.addEventListener('fullscreenchange', syncMobileFullscreenPrompt);
 loadSettings();
 syncOptionsUi();
 applyGameSettings();
+const initialStoredName = sanitizePlayerName(localStorage.getItem(playerNameStorageKey) || '');
+if (initialStoredName && nameGateInput) {
+  nameGateInput.value = initialStoredName;
+  playerNameInput.value = initialStoredName;
+}
 setInRoom(false);
 applyWeather('night');
 setupCharacterPreview();
@@ -9948,6 +10203,10 @@ syncMobileControlsVisibility();
 updateRespawnOverlay();
 updateHud();
 renderRooms();
+renderLobbyUsers();
+renderLobbyChat();
+renderPlayerNameBadge();
+syncLobbyScreens();
 if (mainPortalLink) {
   mainPortalLink.href = resolveMainPortalUrl();
 }
