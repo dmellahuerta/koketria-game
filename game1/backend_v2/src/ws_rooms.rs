@@ -213,8 +213,7 @@ const SPAWN_POINT_COUNT: usize = 20;
 const MAP_PILLAR_COUNT: usize = 220;
 const MAP_AXIS_X_BASE: f64 = 118.0;
 const MAP_AXIS_Z_BASE: f64 = 96.0;
-const MAP_BOUNDARY_MIN_RADIUS: f64 = 1.02;
-const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.14;
+const MAP_PLAYABLE_HALF_EXTENT: f64 = 150.0;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
@@ -5791,25 +5790,9 @@ fn fnv1a_update_i64(hash: u64, value: i64) -> u64 {
     fnv1a_update_u64(hash, value as u64)
 }
 
-fn map_boundary_radius(profile: &MapProfile, theta: f64) -> f64 {
-    let wave_a = ((theta * profile.freq1) + profile.phase1).sin() * profile.amp1;
-    let wave_b = ((theta * profile.freq2) + profile.phase2).sin() * profile.amp2;
-    let wave_c = ((theta * profile.freq3) + profile.phase3).cos() * profile.amp3;
-    clamp(
-        1.0 + wave_a + wave_b + wave_c,
-        MAP_BOUNDARY_MIN_RADIUS,
-        MAP_BOUNDARY_MAX_RADIUS,
-    )
-}
-
-fn is_inside_map_bounds(profile: &MapProfile, x: f64, z: f64, padding: f64) -> bool {
-    let theta = (z / profile.axis_z.max(1.0)).atan2(x / profile.axis_x.max(1.0));
-    let boundary = map_boundary_radius(profile, theta);
-    let norm = ((x * x) / (profile.axis_x * profile.axis_x)
-        + (z * z) / (profile.axis_z * profile.axis_z))
-        .sqrt();
-    let normalized_padding = padding / profile.axis_x.min(profile.axis_z).max(1.0);
-    norm <= (boundary - normalized_padding)
+fn is_inside_map_bounds(_profile: &MapProfile, x: f64, z: f64, padding: f64) -> bool {
+    let limit = (MAP_PLAYABLE_HALF_EXTENT - padding.max(0.0)).max(8.0);
+    x.abs() <= limit && z.abs() <= limit
 }
 
 struct SeededRng {

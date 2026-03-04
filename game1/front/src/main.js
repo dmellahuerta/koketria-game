@@ -1902,6 +1902,7 @@ const mapAxisZBase = 96;
 const mapBoundaryMinRadius = 1.02;
 const mapBoundaryMaxRadius = 1.14;
 const mapHalfExtent = 156;
+const mapPlayableHalfExtent = mapHalfExtent - 6;
 const terrainBaseY = -2.25;
 const mapBoundsPadding = playerCollisionRadius * 0.2;
 let currentMapSeed = null;
@@ -3897,19 +3898,14 @@ const isInsideMapBounds = (x, z, padding = 0) => {
   return norm <= (boundary - normalizedPadding);
 };
 
+const isInsidePlayableBounds = (x, z, padding = 0) => {
+  const limit = Math.max(8, mapPlayableHalfExtent - Math.max(0, padding));
+  return Math.abs(x) <= limit && Math.abs(z) <= limit;
+};
+
 const getMapEdgeMargin = (x, z, padding = 0) => {
-  if (!currentMapProfile) {
-    return Number.POSITIVE_INFINITY;
-  }
-  const theta = getMapTheta(currentMapProfile, x, z);
-  const boundary = getMapBoundaryRadius(currentMapProfile, theta);
-  const norm = Math.sqrt(
-    (x * x) / (currentMapProfile.axisX * currentMapProfile.axisX)
-    + (z * z) / (currentMapProfile.axisZ * currentMapProfile.axisZ),
-  );
-  const normalizedPadding = padding / Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
-  const marginNorm = (boundary - normalizedPadding) - norm;
-  return marginNorm * Math.max(1, Math.min(currentMapProfile.axisX, currentMapProfile.axisZ));
+  const limit = Math.max(8, mapPlayableHalfExtent - Math.max(0, padding));
+  return Math.min(limit - Math.abs(x), limit - Math.abs(z));
 };
 
 const clampPointToMapBounds = (x, z, padding = 0) => {
@@ -3930,6 +3926,14 @@ const clampPointToMapBounds = (x, z, padding = 0) => {
   const safeNorm = Math.max(0.0001, norm);
   const ratio = maxNorm / safeNorm;
   return { x: x * ratio, z: z * ratio };
+};
+
+const clampPointToPlayableBounds = (x, z, padding = 0) => {
+  const limit = Math.max(8, mapPlayableHalfExtent - Math.max(0, padding));
+  return {
+    x: Math.max(-limit, Math.min(limit, x)),
+    z: Math.max(-limit, Math.min(limit, z)),
+  };
 };
 
 const getTerrainSurfaceYAt = (x, z) => {
@@ -8035,7 +8039,7 @@ const getNearestExpandedPillarDistance = (x, z) => {
 };
 
 const getWalkabilityState = (x, z) => {
-  const insideMap = isInsideMapBounds(x, z, mapBoundsPadding);
+  const insideMap = isInsidePlayableBounds(x, z, mapBoundsPadding);
   const pillarHit = collidesWithPillar(x, z);
   return {
     insideMap,
@@ -8049,7 +8053,7 @@ const isWalkablePoint = (x, z) => {
 };
 
 const findNearestWalkablePoint = (originX, originZ) => {
-  const start = clampPointToMapBounds(originX, originZ, mapBoundsPadding);
+  const start = clampPointToPlayableBounds(originX, originZ, mapBoundsPadding);
   if (isWalkablePoint(start.x, start.z)) {
     return start;
   }
@@ -8059,7 +8063,7 @@ const findNearestWalkablePoint = (originX, originZ) => {
     const samples = 24;
     for (let i = 0; i < samples; i += 1) {
       const theta = (i / samples) * Math.PI * 2;
-      const candidate = clampPointToMapBounds(
+      const candidate = clampPointToPlayableBounds(
         start.x + (Math.cos(theta) * radius),
         start.z + (Math.sin(theta) * radius),
         mapBoundsPadding,
@@ -8076,8 +8080,8 @@ const findNearestWalkablePoint = (originX, originZ) => {
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
-  const targetInsideMap = isInsideMapBounds(targetX, targetZ, mapBoundsPadding);
-  const bounded = clampPointToMapBounds(targetX, targetZ, mapBoundsPadding);
+  const targetInsideMap = isInsidePlayableBounds(targetX, targetZ, mapBoundsPadding);
+  const bounded = clampPointToPlayableBounds(targetX, targetZ, mapBoundsPadding);
   const desiredX = bounded.x;
   const desiredZ = bounded.z;
   const desiredState = getWalkabilityState(desiredX, desiredZ);
