@@ -691,7 +691,12 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         let msg = match next {
             Ok(v) => v,
             Err(err) => {
-                warn!("ws_rooms receive error: {}", err);
+                let err_text = err.to_string();
+                if err_text.contains("Connection reset without closing handshake") {
+                    debug!("ws_rooms receive closed/reset connection: {}", err_text);
+                } else {
+                    warn!("ws_rooms receive error: {}", err_text);
+                }
                 break;
             }
         };
