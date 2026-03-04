@@ -217,7 +217,7 @@ async fn run_bot(
 
     let mut probe_sent_at: HashMap<String, Instant> = HashMap::new();
     let phase = (idx as f64) * 0.37;
-    let jitter_sign = if idx.is_multiple_of(2) { 1.0 } else { -1.0 };
+    let jitter_sign = if idx % 2 == 0 { 1.0 } else { -1.0 };
 
     while Instant::now() < end_at {
         tokio::select! {
