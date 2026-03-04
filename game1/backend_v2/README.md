@@ -59,6 +59,16 @@ Parámetros principales:
 - `--shoot-ms`: intervalo de `player_shoot` por bot.
 - `--ping-ms`: intervalo de `ping` por bot.
 
+Matriz automática por escalones (`5 10 20 30` por defecto):
+
+```bash
+WS_URL=ws://127.0.0.1:3001/ws \
+ROOM_ID=main \
+DURATION_SECS=120 \
+BOTS_MATRIX="5 10 20 30" \
+bash game1/backend_v2/scripts/run_ws_load_matrix.sh
+```
+
 ## Salas y jugabilidad (Rust)
 
 Se agrego el dominio de salas/versus en:
