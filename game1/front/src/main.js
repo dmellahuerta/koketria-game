@@ -200,6 +200,7 @@ app.innerHTML = `
       <p>Correcciones/s: <span id="corrRateValue">0.00</span></p>
       <p>Corr soft/hard s: <span id="corrSplitValue">0.00 / 0.00</span></p>
       <p>Late ACK/s: <span id="lateAckRateValue">0.00</span></p>
+      <p>Remote interp/extrap ms: <span id="remoteNetWindowValue">0 / 0</span></p>
       <p>Streak corr max: <span id="corrStreakValue">0 / 0</span></p>
       <p>Velocidad local: <span id="localSpeedValue">0.00</span></p>
       <p>Bypass colisión ms: <span id="collisionBypassValue">0</span></p>
@@ -395,6 +396,7 @@ const predErrValue = document.querySelector('#predErrValue');
 const corrRateValue = document.querySelector('#corrRateValue');
 const corrSplitValue = document.querySelector('#corrSplitValue');
 const lateAckRateValue = document.querySelector('#lateAckRateValue');
+const remoteNetWindowValue = document.querySelector('#remoteNetWindowValue');
 const corrStreakValue = document.querySelector('#corrStreakValue');
 const localSpeedValue = document.querySelector('#localSpeedValue');
 const collisionBypassValue = document.querySelector('#collisionBypassValue');
@@ -921,6 +923,7 @@ const renderPerfPanel = () => {
   corrRateValue.textContent = reconcileStats.correctionsPerSec.toFixed(2);
   corrSplitValue.textContent = `${tuningPerfStats.softCorrectionsPerSec.toFixed(2)} / ${tuningPerfStats.hardCorrectionsPerSec.toFixed(2)}`;
   lateAckRateValue.textContent = reconcileStats.lateAcksPerSec.toFixed(2);
+  remoteNetWindowValue.textContent = `${Math.round(remoteInterpolationDynamicMs)} / ${Math.round(remoteExtrapolationDynamicMs)}`;
   corrStreakValue.textContent = `${tuningPerfStats.correctionStreak} / ${tuningPerfStats.correctionStreakMax}`;
   localSpeedValue.textContent = tuningPerfStats.localSpeed.toFixed(2);
   collisionBypassValue.textContent = String(Math.max(0, Math.ceil(localCollisionBypassUntil - performance.now())));
@@ -7357,6 +7360,8 @@ const logTuningSnapshot = () => {
       latencyMs: Number.isFinite(state.latencyMs) ? Number(state.latencyMs.toFixed(2)) : null,
       ackRttAvgMs: Number(ackAvg.toFixed(2)),
       ackRttP95Ms: Number(ackP95.toFixed(2)),
+      remoteInterpMs: Number(remoteInterpolationDynamicMs.toFixed(1)),
+      remoteExtrapMs: Number(remoteExtrapolationDynamicMs.toFixed(1)),
       shotAckAvgMs: Number(shotAckAvg.toFixed(2)),
       shotAckP95Ms: Number(shotAckP95.toFixed(2)),
       shotAckPerSec: Number(tuningPerfStats.shotAcksPerSec.toFixed(2)),
