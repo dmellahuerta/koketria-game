@@ -216,7 +216,7 @@ const MAP_AXIS_Z_BASE: f64 = 96.0;
 const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
 const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
-const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.9;
+const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
 const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
 const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
@@ -5547,8 +5547,43 @@ fn resolve_player_position_with_radius(
     if is_valid_player_position(meta, desired_x, desired_z, collision_radius) {
         return (desired_x, desired_z);
     }
+    // Axis slide fallback reduces corner snagging against AABB pillars.
+    if is_valid_player_position(meta, desired_x, prev_z, collision_radius) {
+        return (desired_x, prev_z);
+    }
+    if is_valid_player_position(meta, prev_x, desired_z, collision_radius) {
+        return (prev_x, desired_z);
+    }
     if is_valid_player_position(meta, prev_x, prev_z, collision_radius) {
         return (prev_x, prev_z);
+    }
+
+    let mut best_x = prev_x;
+    for i in 1..=10 {
+        let t = (i as f64) / 10.0;
+        let x = prev_x + (desired_x - prev_x) * t;
+        if is_valid_player_position(meta, x, prev_z, collision_radius) {
+            best_x = x;
+        } else {
+            break;
+        }
+    }
+    if is_valid_player_position(meta, best_x, prev_z, collision_radius) {
+        return (best_x, prev_z);
+    }
+
+    let mut best_z = prev_z;
+    for i in 1..=10 {
+        let t = (i as f64) / 10.0;
+        let z = prev_z + (desired_z - prev_z) * t;
+        if is_valid_player_position(meta, prev_x, z, collision_radius) {
+            best_z = z;
+        } else {
+            break;
+        }
+    }
+    if is_valid_player_position(meta, prev_x, best_z, collision_radius) {
+        return (prev_x, best_z);
     }
 
     let mut last_valid = (prev_x, prev_z);

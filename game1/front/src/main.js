@@ -1834,7 +1834,7 @@ const shootables = [];
 shootables.push(floor);
 const pillarBounds = [];
 const playerCollisionRadius = 0.55;
-const playerPillarCollisionFactor = 0.9;
+const playerPillarCollisionFactor = 0.82;
 const mapPillarCount = 180;
 const mapBorderSegments = 42;
 const mapAxisXBase = 118;
@@ -7969,8 +7969,43 @@ const applyWorldCollisions = (targetX, targetZ) => {
   if (isWalkablePoint(desiredX, desiredZ)) {
     return { x: desiredX, z: desiredZ };
   }
+  // Axis slide fallback reduces corner snagging against AABB pillars.
+  if (isWalkablePoint(desiredX, currentZ)) {
+    return { x: desiredX, z: currentZ };
+  }
+  if (isWalkablePoint(currentX, desiredZ)) {
+    return { x: currentX, z: desiredZ };
+  }
   if (isWalkablePoint(currentX, currentZ)) {
     return { x: currentX, z: currentZ };
+  }
+
+  let bestX = currentX;
+  for (let i = 1; i <= 10; i += 1) {
+    const t = i / 10;
+    const sampleX = currentX + ((desiredX - currentX) * t);
+    if (isWalkablePoint(sampleX, currentZ)) {
+      bestX = sampleX;
+    } else {
+      break;
+    }
+  }
+  if (isWalkablePoint(bestX, currentZ)) {
+    return { x: bestX, z: currentZ };
+  }
+
+  let bestZ = currentZ;
+  for (let i = 1; i <= 10; i += 1) {
+    const t = i / 10;
+    const sampleZ = currentZ + ((desiredZ - currentZ) * t);
+    if (isWalkablePoint(currentX, sampleZ)) {
+      bestZ = sampleZ;
+    } else {
+      break;
+    }
+  }
+  if (isWalkablePoint(currentX, bestZ)) {
+    return { x: currentX, z: bestZ };
   }
 
   let lastValidX = currentX;
