@@ -3987,11 +3987,13 @@ const rebuildMapFromSeed = (seed, force = false) => {
     mesh.position.set(x, baseY, z);
     scene.add(mesh);
     ammoPickups.push({
+      index: i,
       mesh,
       baseY,
       phase: ammoRnd() * Math.PI * 2,
       active: true,
-      respawnAt: 0,
+      respawnAtMs: 0,
+      pendingRequestUntil: 0,
     });
   }
 
@@ -4006,11 +4008,13 @@ const rebuildMapFromSeed = (seed, force = false) => {
     mesh.position.set(x, baseY, z);
     scene.add(mesh);
     shieldPickups.push({
+      index: i,
       mesh,
       baseY,
       phase: shieldRnd() * Math.PI * 2,
       active: true,
-      respawnAt: 0,
+      respawnAtMs: 0,
+      pendingRequestUntil: 0,
     });
   }
 
@@ -4031,11 +4035,13 @@ const rebuildMapFromSeed = (seed, force = false) => {
     mesh.position.set(x, baseY, z);
     scene.add(mesh);
     healthPickups.push({
+      index: i,
       mesh,
       baseY,
       phase: healthRnd() * Math.PI * 2,
       active: true,
-      respawnAt: 0,
+      respawnAtMs: 0,
+      pendingRequestUntil: 0,
     });
   }
 
@@ -5883,6 +5889,7 @@ const applyRoomState = (roomState, options = {}) => {
       && currentMapCollisionHash !== serverMapCollisionHash,
   );
   rebuildMapFromSeed(roomSeed, shouldForceMapRebuild);
+  applyPickupStateSnapshot(roomState.room?.pickups);
   syncRemotePlayersFromRoom(roomState);
   syncLocalTeamFromRoom(roomState);
   applyWeather(roomState.room?.weather);
@@ -6348,6 +6355,24 @@ const connectWebSocket = () => {
       clampPendingHealthRegenToMissing();
       if (changed) {
         updateHud();
+      }
+      return;
+    }
+
+    if (payload.type === 'pickup_state') {
+      const kind = String(payload.data?.kind || '').trim().toLowerCase();
+      const index = Number(payload.data?.index);
+      const active = Boolean(payload.data?.active);
+      const respawnAtMs = Number(payload.data?.respawnAtMs || 0);
+      if (!Number.isFinite(index) || !kind) {
+        return;
+      }
+      if (kind === 'mana') {
+        applyPickupClientState(ammoPickups, index, active, respawnAtMs);
+      } else if (kind === 'shield') {
+        applyPickupClientState(shieldPickups, index, active, respawnAtMs);
+      } else if (kind === 'health') {
+        applyPickupClientState(healthPickups, index, active, respawnAtMs);
       }
       return;
     }
@@ -8009,32 +8034,58 @@ const shoot = () => {
   }
 };
 
-const collectAmmoPickup = (pickup, nowMs) => {
-  pickup.active = false;
-  pickup.respawnAt = nowMs + ammoPickupRespawnMs;
-  pickup.mesh.visible = false;
+const pickupRequestCooldownMs = 300;
 
-  if (isManaCharacter(activeCharacter)) {
-    sendWs({ type: 'player_pickup_mana' });
-  } else {
-    ammoReserve = Math.min(maxAmmoTotal, ammoReserve + ammoPickupAmount);
-    updateHud();
+const tryRequestPickup = (pickup, eventType) => {
+  if (!pickup || !Number.isFinite(Number(pickup.index))) {
+    return;
   }
+  const now = Date.now();
+  if (now < Number(pickup.pendingRequestUntil || 0)) {
+    return;
+  }
+  pickup.pendingRequestUntil = now + pickupRequestCooldownMs;
+  sendWs({
+    type: eventType,
+    index: Number(pickup.index),
+  });
 };
 
-const collectShieldPickup = (pickup, nowMs) => {
-  pickup.active = false;
-  pickup.respawnAt = nowMs + shieldPickupRespawnMs;
-  pickup.mesh.visible = false;
-
-  sendWs({ type: 'player_pickup_shield' });
+const applyPickupClientState = (collection, index, active, respawnAtMs = 0) => {
+  if (!Array.isArray(collection) || !Number.isFinite(Number(index))) {
+    return;
+  }
+  const pickup = collection[Number(index)];
+  if (!pickup?.mesh) {
+    return;
+  }
+  pickup.active = Boolean(active);
+  pickup.respawnAtMs = pickup.active ? 0 : Math.max(0, Number(respawnAtMs) || 0);
+  pickup.pendingRequestUntil = 0;
+  pickup.mesh.visible = pickup.active;
 };
 
-const collectHealthPickup = (pickup, nowMs) => {
-  pickup.active = false;
-  pickup.respawnAt = nowMs + healthPickupRespawnMs;
-  pickup.mesh.visible = false;
-  sendWs({ type: 'player_pickup_health' });
+const applyPickupStateSnapshot = (pickupsPayload) => {
+  if (!pickupsPayload || typeof pickupsPayload !== 'object') {
+    return;
+  }
+  const applyList = (kind, collection) => {
+    const list = pickupsPayload[kind];
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i] || {};
+      const index = Number(item.index);
+      if (!Number.isFinite(index)) {
+        continue;
+      }
+      applyPickupClientState(collection, index, Boolean(item.active), Number(item.respawnAtMs) || 0);
+    }
+  };
+  applyList('mana', ammoPickups);
+  applyList('shield', shieldPickups);
+  applyList('health', healthPickups);
 };
 
 const updateHealthRegen = (delta) => {
@@ -8234,15 +8285,16 @@ const updateJump = (delta) => {
 };
 
 const updateAmmoPickups = (delta) => {
-  const nowMs = performance.now();
-  const nowSeconds = nowMs / 1000;
+  const nowMs = Date.now();
+  const nowSeconds = performance.now() / 1000;
 
   for (let i = 0; i < ammoPickups.length; i += 1) {
     const pickup = ammoPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= pickup.respawnAt) {
+      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
         pickup.active = true;
+        pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
       } else {
         continue;
@@ -8266,21 +8318,30 @@ const updateAmmoPickups = (delta) => {
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
     if (horizontalDistanceSq <= 1.1 * 1.1) {
-      collectAmmoPickup(pickup, nowMs);
+      if (isManaCharacter(activeCharacter)) {
+        tryRequestPickup(pickup, 'player_pickup_mana');
+      } else {
+        pickup.active = false;
+        pickup.respawnAtMs = nowMs + ammoPickupRespawnMs;
+        pickup.mesh.visible = false;
+        ammoReserve = Math.min(maxAmmoTotal, ammoReserve + ammoPickupAmount);
+        updateHud();
+      }
     }
   }
 };
 
 const updateShieldPickups = (delta) => {
-  const nowMs = performance.now();
-  const nowSeconds = nowMs / 1000;
+  const nowMs = Date.now();
+  const nowSeconds = performance.now() / 1000;
 
   for (let i = 0; i < shieldPickups.length; i += 1) {
     const pickup = shieldPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= pickup.respawnAt) {
+      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
         pickup.active = true;
+        pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
       } else {
         continue;
@@ -8303,21 +8364,22 @@ const updateShieldPickups = (delta) => {
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
     if (horizontalDistanceSq <= 1.1 * 1.1) {
-      collectShieldPickup(pickup, nowMs);
+      tryRequestPickup(pickup, 'player_pickup_shield');
     }
   }
 };
 
 const updateHealthPickups = (delta) => {
-  const nowMs = performance.now();
-  const nowSeconds = nowMs / 1000;
+  const nowMs = Date.now();
+  const nowSeconds = performance.now() / 1000;
 
   for (let i = 0; i < healthPickups.length; i += 1) {
     const pickup = healthPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= pickup.respawnAt) {
+      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
         pickup.active = true;
+        pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
       } else {
         continue;
@@ -8341,7 +8403,7 @@ const updateHealthPickups = (delta) => {
     const dz = camera.position.z - pickup.mesh.position.z;
     const horizontalDistanceSq = dx * dx + dz * dz;
     if (horizontalDistanceSq <= 1.1 * 1.1) {
-      collectHealthPickup(pickup, nowMs);
+      tryRequestPickup(pickup, 'player_pickup_health');
     }
   }
 };

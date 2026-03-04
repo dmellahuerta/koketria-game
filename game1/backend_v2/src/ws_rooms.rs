@@ -34,6 +34,9 @@ struct RoomMeta {
     map_collision_hash: String,
     map_profile: MapProfile,
     map_collision: Vec<MapBox>,
+    mana_pickups: Vec<PickupState>,
+    shield_pickups: Vec<PickupState>,
+    health_pickups: Vec<PickupState>,
 }
 
 #[derive(Clone)]
@@ -59,6 +62,13 @@ struct MapBox {
     max_y: f64,
     min_z: f64,
     max_z: f64,
+}
+
+#[derive(Clone)]
+struct PickupState {
+    x: f64,
+    z: f64,
+    respawn_at_ms: i64,
 }
 
 #[derive(Clone)]
@@ -241,6 +251,11 @@ const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
+const MANA_PICKUP_COUNT: usize = 50;
+const SHIELD_PICKUP_COUNT: usize = 30;
+const HEALTH_PICKUP_COUNT: usize = 20;
+const PICKUP_RESPAWN_MS: i64 = 60_000;
+const PICKUP_TAKE_RADIUS: f64 = 1.1;
 
 fn compute_rewind_timestamp(
     now_ms_v: i64,
@@ -273,6 +288,9 @@ impl RoomMeta {
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
         let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
+        let mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
+        let shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
+        let health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
         Self {
             weather: pick_from(WEATHER_TYPES, seed, None).to_string(),
             battle_theme: pick_from(BATTLE_THEMES, seed ^ 0x9E37_79B9, None).to_string(),
@@ -280,6 +298,9 @@ impl RoomMeta {
             map_collision_hash,
             map_profile,
             map_collision,
+            mana_pickups,
+            shield_pickups,
+            health_pickups,
         }
     }
 
@@ -292,6 +313,9 @@ impl RoomMeta {
             Some(self.battle_theme.as_str()),
         )
         .to_string();
+        reset_pickups(&mut self.mana_pickups);
+        reset_pickups(&mut self.shield_pickups);
+        reset_pickups(&mut self.health_pickups);
     }
 }
 
@@ -380,7 +404,12 @@ impl Inner {
 
     fn room_state_json(&self, room_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
-        let room_json = self.room_summary_json(room_id)?;
+        let mut room_json = self.room_summary_json(room_id)?;
+        if let Some(room_obj) = room_json.as_object_mut() {
+            if let Some(meta) = self.room_meta.get(room_id) {
+                room_obj.insert("pickups".to_string(), pickup_state_payload(meta, now_ms()));
+            }
+        }
         let mut players = Vec::new();
         for player_id in &room.players {
             if let Some(player) = self.player_json(room_id, player_id) {
@@ -1482,61 +1511,187 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             inner.broadcast_room_state(&room_id);
         }
         "player_pickup_health" => {
-            let Some(_room_id) = client.room_id.clone() else {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
-                    return;
-                }
-                let recoverable = (MAX_HEALTH
-                    - (entry.combat.health + entry.combat.pending_health_regen))
-                    .max(0.0);
-                if recoverable > 0.0001 {
-                    entry.combat.pending_health_regen +=
-                        HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
-                }
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
             };
-            inner.send_to(client_id, payload);
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive {
+                return;
+            }
+            let recoverable = (MAX_HEALTH
+                - (player_state.combat.health + player_state.combat.pending_health_regen))
+                .max(0.0);
+            if recoverable <= 0.0001 {
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.health_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    let recoverable_now = (MAX_HEALTH
+                        - (entry.combat.health + entry.combat.pending_health_regen))
+                        .max(0.0);
+                    if recoverable_now > 0.0001 {
+                        entry.combat.pending_health_regen +=
+                            HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable_now);
+                    }
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Health.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            }
         }
         "player_pickup_mana" => {
-            let Some(_room_id) = client.room_id.clone() else {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
-                    return;
-                }
-                entry.combat.mana = (entry.combat.mana + MANA_PICKUP_AMOUNT).min(MAX_MANA);
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
             };
-            inner.send_to(client_id, payload);
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive || !is_mana_character(player_state.character.as_deref()) {
+                return;
+            }
+            if player_state.combat.mana >= MAX_MANA - 0.0001 {
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.mana_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.mana = (entry.combat.mana + MANA_PICKUP_AMOUNT).min(MAX_MANA);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Mana.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            }
         }
         "player_pickup_shield" => {
-            let Some(_room_id) = client.room_id.clone() else {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
-                    return;
-                }
-                entry.combat.shield = (entry.combat.shield + SHIELD_PICKUP_AMOUNT).min(MAX_SHIELD);
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
             };
-            inner.send_to(client_id, payload);
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive {
+                return;
+            }
+            if player_state.combat.shield >= MAX_SHIELD - 0.0001 {
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.shield_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.shield = (entry.combat.shield + SHIELD_PICKUP_AMOUNT).min(MAX_SHIELD);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Shield.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            }
         }
         "player_resources" => {
             let payload = {
@@ -3883,6 +4038,84 @@ fn create_map_collision(seed: u64) -> Vec<MapBox> {
         });
     }
     boxes
+}
+
+fn create_pickups(seed: u64, salt: u64, count: usize) -> Vec<PickupState> {
+    let mut rng = SeededRng::new(seed ^ salt);
+    let mut pickups = Vec::with_capacity(count);
+    for _ in 0..count {
+        pickups.push(PickupState {
+            x: (rng.next_f64() - 0.5) * 180.0,
+            z: (rng.next_f64() - 0.5) * 180.0,
+            respawn_at_ms: 0,
+        });
+    }
+    pickups
+}
+
+fn reset_pickups(pickups: &mut [PickupState]) {
+    for pickup in pickups {
+        pickup.respawn_at_ms = 0;
+    }
+}
+
+fn pickup_state_payload(meta: &RoomMeta, now: i64) -> Value {
+    json!({
+      "mana": pickup_vec_payload(&meta.mana_pickups, now),
+      "shield": pickup_vec_payload(&meta.shield_pickups, now),
+      "health": pickup_vec_payload(&meta.health_pickups, now),
+    })
+}
+
+fn pickup_vec_payload(pickups: &[PickupState], now: i64) -> Vec<Value> {
+    let mut out = Vec::with_capacity(pickups.len());
+    for (index, pickup) in pickups.iter().enumerate() {
+        let active = pickup.respawn_at_ms <= now;
+        out.push(json!({
+          "index": index,
+          "active": active,
+          "respawnAtMs": if active { 0 } else { pickup.respawn_at_ms }
+        }));
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+enum PickupKind {
+    Mana,
+    Shield,
+    Health,
+}
+
+impl PickupKind {
+    fn as_wire(self) -> &'static str {
+        match self {
+            PickupKind::Mana => "mana",
+            PickupKind::Shield => "shield",
+            PickupKind::Health => "health",
+        }
+    }
+}
+
+fn consume_pickup(
+    pickups: &mut [PickupState],
+    pickup_index: usize,
+    player_x: f64,
+    player_z: f64,
+    now: i64,
+) -> Option<i64> {
+    let pickup = pickups.get_mut(pickup_index)?;
+    if pickup.respawn_at_ms > now {
+        return None;
+    }
+    let dx = player_x - pickup.x;
+    let dz = player_z - pickup.z;
+    if ((dx * dx) + (dz * dz)).sqrt() > PICKUP_TAKE_RADIUS {
+        return None;
+    }
+    let respawn_at = now + PICKUP_RESPAWN_MS;
+    pickup.respawn_at_ms = respawn_at;
+    Some(respawn_at)
 }
 
 fn map_collision_hash(profile: &MapProfile, boxes: &[MapBox]) -> String {
