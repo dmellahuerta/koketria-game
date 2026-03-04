@@ -3431,22 +3431,22 @@ const debugHitboxColors = {
   body: 0x4de2ff,
   torso: 0xb28cff,
 };
-const remoteInterpolationBaseMs = 185;
-const remoteInterpolationMinMs = 145;
-const remoteInterpolationMaxMs = 320;
-const remoteInterpolationLatencyFactor = 0.42;
-const remoteInterpolationCorrectionBoostMs = 95;
-const remoteExtrapolationBaseMs = 175;
-const remoteExtrapolationMinMs = 110;
-const remoteExtrapolationMaxMs = 280;
-const remoteExtrapolationLatencyFactor = 0.33;
-const remoteExtrapolationCorrectionCutMs = 70;
+const remoteInterpolationBaseMs = 235;
+const remoteInterpolationMinMs = 180;
+const remoteInterpolationMaxMs = 380;
+const remoteInterpolationLatencyFactor = 0.52;
+const remoteInterpolationCorrectionBoostMs = 120;
+const remoteExtrapolationBaseMs = 125;
+const remoteExtrapolationMinMs = 75;
+const remoteExtrapolationMaxMs = 190;
+const remoteExtrapolationLatencyFactor = 0.2;
+const remoteExtrapolationCorrectionCutMs = 42;
 const remoteExtrapolationMaxSpeed = 10.8;
-const remoteExtrapolationDamping = 0.82;
-const remoteNetSmoothingPerSecond = 3.2;
-const remoteHardCatchupDistance = 4.8;
-const remoteMediumCatchupDistance = 2.4;
-const remoteSnapDistance = 9.5;
+const remoteExtrapolationDamping = 0.72;
+const remoteNetSmoothingPerSecond = 2.4;
+const remoteHardCatchupDistance = 6.2;
+const remoteMediumCatchupDistance = 3.1;
+const remoteSnapDistance = 11.5;
 const remoteAnimMoveSpeedOn = 0.55;
 const remoteAnimMoveSpeedOff = 0.32;
 const remoteAnimSwitchCooldownMs = 140;
