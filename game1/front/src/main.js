@@ -55,10 +55,14 @@ app.innerHTML = `
   <section id="lobby" class="hidden">
     <div class="lobby-layout">
       <aside class="lobby-side lobby-left-side">
-        <h3>Salas activas</h3>
-        <div id="roomList" class="room-list"></div>
         <h3>Conectados en Lobby</h3>
         <div id="lobbyUsersList" class="lobby-users-list"></div>
+        <h3>Chat Lobby</h3>
+        <div id="lobbyChatLog" class="lobby-chat-log"></div>
+        <div class="lobby-chat-input">
+          <input id="lobbyChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby..." autocomplete="off" />
+          <button id="lobbyChatSendBtn" type="button">Enviar</button>
+        </div>
       </aside>
       <div class="lobby-main">
         <h1>Koketria Game</h1>
@@ -85,13 +89,9 @@ app.innerHTML = `
         </div>
         <p id="lobbyError" class="error hidden"></p>
       </div>
-      <aside class="lobby-side lobby-chat-side">
-        <h3>Chat Lobby</h3>
-        <div id="lobbyChatLog" class="lobby-chat-log"></div>
-        <div class="lobby-chat-input">
-          <input id="lobbyChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby..." autocomplete="off" />
-          <button id="lobbyChatSendBtn" type="button">Enviar</button>
-        </div>
+      <aside class="lobby-side lobby-right-side">
+        <h3>Salas activas</h3>
+        <div id="roomList" class="room-list"></div>
       </aside>
     </div>
   </section>

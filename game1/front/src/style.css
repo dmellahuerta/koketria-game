@@ -544,12 +544,17 @@ canvas {
 }
 
 .lobby-left-side .lobby-users-list {
+  min-height: 92px;
+  max-height: 22vh;
+}
+
+.lobby-left-side .lobby-chat-log {
   min-height: 0;
   max-height: none;
   flex: 1 1 auto;
 }
 
-.lobby-chat-side .lobby-chat-log {
+.lobby-right-side .room-list {
   min-height: 0;
   max-height: none;
   flex: 1 1 auto;
