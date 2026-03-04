@@ -294,6 +294,7 @@ app.innerHTML = `
   <div id="chatFeed" class="chat-feed">
     <div id="chatLog" class="chat-log"></div>
   </div>
+  <div id="killFeed" class="kill-feed"></div>
 
   <div id="chatPanel" class="chat-panel">
     <div id="chatInputWrap" class="chat-input-wrap hidden">
@@ -446,6 +447,7 @@ const leaveRoomHudBtn = document.querySelector('#leaveRoomHudBtn');
 const chatFeed = document.querySelector('#chatFeed');
 const chatPanel = document.querySelector('#chatPanel');
 const chatLog = document.querySelector('#chatLog');
+const killFeed = document.querySelector('#killFeed');
 const chatInputWrap = document.querySelector('#chatInputWrap');
 const chatInput = document.querySelector('#chatInput');
 const crosshair = document.querySelector('#crosshair');
@@ -544,6 +546,9 @@ const runtimeHealth = {
 const chatMessages = [];
 const maxChatMessages = 40;
 const chatMessageTtlMs = 8000;
+const killFeedMessages = [];
+const maxKillFeedMessages = 8;
+const killFeedMessageTtlMs = 7000;
 const lobbyChatMessages = [];
 const maxLobbyChatMessages = 80;
 const versusChatMessages = [];
@@ -733,6 +738,72 @@ const renderChat = () => {
   chatLog.scrollTop = chatLog.scrollHeight;
 };
 
+const getPlayerNameById = (playerId) => {
+  const id = String(playerId || '').trim();
+  if (!id) {
+    return 'Player';
+  }
+  if (state.self && String(state.self.id || '') === id) {
+    return sanitizePlayerName(state.self.name || 'Tú') || 'Tú';
+  }
+  const remote = state.remotePlayers.get(id);
+  if (remote && remote.name) {
+    return sanitizePlayerName(remote.name) || 'Player';
+  }
+  const players = state.joinedRoom?.room?.players;
+  if (Array.isArray(players)) {
+    const found = players.find((player) => String(player?.id || '') === id);
+    if (found && found.name) {
+      return sanitizePlayerName(found.name) || 'Player';
+    }
+  }
+  return 'Player';
+};
+
+const renderKillFeed = () => {
+  if (!killFeed) {
+    return;
+  }
+  const now = Date.now();
+  for (let i = killFeedMessages.length - 1; i >= 0; i -= 1) {
+    if (now - killFeedMessages[i].ts > killFeedMessageTtlMs) {
+      killFeedMessages.splice(i, 1);
+    }
+  }
+  if (killFeedMessages.length <= 0) {
+    killFeed.innerHTML = '';
+    killFeed.classList.remove('open');
+    return;
+  }
+  killFeed.classList.add('open');
+  killFeed.innerHTML = killFeedMessages.map((entry) => {
+    const killerSelf = entry.killerId && state.self && entry.killerId === state.self.id ? ' (Tú)' : '';
+    const victimSelf = entry.victimId && state.self && entry.victimId === state.self.id ? ' (Tú)' : '';
+    return `<p><strong>${entry.killerName}${killerSelf}</strong> eliminó a <strong>${entry.victimName}${victimSelf}</strong></p>`;
+  }).join('');
+};
+
+const pushKillFeedMessage = (killerId, victimId) => {
+  const normalizedKillerId = String(killerId || '').trim();
+  const normalizedVictimId = String(victimId || '').trim();
+  if (!normalizedVictimId) {
+    return;
+  }
+  const killerName = getPlayerNameById(normalizedKillerId);
+  const victimName = getPlayerNameById(normalizedVictimId);
+  killFeedMessages.push({
+    killerId: normalizedKillerId,
+    victimId: normalizedVictimId,
+    killerName,
+    victimName,
+    ts: Date.now(),
+  });
+  if (killFeedMessages.length > maxKillFeedMessages) {
+    killFeedMessages.splice(0, killFeedMessages.length - maxKillFeedMessages);
+  }
+  renderKillFeed();
+};
+
 const pushChatMessage = (playerName, text) => {
   if (!text) {
     return;
@@ -782,6 +853,9 @@ const pushVersusChatMessage = (playerName, text) => {
 setInterval(() => {
   if (chatMessages.length > 0 && !isChatTyping) {
     renderChat();
+  }
+  if (killFeedMessages.length > 0) {
+    renderKillFeed();
   }
 }, 500);
 
@@ -6427,6 +6501,8 @@ const connectWebSocket = () => {
       localAvatar.team = null;
       ensureLocalTeamOutline();
       versusChatMessages.length = 0;
+      killFeedMessages.length = 0;
+      renderKillFeed();
       renderVersusChat();
       updateHud();
       syncLobbyScreens();
@@ -6894,6 +6970,7 @@ const connectWebSocket = () => {
       if (!playerId) {
         return;
       }
+      pushKillFeedMessage(payload.data?.killerId, playerId);
       clearPumoriOrbitSpecialByOwner(playerId);
       if (state.self && payload.data?.killerId === state.self.id && playerId !== state.self.id) {
         triggerKillConfirm();
