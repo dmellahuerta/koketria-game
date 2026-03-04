@@ -287,6 +287,7 @@ const BOT_MAX_PER_ROOM: usize = 8;
 const BOT_MOVE_TICK_MS: u64 = 100;
 const BOT_SHOOT_TICK_MS: u64 = 1250;
 const BOT_RESPAWN_TICK_MS: u64 = 700;
+const BOT_SPECIAL_TICK_MS: u64 = 650;
 
 fn compute_rewind_timestamp(
     now_ms_v: i64,
@@ -2322,9 +2323,11 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
     let mut move_ticker = interval(Duration::from_millis(BOT_MOVE_TICK_MS));
     let mut shoot_ticker = interval(Duration::from_millis(BOT_SHOOT_TICK_MS));
     let mut respawn_ticker = interval(Duration::from_millis(BOT_RESPAWN_TICK_MS));
+    let mut special_ticker = interval(Duration::from_millis(BOT_SPECIAL_TICK_MS));
     move_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     shoot_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     respawn_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    special_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -2385,8 +2388,24 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 inner.broadcast_room(&room_id, payload, Some(&bot_id));
             }
             _ = shoot_ticker.tick() => {
-                let inner = state.inner.lock().await;
-                let (room_id, payload_opt) = {
+                let mut inner = state.inner.lock().await;
+                let room_id = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    if !inner.rooms.rooms.contains_key(&room_id) {
+                        break;
+                    }
+                    room_id
+                };
+                bot_apply_authoritative_shot(&mut inner, &state, &room_id, &bot_id);
+            }
+            _ = special_ticker.tick() => {
+                let mut inner = state.inner.lock().await;
+                let room_id = {
                     let Some(bot) = inner.clients.get(&bot_id) else {
                         break;
                     };
@@ -2396,41 +2415,12 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     let Some(room) = inner.rooms.rooms.get(&room_id) else {
                         break;
                     };
-                    if room.mode != RoomMode::FreeForAll || room.status != RoomStatus::InGame || !bot.combat.alive {
-                        (room_id, None)
-                    } else {
-                        let origin = server_eye_origin_from_state(&bot.state);
-                        let dir = server_aim_direction_from_rotation(&bot.state.rotation).unwrap_or(Vec3 {
-                            x: bot.state.rotation.yaw.cos(),
-                            y: 0.0,
-                            z: bot.state.rotation.yaw.sin(),
-                        });
-                        let wall_hit_distance = resolve_wall_hit_distance(&inner, &room_id, &origin, &dir, 95.0);
-                        let ground_hit_distance = resolve_ground_hit_distance(&origin, &dir, 95.0);
-                        let distance = match (wall_hit_distance, ground_hit_distance) {
-                            (Some(w), Some(g)) => w.min(g).min(95.0),
-                            (Some(w), None) => w.min(95.0),
-                            (None, Some(g)) => g.min(95.0),
-                            (None, None) => 95.0,
-                        };
-                        let payload = json!({
-                          "type":"player_shoot",
-                          "ok": true,
-                          "data": {
-                            "playerId": bot_id,
-                            "character": bot.character.clone(),
-                            "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
-                            "direction": { "x": dir.x, "y": dir.y, "z": dir.z },
-                            "distance": distance,
-                            "ts": now_ms()
-                          }
-                        });
-                        (room_id, Some(payload))
+                    if room.mode != RoomMode::FreeForAll || room.status != RoomStatus::InGame {
+                        continue;
                     }
+                    room_id
                 };
-                if let Some(payload) = payload_opt {
-                    inner.broadcast_room(&room_id, payload, Some(&bot_id));
-                }
+                bot_try_cast_special(&mut inner, &state, &room_id, &bot_id);
             }
             _ = respawn_ticker.tick() => {
                 let mut inner = state.inner.lock().await;
@@ -2500,6 +2490,298 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 );
                 inner.broadcast_room_state(&room_id);
             }
+        }
+    }
+}
+
+fn bot_apply_authoritative_shot(
+    inner: &mut Inner,
+    state: &Arc<WsRoomsState>,
+    room_id: &str,
+    bot_id: &str,
+) {
+    let now = now_ms();
+    let (origin, direction, character_for_shot) = {
+        let Some(entry) = inner.clients.get_mut(bot_id) else {
+            return;
+        };
+        if !entry.combat.alive {
+            return;
+        }
+        update_combat_regen(&mut entry.combat, now);
+        let shot_interval = get_shot_interval_ms(entry.character.as_deref());
+        if now - entry.combat.last_shot_at < shot_interval {
+            return;
+        }
+        if entry.combat.mana + 0.0001 < MANA_COST_PER_SHOT {
+            return;
+        }
+        entry.combat.mana = (entry.combat.mana - MANA_COST_PER_SHOT).max(0.0);
+        entry.combat.last_shot_at = now;
+        let origin = server_eye_origin_from_state(&entry.state);
+        let direction =
+            server_aim_direction_from_rotation(&entry.state.rotation).unwrap_or(Vec3 {
+                x: entry.state.rotation.yaw.cos(),
+                y: 0.0,
+                z: entry.state.rotation.yaw.sin(),
+            });
+        (origin, direction, entry.character.clone())
+    };
+
+    let wall_hit_distance = resolve_wall_hit_distance(inner, room_id, &origin, &direction, 95.0);
+    let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, 95.0);
+    let effective_distance = match (wall_hit_distance, ground_hit_distance) {
+        (Some(w), Some(g)) => w.min(g).min(95.0),
+        (Some(w), None) => w.min(95.0),
+        (None, Some(g)) => g.min(95.0),
+        (None, None) => 95.0,
+    };
+    inner.broadcast_room(
+        room_id,
+        json!({
+          "type":"player_shoot",
+          "ok": true,
+          "data": {
+            "playerId": bot_id,
+            "character": character_for_shot.clone(),
+            "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+            "direction": { "x": direction.x, "y": direction.y, "z": direction.z },
+            "distance": effective_distance,
+            "ts": now
+          }
+        }),
+        Some(bot_id),
+    );
+
+    let rewind_ts = compute_rewind_timestamp(now, None, LAG_COMP_MAGIC_MS, 0.0);
+    let hit = find_best_hit(
+        inner,
+        room_id,
+        bot_id,
+        &origin,
+        &direction,
+        effective_distance,
+        rewind_ts,
+    );
+    if let Some((victim_id, headshot, hit_dist)) = hit {
+        let projectile_speed =
+            projectile_speed_units_per_second(character_for_shot.as_deref());
+        let travel_ms = ((hit_dist / projectile_speed.max(1.0)) * 1000.0).round();
+        let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+        let impact_point = Vec3 {
+            x: origin.x + (direction.x * hit_dist),
+            y: origin.y + (direction.y * hit_dist),
+            z: origin.z + (direction.z * hit_dist),
+        };
+        tokio::spawn(apply_delayed_authoritative_hit(
+            Arc::clone(state),
+            room_id.to_string(),
+            bot_id.to_string(),
+            victim_id,
+            headshot,
+            HIT_DAMAGE,
+            impact_point,
+            Some(now),
+            impact_delay_ms,
+            false,
+        ));
+    } else {
+        let impact_point = Vec3 {
+            x: origin.x + (direction.x * effective_distance),
+            y: origin.y + (direction.y * effective_distance),
+            z: origin.z + (direction.z * effective_distance),
+        };
+        let projectile_speed =
+            projectile_speed_units_per_second(character_for_shot.as_deref());
+        let travel_ms = ((effective_distance / projectile_speed.max(1.0)) * 1000.0).round();
+        let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+        tokio::spawn(apply_delayed_normal_shockwave_damage(
+            Arc::clone(state),
+            room_id.to_string(),
+            bot_id.to_string(),
+            impact_point,
+            impact_delay_ms,
+        ));
+    }
+}
+
+fn bot_try_cast_special(
+    inner: &mut Inner,
+    state: &Arc<WsRoomsState>,
+    room_id: &str,
+    bot_id: &str,
+) {
+    let (character_key, origin, allow_cast, caster_latency_ms) = {
+        let Some(entry) = inner.clients.get_mut(bot_id) else {
+            return;
+        };
+        if !entry.combat.alive {
+            return;
+        }
+        let now = now_ms();
+        let key = normalize_character(entry.character.as_deref());
+        let allow = match key.as_str() {
+            "silentman" | "silenmant" => {
+                if now >= entry.combat.silent_cd_until_ms {
+                    entry.combat.silent_cd_until_ms = now + SILENT_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            "pumori" => {
+                if now >= entry.combat.pumori_cd_until_ms {
+                    entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            "neoorphen" => {
+                if now >= entry.combat.neoorphen_cd_until_ms {
+                    entry.combat.neoorphen_cd_until_ms = now + NEOORPHEN_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => {
+                if now >= entry.combat.lunar_cd_until_ms {
+                    entry.combat.lunar_cd_until_ms = now + LUNAR_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        (key, entry.state.position.clone(), allow, entry.latency_ms)
+    };
+    if !allow_cast {
+        return;
+    }
+
+    match character_key.as_str() {
+        "silentman" | "silenmant" => {
+            let mut rays = Vec::new();
+            for i in 0..50 {
+                let t = (i as f64) / 50.0;
+                let angle = t * std::f64::consts::TAU;
+                rays.push(json!({
+                  "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
+                  "distance": 90.0
+                }));
+            }
+            inner.broadcast_room(
+                room_id,
+                json!({
+                  "type":"special_silent_cone",
+                  "ok": true,
+                  "data": {
+                    "playerId": bot_id,
+                    "character": "silentman",
+                    "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+                    "rays": rays,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+            let room_players: Vec<String> = inner
+                .rooms
+                .rooms
+                .get(room_id)
+                .map(|r| r.players.iter().cloned().collect())
+                .unwrap_or_default();
+            let now_hit = now_ms();
+            let rewind_ts = compute_rewind_timestamp(now_hit, None, LAG_COMP_MAGIC_MS, caster_latency_ms);
+            let mut pending_impacts: Vec<(Vec3, u64)> = Vec::new();
+            for victim_id in &room_players {
+                if victim_id == bot_id {
+                    continue;
+                }
+                if is_friendly_fire_blocked(inner, room_id, bot_id, victim_id) {
+                    continue;
+                }
+                let Some(victim) = inner.clients.get(victim_id) else {
+                    continue;
+                };
+                if !victim.combat.alive {
+                    continue;
+                }
+                let rewound = client_position_at(victim, rewind_ts);
+                let to_target = Vec3 {
+                    x: rewound.x - origin.x,
+                    y: rewound.y - origin.y,
+                    z: rewound.z - origin.z,
+                };
+                let distance = distance_sq(&rewound, &origin).sqrt();
+                if distance <= 0.0001 || distance > SILENT_SPECIAL_MAX_DISTANCE {
+                    continue;
+                }
+                let Some(direction) = normalize_vec3(to_target) else {
+                    continue;
+                };
+                if let Some(wall_distance) =
+                    resolve_wall_hit_distance(inner, room_id, &origin, &direction, distance)
+                {
+                    if wall_distance + 0.2 < distance {
+                        continue;
+                    }
+                }
+                let delay_ms = ((distance / SILENT_SPECIAL_PROJECTILE_SPEED.max(1.0)) * 1000.0)
+                    .round()
+                    .clamp(25.0, 900.0) as u64;
+                pending_impacts.push((rewound, delay_ms));
+            }
+            for (impact, delay_ms) in pending_impacts {
+                tokio::spawn(apply_delayed_radial_falloff_damage(
+                    Arc::clone(state),
+                    room_id.to_string(),
+                    bot_id.to_string(),
+                    impact,
+                    SILENT_SPECIAL_EXPLOSION_RADIUS,
+                    HIT_DAMAGE,
+                    SILENT_SPECIAL_MIN_FACTOR,
+                    SILENT_SPECIAL_MAX_FACTOR,
+                    delay_ms,
+                ));
+            }
+        }
+        "pumori" => {
+            inner.broadcast_room(
+                room_id,
+                json!({
+                  "type":"special_pumori_orbit_start",
+                  "ok": true,
+                  "data": {
+                    "playerId": bot_id,
+                    "durationMs": PUMORI_ORBIT_DURATION_MS,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+            tokio::spawn(run_pumori_orbit_damage(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+            ));
+        }
+        "neoorphen" => {
+            tokio::spawn(run_neoorphen_meteor_special(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+                origin,
+            ));
+        }
+        _ => {
+            tokio::spawn(run_lunar_rain_special(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+                origin,
+            ));
         }
     }
 }

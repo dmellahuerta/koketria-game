@@ -115,7 +115,8 @@ En sala `freeforall`, cualquier jugador puede escribir en chat:
 
 Esto agrega 1 bot (nombre/personaje aleatorio) que simula jugador:
 - movimiento continuo
-- disparo visual periódico
+- disparo periódico con hit/damage autoritativo
+- uso automático de habilidad especial `R` cuando sale de cooldown
 - respawn automático
 
 Límite por sala: `8` bots.
