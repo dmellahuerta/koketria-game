@@ -296,6 +296,7 @@ const BOT_SHOOT_TICK_MS: u64 = 1250;
 const BOT_RESPAWN_TICK_MS: u64 = 700;
 const BOT_SPECIAL_TICK_MS: u64 = 650;
 const BOT_PILLAR_COLLISION_RADIUS_FACTOR: f64 = 1.2;
+const RADIAL_LOS_CLEARANCE_UNITS: f64 = 0.24;
 
 fn parse_addbot_count(text: &str) -> Option<usize> {
     let mut parts = text.split_whitespace();
@@ -3474,7 +3475,13 @@ fn apply_radial_falloff_damage(
             y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
             z: victim.state.position.z,
         };
-        if !has_line_of_sight(inner, room_id, impact, &victim_aim) {
+        if !has_line_of_sight_with_margin(
+            inner,
+            room_id,
+            impact,
+            &victim_aim,
+            RADIAL_LOS_CLEARANCE_UNITS,
+        ) {
             continue;
         }
         let dx = victim.state.position.x - impact.x;
@@ -4903,6 +4910,16 @@ fn resolve_ground_hit_distance(
 }
 
 fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bool {
+    has_line_of_sight_with_margin(inner, room_id, from, to, 0.08)
+}
+
+fn has_line_of_sight_with_margin(
+    inner: &Inner,
+    room_id: &str,
+    from: &Vec3,
+    to: &Vec3,
+    clearance: f64,
+) -> bool {
     let segment = sub(to, from);
     let total_distance = (segment.x * segment.x + segment.y * segment.y + segment.z * segment.z).sqrt();
     if total_distance <= 0.0001 {
@@ -4912,7 +4929,7 @@ fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bo
         return true;
     };
     match resolve_wall_hit_distance(inner, room_id, from, &direction, total_distance) {
-        Some(wall_dist) => wall_dist + 0.08 >= total_distance,
+        Some(wall_dist) => wall_dist + clearance >= total_distance,
         None => true,
     }
 }
