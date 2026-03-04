@@ -69,6 +69,7 @@ app.innerHTML = `
         <div class="lobby-actions">
           <button id="refreshRoomsBtn" type="button">Refrescar</button>
           <button id="createVersusBtn" type="button">Crear Versusmatch</button>
+          <button id="profileLogoutBtn" type="button">Salir</button>
           <a id="mainPortalLink" class="lobby-link-btn" href="https://misterrii.com">Web principal</a>
         </div>
         <div class="lobby-music-row">
@@ -353,6 +354,7 @@ const characterSelect = document.querySelector('#characterSelect');
 const characterPreview = document.querySelector('#characterPreview');
 const refreshRoomsBtn = document.querySelector('#refreshRoomsBtn');
 const createVersusBtn = document.querySelector('#createVersusBtn');
+const profileLogoutBtn = document.querySelector('#profileLogoutBtn');
 const mainPortalLink = document.querySelector('#mainPortalLink');
 const lobbyMusicVolume = document.querySelector('#lobbyMusicVolume');
 const lobbyMusicVolumeValue = document.querySelector('#lobbyMusicVolumeValue');
@@ -811,6 +813,8 @@ const sanitizePlayerName = (value) => {
   return trimmed.slice(0, 24);
 };
 
+const getStoredPlayerName = () => sanitizePlayerName(localStorage.getItem(playerNameStorageKey) || '');
+
 const renderPlayerNameBadge = () => {
   if (!playerNameBadge) {
     return;
@@ -870,6 +874,25 @@ const pushLobbyChatMessage = (playerName, text) => {
 const setProfileReady = (value) => {
   state.profileReady = Boolean(value);
   syncLobbyScreens();
+};
+
+const logoutToNameGate = () => {
+  localStorage.removeItem(playerNameStorageKey);
+  setProfileReady(false);
+  if (nameGateInput) {
+    nameGateInput.value = '';
+  }
+  if (playerNameInput) {
+    playerNameInput.value = '';
+  }
+  if (lobbyChatInput) {
+    lobbyChatInput.value = '';
+  }
+  setNameGateError();
+  renderPlayerNameBadge();
+  if (nameGateInput) {
+    nameGateInput.focus();
+  }
 };
 
 const getCurrentPlayerName = () => sanitizePlayerName(playerNameInput?.value || state.self?.name || '');
@@ -6190,11 +6213,14 @@ const connectWebSocket = () => {
 
     if (payload.type === 'connected') {
       state.self = payload.data.player;
-      const storedName = sanitizePlayerName(localStorage.getItem(playerNameStorageKey) || '');
+      const storedName = getStoredPlayerName();
       const preferredName = storedName || sanitizePlayerName(state.self.name || '');
       playerNameInput.value = preferredName;
       if (nameGateInput) {
         nameGateInput.value = preferredName;
+      }
+      if (!state.profileReady && storedName.length >= 2) {
+        setProfileReady(true);
       }
       state.lobbyUsers = Array.isArray(payload.data?.lobby?.players) ? payload.data.lobby.players : [];
       if (state.self.character && availableCharacters.includes(state.self.character)) {
@@ -7062,6 +7088,10 @@ createVersusBtn.addEventListener('click', () => {
     playerName: getCurrentPlayerName(),
     character: characterSelect.value || activeCharacter,
   });
+});
+
+profileLogoutBtn?.addEventListener('click', () => {
+  logoutToNameGate();
 });
 
 const sendLobbyChatMessage = () => {
@@ -10190,10 +10220,11 @@ document.addEventListener('fullscreenchange', syncMobileFullscreenPrompt);
 loadSettings();
 syncOptionsUi();
 applyGameSettings();
-const initialStoredName = sanitizePlayerName(localStorage.getItem(playerNameStorageKey) || '');
+const initialStoredName = getStoredPlayerName();
 if (initialStoredName && nameGateInput) {
   nameGateInput.value = initialStoredName;
   playerNameInput.value = initialStoredName;
+  setProfileReady(true);
 }
 setInRoom(false);
 applyWeather('night');
