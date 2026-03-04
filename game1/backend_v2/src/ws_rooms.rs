@@ -1011,6 +1011,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let maybe_resources_payload: Option<Value>;
             let mut shot_blocked = false;
             let client_shot_ts = message.get("shotTs").and_then(Value::as_i64);
+            let client_shot_id = message.get("shotId").and_then(Value::as_u64);
             let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
             {
                 let Some(shooter) = inner.clients.get_mut(client_id) else {
@@ -1107,6 +1108,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             else {
                 return;
             };
+            inner.send_to(
+                client_id,
+                json!({
+                  "type":"player_shot_ack",
+                  "ok": true,
+                  "data": {
+                    "shotId": client_shot_id,
+                    "ts": now
+                  }
+                }),
+            );
             let is_mana = is_mana_character(character_for_shot.as_deref());
             let base_rewind = if is_mana {
                 LAG_COMP_MAGIC_MS

@@ -3238,7 +3238,6 @@ const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
-const resourceSyncIntervalMs = 180;
 const hitWaveYOffset = 0.04;
 const hitWaveStartScale = 0.9;
 const hitWaveLife = 0.2;
@@ -3369,7 +3368,6 @@ let isReloading = false;
 let reloadCooldown = 0;
 let isJumping = false;
 let jumpVelocity = 0;
-let lastResourceSyncAt = 0;
 let isRespawning = false;
 let respawnEndsAt = 0;
 let respawnSecondsLeft = getRespawnDurationSeconds();
@@ -3431,6 +3429,7 @@ let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
+let localShotSeq = 0;
 const reconcileStats = {
   errorSamples: [],
   correctionsInWindow: 0,
@@ -6183,6 +6182,12 @@ const connectWebSocket = () => {
       return;
     }
 
+    if (payload.type === 'player_shot_ack') {
+      localAvatar.shootUntil = performance.now() + 420;
+      startShootSound();
+      return;
+    }
+
     if (payload.type === 'special_lunar_rain_wave') {
       const data = payload.data || {};
       const ownerId = String(data.playerId || '');
@@ -7972,9 +7977,6 @@ const shoot = () => {
     return;
   }
 
-  startShootSound();
-  localAvatar.shootUntil = performance.now() + 420;
-
   camera.getWorldDirection(dir);
   const baseDirection = dir.clone().normalize();
   const origin = camera.position.clone().add(baseDirection.clone().multiplyScalar(0.55));
@@ -8043,8 +8045,12 @@ const shoot = () => {
     createHitWave(hitPoint, myPalette.impactA);
   }
 
+  localShotSeq += 1;
+  const shotId = localShotSeq;
+
   sendWs({
     type: 'player_shoot',
+    shotId,
     origin: { x: origin.x, y: origin.y, z: origin.z },
     direction: {
       x: shotDirection.x,
@@ -9299,18 +9305,7 @@ const updateWinnerCountdown = () => {
 };
 
 const updateResourceSync = () => {
-  if (!state.joinedRoom || state.joinedRoom.room?.status !== 'in_game') {
-    return;
-  }
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  const now = performance.now();
-  if (now - lastResourceSyncAt < resourceSyncIntervalMs) {
-    return;
-  }
-  lastResourceSyncAt = now;
-  sendWs({ type: 'player_resources' });
+  // Competitive state now comes from authoritative server pushes.
 };
 
 const shouldRenderLobbyPreview = () => {
