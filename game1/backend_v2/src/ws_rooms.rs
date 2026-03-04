@@ -291,6 +291,43 @@ const HEALTH_PICKUP_COUNT: usize = 20;
 const PICKUP_RESPAWN_MS: i64 = 60_000;
 const PICKUP_TAKE_RADIUS: f64 = 1.35;
 const PICKUP_CLIENT_POS_MAX_DRIFT: f64 = 3.0;
+
+fn pickup_trace_enabled() -> bool {
+    match std::env::var("WS_PICKUP_TRACE") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn log_pickup_trace(
+    event: &str,
+    client_id: &str,
+    room_id: &str,
+    index: usize,
+    accepted: bool,
+    reason: &str,
+    player_pos: (f64, f64),
+    client_pos: Option<(f64, f64)>,
+) {
+    if !pickup_trace_enabled() {
+        return;
+    }
+    debug!(
+        "[ws_rooms][pickup] event={} client_id={} room_id={} index={} accepted={} reason={} player=({:.3},{:.3}) client_pos={:?}",
+        event,
+        client_id,
+        room_id,
+        index,
+        accepted,
+        reason,
+        player_pos.0,
+        player_pos.1,
+        client_pos
+    );
+}
 const BOT_MAX_PER_ROOM: usize = 8;
 const BOT_MOVE_TICK_MS: u64 = 60;
 const BOT_SHOOT_TICK_MS: u64 = 1250;
@@ -1785,9 +1822,29 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
             if !player_state.combat.alive || is_mana_character(player_state.character.as_deref()) {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "invalid_character_or_dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             if player_state.combat.ammo_reserve >= MAX_AMMO_TOTAL {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "ammo_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
@@ -1803,6 +1860,16 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None
             };
             if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 let payload = {
                     let Some(entry) = inner.clients.get_mut(client_id) else {
                         return;
@@ -1826,6 +1893,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       }
                     }),
                     None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
                 );
             }
         }
@@ -1856,12 +1934,32 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
             if !player_state.combat.alive {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             let recoverable = (MAX_HEALTH
                 - (player_state.combat.health + player_state.combat.pending_health_regen))
                 .max(0.0);
             if recoverable <= 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "health_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
@@ -1877,6 +1975,16 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None
             };
             if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 let payload = {
                     let Some(entry) = inner.clients.get_mut(client_id) else {
                         return;
@@ -1905,6 +2013,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       }
                     }),
                     None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
                 );
             }
         }
@@ -1935,9 +2054,29 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
             if !player_state.combat.alive || !is_mana_character(player_state.character.as_deref()) {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "invalid_character_or_dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             if player_state.combat.mana >= MAX_MANA - 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "mana_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
@@ -1953,6 +2092,16 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None
             };
             if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 let payload = {
                     let Some(entry) = inner.clients.get_mut(client_id) else {
                         return;
@@ -1975,6 +2124,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       }
                     }),
                     None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
                 );
             }
         }
@@ -2005,9 +2165,29 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
             if !player_state.combat.alive {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             if player_state.combat.shield > 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "shield_not_empty",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 return;
             }
             let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
@@ -2023,6 +2203,16 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 None
             };
             if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
                 let payload = {
                     let Some(entry) = inner.clients.get_mut(client_id) else {
                         return;
@@ -2045,6 +2235,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                       }
                     }),
                     None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
                 );
             }
         }
@@ -2231,6 +2432,14 @@ fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &st
         | "player_pickup_shield"
         | "player_pickup_health" => {
             if now - client.last_pickup_req_at_ms < PICKUP_REQ_MIN_INTERVAL_MS {
+                if pickup_trace_enabled() {
+                    debug!(
+                        "[ws_rooms][pickup] rate_limited client_id={} event={} delta_ms={}",
+                        client_id,
+                        event_type,
+                        now - client.last_pickup_req_at_ms
+                    );
+                }
                 return false;
             }
             client.last_pickup_req_at_ms = now;

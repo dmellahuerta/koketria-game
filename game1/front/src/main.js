@@ -3321,6 +3321,8 @@ const getDynamicMaxImpacts = () => {
 };
 
 const keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
+let devCollectNearestRequestKind = null;
+let devCollectCycleIndex = 0;
 let isLocked = false;
 let yaw = 0;
 let pitch = 0;
@@ -8078,6 +8080,29 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (import.meta.env.DEV && event.code === 'KeyB') {
+    event.preventDefault();
+    const cycle = ['shield', 'mana', 'health', 'auto'];
+    devCollectNearestRequestKind = cycle[devCollectCycleIndex % cycle.length];
+    devCollectCycleIndex = (devCollectCycleIndex + 1) % cycle.length;
+    return;
+  }
+  if (import.meta.env.DEV && event.code === 'KeyN') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'mana';
+    return;
+  }
+  if (import.meta.env.DEV && event.code === 'KeyV') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'shield';
+    return;
+  }
+  if (import.meta.env.DEV && event.code === 'KeyH') {
+    event.preventDefault();
+    devCollectNearestRequestKind = 'health';
+    return;
+  }
+
   if (isEditableFocused) {
     return;
   }
@@ -8358,6 +8383,88 @@ const tryRequestPickup = (pickup, eventType) => {
       z: Number(camera.position.z || 0),
     },
   });
+};
+
+const getNearestActivePickup = (collection) => {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return null;
+  }
+  let best = null;
+  let bestSq = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < collection.length; i += 1) {
+    const pickup = collection[i];
+    if (!pickup?.active || !pickup.mesh?.visible) {
+      continue;
+    }
+    const dx = Number(camera.position.x) - Number(pickup.mesh.position.x);
+    const dz = Number(camera.position.z) - Number(pickup.mesh.position.z);
+    const d2 = (dx * dx) + (dz * dz);
+    if (d2 < bestSq) {
+      bestSq = d2;
+      best = pickup;
+    }
+  }
+  return best;
+};
+
+const requestNearestPickupCollection = (kind) => {
+  if (!import.meta.env.DEV || !canPlay()) {
+    return false;
+  }
+  const normalizedKind = String(kind || 'auto').toLowerCase();
+  const candidates = [];
+  if (normalizedKind === 'shield') {
+    candidates.push({ collection: shieldPickups, type: 'player_pickup_shield' });
+  } else if (normalizedKind === 'mana') {
+    candidates.push({
+      collection: ammoPickups,
+      type: isManaCharacter(activeCharacter) ? 'player_pickup_mana' : 'player_pickup_ammo',
+    });
+  } else if (normalizedKind === 'health') {
+    candidates.push({ collection: healthPickups, type: 'player_pickup_health' });
+  } else {
+    candidates.push({ collection: shieldPickups, type: 'player_pickup_shield' });
+    candidates.push({
+      collection: ammoPickups,
+      type: isManaCharacter(activeCharacter) ? 'player_pickup_mana' : 'player_pickup_ammo',
+    });
+    candidates.push({ collection: healthPickups, type: 'player_pickup_health' });
+  }
+
+  let best = null;
+  let bestSq = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    const pickup = getNearestActivePickup(candidate.collection);
+    if (!pickup?.mesh) {
+      continue;
+    }
+    const dx = Number(camera.position.x) - Number(pickup.mesh.position.x);
+    const dz = Number(camera.position.z) - Number(pickup.mesh.position.z);
+    const d2 = (dx * dx) + (dz * dz);
+    if (d2 < bestSq) {
+      bestSq = d2;
+      best = { pickup, type: candidate.type };
+    }
+  }
+  if (!best?.pickup?.mesh) {
+    return false;
+  }
+
+  camera.position.x = Number(best.pickup.mesh.position.x);
+  camera.position.z = Number(best.pickup.mesh.position.z);
+  constrainPlayerToWorld();
+  sendLocalPlayerState(true);
+  tryRequestPickup(best.pickup, best.type);
+  return true;
+};
+
+const updateDevCollectionRequests = () => {
+  if (!import.meta.env.DEV || !devCollectNearestRequestKind) {
+    return;
+  }
+  requestNearestPickupCollection(devCollectNearestRequestKind);
+  devCollectNearestRequestKind = null;
 };
 
 const applyPickupClientState = (collection, index, active, respawnAtMs = 0) => {
@@ -8712,6 +8819,10 @@ const updateHealthPickups = (delta) => {
     }
   }
 };
+
+if (import.meta.env.DEV) {
+  window.__dev_collect_nearest_pickup = (kind = 'auto') => requestNearestPickupCollection(kind);
+}
 
 const updateRain = (delta) => {
   if (!rain.visible) {
@@ -9724,6 +9835,7 @@ const animate = () => {
   updateAmmoPickups(delta);
   updateShieldPickups(delta);
   updateHealthPickups(delta);
+  updateDevCollectionRequests();
   updateRain(delta);
   updateSnow(delta);
   updateKoketriaNature(delta);

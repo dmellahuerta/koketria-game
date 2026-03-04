@@ -25,6 +25,7 @@ services:
       - PORT=3001
       - RUST_LOG=${RUST_LOG:-debug}
       - FRONT_PUBLIC_DIR=/front_public
+      - WS_PICKUP_TRACE=${WS_PICKUP_TRACE:-1}
 
   front:
     image: node:20-alpine
