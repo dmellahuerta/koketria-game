@@ -268,7 +268,7 @@ const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
-const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
+const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 500;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.24;
 const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
@@ -2053,10 +2053,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 jumping,
                 moving,
             };
+            let mut resources_for_move: Option<(i64, i64, i64)> = None;
             if let Some(entry) = inner.clients.get_mut(client_id) {
+                update_combat_regen(&mut entry.combat, ts);
                 entry.state = next_state.clone();
                 entry.state_ts = ts;
                 push_state_snapshot(entry, ts);
+                resources_for_move = Some((
+                    entry.combat.health.round() as i64,
+                    entry.combat.shield.round() as i64,
+                    entry.combat.mana.round() as i64,
+                ));
             }
 
             inner.send_to(
@@ -2082,6 +2089,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
             );
 
+            let (health_wire, shield_wire, mana_wire) =
+                resources_for_move.unwrap_or((MAX_HEALTH as i64, MAX_SHIELD as i64, MAX_MANA as i64));
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -2090,6 +2099,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "data": {
                     "playerId": client_id,
                     "character": client.character,
+                    "health": health_wire,
+                    "shield": shield_wire,
+                    "mana": mana_wire,
                     "position": {
                       "x": next_state.position.x,
                       "y": next_state.position.y,

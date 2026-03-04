@@ -4025,6 +4025,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
   }
 
   const ammoRnd = createSeededRng(normalizedSeed ^ 0x85EBCA6B);
+  const ammoPhaseRnd = createSeededRng(normalizedSeed ^ 0xA0D31F2B);
   for (let i = 0; i < maxAmmoPickups; i += 1) {
     const mesh = createPickupVisualGroup('mana', () => {
       return new THREE.Mesh(ammoPickupGeometry, ammoPickupMaterial.clone());
@@ -4038,7 +4039,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
       index: i,
       mesh,
       baseY,
-      phase: ammoRnd() * Math.PI * 2,
+      phase: ammoPhaseRnd() * Math.PI * 2,
       active: true,
       respawnAtMs: 0,
       pendingRequestUntil: 0,
@@ -4046,6 +4047,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
   }
 
   const shieldRnd = createSeededRng(normalizedSeed ^ 0xC2B2AE35);
+  const shieldPhaseRnd = createSeededRng(normalizedSeed ^ 0xD28EA8B9);
   for (let i = 0; i < maxShieldPickups; i += 1) {
     const mesh = createPickupVisualGroup('defensa', () => {
       return new THREE.Mesh(shieldPickupGeometry, shieldPickupMaterial.clone());
@@ -4059,7 +4061,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
       index: i,
       mesh,
       baseY,
-      phase: shieldRnd() * Math.PI * 2,
+      phase: shieldPhaseRnd() * Math.PI * 2,
       active: true,
       respawnAtMs: 0,
       pendingRequestUntil: 0,
@@ -4067,6 +4069,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
   }
 
   const healthRnd = createSeededRng(normalizedSeed ^ 0x27D4EB2F);
+  const healthPhaseRnd = createSeededRng(normalizedSeed ^ 0x14C5F317);
   for (let i = 0; i < maxHealthPickups; i += 1) {
     const mesh = createPickupVisualGroup('vida', () => {
       return new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 0), new THREE.MeshStandardMaterial({
@@ -4086,7 +4089,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
       index: i,
       mesh,
       baseY,
-      phase: healthRnd() * Math.PI * 2,
+      phase: healthPhaseRnd() * Math.PI * 2,
       active: true,
       respawnAtMs: 0,
       pendingRequestUntil: 0,
@@ -6210,7 +6213,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'player_move') {
       const {
-        playerId, position, rotation, character, jumping, moving, ts,
+        playerId, position, rotation, character, jumping, moving, ts, health: remoteHealth, shield: remoteShield, mana: remoteMana,
       } = payload.data || {};
       if (!playerId || (state.self && playerId === state.self.id)) {
         return;
@@ -6220,6 +6223,9 @@ const connectWebSocket = () => {
         id: playerId,
         ts,
         character,
+        health: remoteHealth,
+        shield: remoteShield,
+        mana: remoteMana,
         state: { position, rotation, jumping, moving },
       });
 
