@@ -3425,10 +3425,12 @@ const remoteInterpolationBaseMs = 185;
 const remoteInterpolationMinMs = 145;
 const remoteInterpolationMaxMs = 320;
 const remoteInterpolationLatencyFactor = 0.42;
+const remoteInterpolationCorrectionBoostMs = 95;
 const remoteExtrapolationBaseMs = 175;
 const remoteExtrapolationMinMs = 110;
 const remoteExtrapolationMaxMs = 280;
 const remoteExtrapolationLatencyFactor = 0.33;
+const remoteExtrapolationCorrectionCutMs = 70;
 const remoteExtrapolationMaxSpeed = 10.8;
 const remoteExtrapolationDamping = 0.82;
 const remoteNetSmoothingPerSecond = 3.2;
@@ -3483,13 +3485,27 @@ const updateServerTimeOffset = (serverTs) => {
 
 const updateRemoteNetTimings = (delta) => {
   const rtt = Number.isFinite(state.latencyMs) ? Math.max(0, state.latencyMs) : 0;
+  const corrections = Number.isFinite(reconcileStats.correctionsPerSec)
+    ? Math.max(0, reconcileStats.correctionsPerSec)
+    : 0;
+  const correctionPressure = Math.max(0, Math.min(1, (corrections - 4) / 14));
   const targetInterpolation = Math.max(
     remoteInterpolationMinMs,
-    Math.min(remoteInterpolationMaxMs, remoteInterpolationBaseMs + (rtt * remoteInterpolationLatencyFactor)),
+    Math.min(
+      remoteInterpolationMaxMs,
+      remoteInterpolationBaseMs
+        + (rtt * remoteInterpolationLatencyFactor)
+        + (correctionPressure * remoteInterpolationCorrectionBoostMs),
+    ),
   );
   const targetExtrapolation = Math.max(
     remoteExtrapolationMinMs,
-    Math.min(remoteExtrapolationMaxMs, remoteExtrapolationBaseMs + (rtt * remoteExtrapolationLatencyFactor)),
+    Math.min(
+      remoteExtrapolationMaxMs,
+      remoteExtrapolationBaseMs
+        + (rtt * remoteExtrapolationLatencyFactor)
+        - (correctionPressure * remoteExtrapolationCorrectionCutMs),
+    ),
   );
   const smoothing = Math.max(0.01, Math.min(1, delta * remoteNetSmoothingPerSecond));
   remoteInterpolationDynamicMs += (targetInterpolation - remoteInterpolationDynamicMs) * smoothing;
