@@ -93,6 +93,10 @@ struct ClientSession {
     last_reload_req_at_ms: i64,
     last_respawn_req_at_ms: i64,
     is_bot: bool,
+    bot_orbit_phase: f64,
+    bot_orbit_radius: f64,
+    bot_orbit_speed: f64,
+    bot_move_speed: f64,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -557,6 +561,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 last_reload_req_at_ms: 0,
                 last_respawn_req_at_ms: 0,
                 is_bot: false,
+                bot_orbit_phase: 0.0,
+                bot_orbit_radius: 0.0,
+                bot_orbit_speed: 0.0,
+                bot_move_speed: 0.0,
                 tx: out_tx.clone(),
             },
         );
@@ -2303,6 +2311,10 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
         ((rng.next_f64() * characters.len() as f64).floor() as usize).min(characters.len() - 1);
     let bot_name = format!("{}-{}", names[name_idx], num);
     let character = characters[character_idx].to_string();
+    let bot_orbit_phase = rng.next_f64() * std::f64::consts::TAU;
+    let bot_orbit_radius = 18.0 + (rng.next_f64() * 30.0);
+    let bot_orbit_speed = 0.55 + (rng.next_f64() * 0.75);
+    let bot_move_speed = 6.8 + (rng.next_f64() * 3.6);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     tokio::spawn(async move {
@@ -2336,6 +2348,10 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             last_reload_req_at_ms: 0,
             last_respawn_req_at_ms: 0,
             is_bot: true,
+            bot_orbit_phase,
+            bot_orbit_radius,
+            bot_orbit_speed,
+            bot_move_speed,
             tx,
         },
     );
@@ -2373,14 +2389,43 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     if !bot.combat.alive {
                         continue;
                     }
-                    let seed = hash_room_id(&bot_id);
-                    let phase = (((seed % 6283) as f64) / 1000.0).rem_euclid(std::f64::consts::TAU);
-                    let t = now_ms() as f64 / 1000.0;
-                    let radius = 24.0 + ((seed % 18) as f64);
-                    let x = radius * ((t * 0.82) + phase).cos();
-                    let z = radius * ((t * 0.82) + phase).sin();
-                    let yaw = ((-t * 0.82) + std::f64::consts::PI * 0.5).rem_euclid(std::f64::consts::TAU);
                     let ts = now_ms();
+                    let dt_ms = clamp_i64(ts - bot.state_ts, 16, PLAYER_MAX_MOVE_DT_MS);
+                    let dt_s = dt_ms as f64 / 1000.0;
+                    let angle = (ts as f64 * 0.001 * bot.bot_orbit_speed) + bot.bot_orbit_phase;
+                    let target_x = bot.bot_orbit_radius * angle.cos();
+                    let target_z = bot.bot_orbit_radius * angle.sin();
+                    let to_target_x = target_x - bot.state.position.x;
+                    let to_target_z = target_z - bot.state.position.z;
+                    let to_target_len = (to_target_x * to_target_x + to_target_z * to_target_z).sqrt();
+                    let step = (bot.bot_move_speed.clamp(3.2, PLAYER_MAX_SPEED_UNITS_PER_SECOND) * dt_s)
+                        .max(0.04);
+                    let (req_x, req_z) = if to_target_len > 0.0001 {
+                        let ratio = (step / to_target_len).min(1.0);
+                        (
+                            bot.state.position.x + (to_target_x * ratio),
+                            bot.state.position.z + (to_target_z * ratio),
+                        )
+                    } else {
+                        (bot.state.position.x, bot.state.position.z)
+                    };
+                    let (x, z) = resolve_player_position(
+                        &inner,
+                        &room_id,
+                        bot.state.position.x,
+                        bot.state.position.z,
+                        req_x,
+                        req_z,
+                    );
+                    let move_dx = x - bot.state.position.x;
+                    let move_dz = z - bot.state.position.z;
+                    let moved_len = (move_dx * move_dx + move_dz * move_dz).sqrt();
+                    let yaw = if moved_len > 0.0001 {
+                        move_dz.atan2(move_dx)
+                    } else {
+                        bot.state.rotation.yaw
+                    };
+                    let moving = moved_len > 0.01;
                     {
                         let Some(bot_mut) = inner.clients.get_mut(&bot_id) else {
                             continue;
@@ -2390,7 +2435,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                         bot_mut.state.position.z = z;
                         bot_mut.state.rotation.yaw = yaw;
                         bot_mut.state.rotation.pitch = 0.0;
-                        bot_mut.state.moving = true;
+                        bot_mut.state.moving = moving;
                         bot_mut.state.jumping = false;
                         bot_mut.state_ts = ts;
                         push_state_snapshot(bot_mut, ts);
@@ -2403,7 +2448,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                         "position": { "x": x, "y": SPAWN_BASE_Y, "z": z },
                         "rotation": { "yaw": yaw, "pitch": 0.0 },
                         "jumping": false,
-                        "moving": true,
+                        "moving": moving,
                         "ts": ts
                       }
                     });
