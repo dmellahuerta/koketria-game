@@ -8023,6 +8023,20 @@ const bindMobileTouchControls = () => {
 };
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'ArrowUp') {
+    keys.KeyW = true;
+    event.preventDefault();
+  } else if (event.code === 'ArrowDown') {
+    keys.KeyS = true;
+    event.preventDefault();
+  } else if (event.code === 'ArrowLeft') {
+    keys.KeyA = true;
+    event.preventDefault();
+  } else if (event.code === 'ArrowRight') {
+    keys.KeyD = true;
+    event.preventDefault();
+  }
+
   const active = document.activeElement;
   const isEditableFocused = Boolean(
     active
@@ -8155,6 +8169,20 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  if (event.code === 'ArrowUp') {
+    keys.KeyW = false;
+    event.preventDefault();
+  } else if (event.code === 'ArrowDown') {
+    keys.KeyS = false;
+    event.preventDefault();
+  } else if (event.code === 'ArrowLeft') {
+    keys.KeyA = false;
+    event.preventDefault();
+  } else if (event.code === 'ArrowRight') {
+    keys.KeyD = false;
+    event.preventDefault();
+  }
+
   const active = document.activeElement;
   const isEditableFocused = Boolean(
     active
@@ -9567,10 +9595,18 @@ const updateResourceSync = () => {
 
 const summarizePickups = (collection) => {
   if (!Array.isArray(collection) || collection.length === 0) {
-    return { active: 0, nearest: null };
+    return {
+      active: 0,
+      nearestDistance: null,
+      nearestIndex: null,
+      nearestPosition: null,
+      nearestDelta: null,
+    };
   }
   let active = 0;
   let nearestSq = Number.POSITIVE_INFINITY;
+  let nearestIndex = null;
+  let nearestPosition = null;
   for (let i = 0; i < collection.length; i += 1) {
     const pickup = collection[i];
     if (!pickup?.active || !pickup.mesh?.visible) {
@@ -9582,11 +9618,28 @@ const summarizePickups = (collection) => {
     const d2 = (dx * dx) + (dz * dz);
     if (d2 < nearestSq) {
       nearestSq = d2;
+      nearestIndex = Number.isFinite(Number(pickup.index)) ? Number(pickup.index) : i;
+      nearestPosition = {
+        x: Number(pickup.mesh.position.x.toFixed(3)),
+        y: Number(pickup.mesh.position.y.toFixed(3)),
+        z: Number(pickup.mesh.position.z.toFixed(3)),
+      };
     }
+  }
+  const nearestDistance = Number.isFinite(nearestSq) ? Math.sqrt(nearestSq) : null;
+  let nearestDelta = null;
+  if (nearestPosition) {
+    nearestDelta = {
+      x: Number((nearestPosition.x - Number(camera.position.x)).toFixed(3)),
+      z: Number((nearestPosition.z - Number(camera.position.z)).toFixed(3)),
+    };
   }
   return {
     active,
-    nearest: Number.isFinite(nearestSq) ? Math.sqrt(nearestSq) : null,
+    nearestDistance: nearestDistance == null ? null : Number(nearestDistance.toFixed(3)),
+    nearestIndex,
+    nearestPosition,
+    nearestDelta,
   };
 };
 
@@ -9595,6 +9648,7 @@ const renderGameToText = () => {
   const manaSummary = summarizePickups(ammoPickups);
   const shieldSummary = summarizePickups(shieldPickups);
   const healthSummary = summarizePickups(healthPickups);
+  camera.getWorldDirection(forward);
   const payload = {
     note: 'coords: x derecha(+), z adelante(+), y arriba(+)',
     mode: room?.mode || 'lobby',
@@ -9609,6 +9663,12 @@ const renderGameToText = () => {
       x: Number(camera.position.x.toFixed(3)),
       y: Number(camera.position.y.toFixed(3)),
       z: Number(camera.position.z.toFixed(3)),
+      yaw: Number(yaw.toFixed(4)),
+      pitch: Number(pitch.toFixed(4)),
+      forward: {
+        x: Number(forward.x.toFixed(4)),
+        z: Number(forward.z.toFixed(4)),
+      },
       isJumping: Boolean(isJumping),
       canPlay: Boolean(canPlay()),
     },
@@ -9621,18 +9681,9 @@ const renderGameToText = () => {
       pendingHealthRegen: Number(pendingHealthRegen.toFixed(3)),
     },
     pickups: {
-      mana: {
-        active: manaSummary.active,
-        nearestDistance: manaSummary.nearest == null ? null : Number(manaSummary.nearest.toFixed(3)),
-      },
-      shield: {
-        active: shieldSummary.active,
-        nearestDistance: shieldSummary.nearest == null ? null : Number(shieldSummary.nearest.toFixed(3)),
-      },
-      health: {
-        active: healthSummary.active,
-        nearestDistance: healthSummary.nearest == null ? null : Number(healthSummary.nearest.toFixed(3)),
-      },
+      mana: manaSummary,
+      shield: shieldSummary,
+      health: healthSummary,
     },
     timing: {
       nowMs: Date.now(),

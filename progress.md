@@ -24,3 +24,11 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
 - Pickups reportados por estado: `mana.active=50`, `shield.active=29`, `health.active=20` + distancia al más cercano.
 - Inspección visual de `shot-0..2.png`: HUD y escena OK, sin artefactos críticos.
 - Sin `errors-*.json` en esta corrida (sin errores de consola capturados).
+
+- Ajuste para testabilidad del skill: soporte de flechas (`ArrowUp/Down/Left/Right`) mapeadas a `WASD` en keydown/keyup.
+- Motivo: el cliente Playwright del skill usa `left/right/up/down`; sin este mapping no se movía el jugador durante la prueba automatizada.
+
+- `render_game_to_text` extendido para pruebas dirigidas:
+  - player yaw/pitch + vector forward(x,z)
+  - para cada tipo de pickup: nearestIndex, nearestPosition, nearestDelta(x,z), nearestDistance.
+- Motivo: poder diseñar trayectorias Playwright precisas hacia pickups y validar toma/sincronía.
