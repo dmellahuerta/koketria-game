@@ -8103,18 +8103,6 @@ const shoot = () => {
     ? hits[0].point
     : origin.clone().add(shotDirection.clone().multiplyScalar(120));
 
-  if (usingMana || usingHammer || usingPoison) {
-    const characterHit = getClosestRemoteCharacterHitPoint(
-      origin,
-      shotDirection,
-      origin.distanceTo(hitPoint),
-      { headRadius: headshotRadius, bodyRadius: bodyshotRadius },
-    );
-    if (characterHit?.point) {
-      hitPoint.copy(characterHit.point);
-    }
-  }
-
   if (usingHammer) {
     const currentDistance = origin.distanceTo(hitPoint);
     if (currentDistance > pumoriMaxThrowDistance) {

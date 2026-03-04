@@ -1229,7 +1229,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 compute_rewind_timestamp(now, client_shot_ts, base_rewind, shooter_latency_ms);
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
-            let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, distance);
+            let ground_hit_distance = if is_mana && direction.y > -0.35 {
+                None
+            } else {
+                resolve_ground_hit_distance(&origin, &direction, distance)
+            };
             let effective_distance = match (wall_hit_distance, ground_hit_distance) {
                 (Some(w), Some(g)) => w.min(g).min(distance),
                 (Some(w), None) => w.min(distance),
@@ -2609,7 +2613,12 @@ fn bot_apply_authoritative_shot(
     let direction = bot_pick_target_direction(inner, room_id, bot_id, &origin, &fallback_direction);
 
     let wall_hit_distance = resolve_wall_hit_distance(inner, room_id, &origin, &direction, 95.0);
-    let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, 95.0);
+    let is_mana = is_mana_character(character_for_shot.as_deref());
+    let ground_hit_distance = if is_mana && direction.y > -0.35 {
+        None
+    } else {
+        resolve_ground_hit_distance(&origin, &direction, 95.0)
+    };
     let effective_distance = match (wall_hit_distance, ground_hit_distance) {
         (Some(w), Some(g)) => w.min(g).min(95.0),
         (Some(w), None) => w.min(95.0),
@@ -3373,6 +3382,23 @@ async fn apply_delayed_authoritative_hit(
             shot_ts,
             impact_delay_ms as i64,
         ) else {
+            if send_hit_confirm {
+                let mut data = json!({
+                  "reason": "revalidation_failed",
+                  "ts": now_ms()
+                });
+                if let Some(shot_ts_value) = shot_ts {
+                    data["shotTs"] = json!(shot_ts_value);
+                }
+                inner.send_to(
+                    &attacker_id,
+                    json!({
+                      "type":"hit_miss",
+                      "ok": true,
+                      "data": data
+                    }),
+                );
+            }
             return;
         };
         let ts = now_ms();
