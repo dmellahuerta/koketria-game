@@ -37,3 +37,5 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - Encapsula `nodenv` + variables (`CODEX_HOME`, `WEB_GAME_CLIENT`, `WEB_GAME_ACTIONS`) para no repetir el comando largo.
   - Uso base: `./scripts/wgtest.sh`
   - Overrides útiles: `WG_URL`, `WG_ITERATIONS`, `WG_PAUSE_MS`, `WG_SCREENSHOT_DIR`, `WG_ACTIONS_FILE`.
+  - Ajuste: por defecto ahora crea directorio único por corrida (`output/web-game-<run_id>`) y no borra salidas previas.
+  - Limpieza opcional: `WG_CLEAN_OUTPUT=1`.
