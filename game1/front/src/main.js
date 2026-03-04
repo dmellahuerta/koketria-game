@@ -9565,6 +9565,84 @@ const updateResourceSync = () => {
   // Competitive state now comes from authoritative server pushes.
 };
 
+const summarizePickups = (collection) => {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return { active: 0, nearest: null };
+  }
+  let active = 0;
+  let nearestSq = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < collection.length; i += 1) {
+    const pickup = collection[i];
+    if (!pickup?.active || !pickup.mesh?.visible) {
+      continue;
+    }
+    active += 1;
+    const dx = Number(camera.position.x) - Number(pickup.mesh.position.x);
+    const dz = Number(camera.position.z) - Number(pickup.mesh.position.z);
+    const d2 = (dx * dx) + (dz * dz);
+    if (d2 < nearestSq) {
+      nearestSq = d2;
+    }
+  }
+  return {
+    active,
+    nearest: Number.isFinite(nearestSq) ? Math.sqrt(nearestSq) : null,
+  };
+};
+
+const renderGameToText = () => {
+  const room = state.joinedRoom?.room || null;
+  const manaSummary = summarizePickups(ammoPickups);
+  const shieldSummary = summarizePickups(shieldPickups);
+  const healthSummary = summarizePickups(healthPickups);
+  const payload = {
+    note: 'coords: x derecha(+), z adelante(+), y arriba(+)',
+    mode: room?.mode || 'lobby',
+    room: room
+      ? {
+        id: room.id || null,
+        status: room.status || null,
+        weather: room.weather || null,
+      }
+      : null,
+    player: {
+      x: Number(camera.position.x.toFixed(3)),
+      y: Number(camera.position.y.toFixed(3)),
+      z: Number(camera.position.z.toFixed(3)),
+      isJumping: Boolean(isJumping),
+      canPlay: Boolean(canPlay()),
+    },
+    resources: {
+      health: Math.round(health),
+      shield: Math.round(shield),
+      mana: Math.round(mana),
+      ammoInMag: Math.round(ammoInMag),
+      ammoReserve: Math.round(ammoReserve),
+      pendingHealthRegen: Number(pendingHealthRegen.toFixed(3)),
+    },
+    pickups: {
+      mana: {
+        active: manaSummary.active,
+        nearestDistance: manaSummary.nearest == null ? null : Number(manaSummary.nearest.toFixed(3)),
+      },
+      shield: {
+        active: shieldSummary.active,
+        nearestDistance: shieldSummary.nearest == null ? null : Number(shieldSummary.nearest.toFixed(3)),
+      },
+      health: {
+        active: healthSummary.active,
+        nearestDistance: healthSummary.nearest == null ? null : Number(healthSummary.nearest.toFixed(3)),
+      },
+    },
+    timing: {
+      nowMs: Date.now(),
+    },
+  };
+  return JSON.stringify(payload);
+};
+
+window.render_game_to_text = renderGameToText;
+
 const shouldRenderLobbyPreview = () => {
   return !state.joinedRoom
     && lobbySection

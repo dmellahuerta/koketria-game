@@ -13,3 +13,14 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
 - Observación visual: canvas renderiza escena matrix correctamente en las 3 capturas.
 - Gap técnico detectado: no se generaron `state-*.json` porque `window.render_game_to_text` no está expuesto en esta app (el cliente del skill solo lo guarda si existe).
 - Siguiente paso sugerido: exponer `window.render_game_to_text` mínimo para test automatizado completo de pickups/vida/mana.
+
+- Implementado `window.render_game_to_text` en `front/src/main.js`.
+- Incluye: room/mode/status/weather, posición jugador, recursos (vida/escudo/mana/ammo/pending regen), resumen pickups activos + distancia al más cercano.
+- Objetivo: que el cliente Playwright del skill exporte `state-*.json` para auditoría de sincronía de pickups.
+
+- Re-test Playwright con `--click-selector ".room-card button"` para entrar a sala.
+- Resultado in-game confirmado en `state-*.json`: `mode=freeforall`, `room.status=in_game`, `canPlay=true`.
+- Recursos en estado: `health=100`, `shield=25`, `mana=100`.
+- Pickups reportados por estado: `mana.active=50`, `shield.active=29`, `health.active=20` + distancia al más cercano.
+- Inspección visual de `shot-0..2.png`: HUD y escena OK, sin artefactos críticos.
+- Sin `errors-*.json` en esta corrida (sin errores de consola capturados).
