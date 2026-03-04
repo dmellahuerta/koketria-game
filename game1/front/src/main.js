@@ -3377,10 +3377,10 @@ const remoteTorsoCenterOffsetY = playerGroundY + (bodyCenterOffsetY * 0.45);
 const remoteHealthBarYOffset = 2.45;
 const remoteHealthBarWidth = 0.9;
 const remoteHealthBarHeight = 0.09;
-const remoteResourceBarHeight = 0.28;
-const remoteResourceBarWidth = 0.05;
-const remoteResourceBarGap = 0.03;
-const remoteResourceBarsYOffset = remoteHealthBarYOffset - 0.21;
+const remoteResourceBarWidth = 0.34;
+const remoteResourceBarHeight = 0.04;
+const remoteResourceBarsYOffset = remoteHealthBarYOffset - 0.15;
+const remoteResourceBarGapY = 0.08;
 const remoteHealthBarMaxVisibleDistance = 320;
 let kills = 0;
 let health = maxHealth;
@@ -7086,7 +7086,7 @@ const createRemoteHealthBar = () => {
   fill.position.set(0, remoteHealthBarYOffset, 0.001);
   holder.add(fill);
 
-  const makeVerticalBar = (x, color) => {
+  const makeHorizontalBar = (y, color) => {
     const bgMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(remoteResourceBarWidth, remoteResourceBarHeight),
       new THREE.MeshBasicMaterial({
@@ -7100,7 +7100,7 @@ const createRemoteHealthBar = () => {
       }),
     );
     bgMesh.renderOrder = 999;
-    bgMesh.position.set(x, remoteResourceBarsYOffset, 0);
+    bgMesh.position.set(0, y, 0);
     holder.add(bgMesh);
 
     const fillMesh = new THREE.Mesh(
@@ -7116,18 +7116,14 @@ const createRemoteHealthBar = () => {
       }),
     );
     fillMesh.renderOrder = 1000;
-    fillMesh.position.set(x, remoteResourceBarsYOffset, 0.001);
+    fillMesh.position.set(0, y, 0.001);
     holder.add(fillMesh);
     return { bg: bgMesh, fill: fillMesh };
   };
 
-  const barsOffsetX = 0;
-  const shieldBar = makeVerticalBar(
-    barsOffsetX - ((remoteResourceBarWidth + remoteResourceBarGap) * 0.5),
-    0x67d5ff,
-  );
-  const manaBar = makeVerticalBar(
-    barsOffsetX + ((remoteResourceBarWidth + remoteResourceBarGap) * 0.5),
+  const shieldBar = makeHorizontalBar(remoteResourceBarsYOffset, 0x67d5ff);
+  const manaBar = makeHorizontalBar(
+    remoteResourceBarsYOffset - remoteResourceBarGapY,
     0x5f8dff,
   );
 
@@ -7309,14 +7305,12 @@ const updateRemoteHealthBar = (entry) => {
     entry.healthBar.fill.material.color.set(0xff6767);
   }
   if (entry.healthBar.shieldFill) {
-    entry.healthBar.shieldFill.scale.y = Math.max(0.001, normalizedShield);
-    entry.healthBar.shieldFill.position.y = remoteResourceBarsYOffset
-      + (((normalizedShield - 1) * (remoteResourceBarHeight - 0.012)) * 0.5);
+    entry.healthBar.shieldFill.scale.x = Math.max(0.001, normalizedShield);
+    entry.healthBar.shieldFill.position.x = ((normalizedShield - 1) * (remoteResourceBarWidth - 0.012)) * 0.5;
   }
   if (entry.healthBar.manaFill) {
-    entry.healthBar.manaFill.scale.y = Math.max(0.001, normalizedMana);
-    entry.healthBar.manaFill.position.y = remoteResourceBarsYOffset
-      + (((normalizedMana - 1) * (remoteResourceBarHeight - 0.012)) * 0.5);
+    entry.healthBar.manaFill.scale.x = Math.max(0.001, normalizedMana);
+    entry.healthBar.manaFill.position.x = ((normalizedMana - 1) * (remoteResourceBarWidth - 0.012)) * 0.5;
   }
   const team = normalizePlayerTeam(entry.team);
   const hpText = `${String(entry.name || 'Player')} ${Math.round(safeHealth)}`;
