@@ -3401,7 +3401,7 @@ const remoteAnimSwitchCooldownMs = 140;
 const remoteMovingSignalHoldMs = 220;
 const localReconcileSoftError = 0.12;
 const localReconcileHardSnapDistance = 3.2;
-const localReconcileEmergencySnapDistance = 12;
+const localReconcileEmergencySnapDistance = 6.5;
 const localReconcileRatePerSecond = 7.5;
 const localReconcileExpireMs = 320;
 const localInputHistoryLimit = 180;
@@ -5971,20 +5971,13 @@ const connectWebSocket = () => {
               errorBaseZ = predicted.z;
             }
             pendingMoveInputs.splice(0, idx + 1);
-          } else {
+          } else if (pendingMoveInputs.length > 0) {
             reconcileStats.lateAcksInWindow += 1;
-            if (pendingMoveInputs.length > 0) {
-              const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
-              if (pruneUntil > 0) {
-                pendingMoveInputs.splice(0, pruneUntil);
-              }
+            const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
+            if (pruneUntil > 0) {
+              pendingMoveInputs.splice(0, pruneUntil);
             }
-            // Never reconcile from an ACK that doesn't match local prediction history.
-            return;
           }
-        } else {
-          // Ignore ACKs without sequence id for movement reconciliation stability.
-          return;
         }
         const dx = ackPos.x - errorBaseX;
         const dy = ackPos.y - errorBaseY;
@@ -5998,7 +5991,7 @@ const connectWebSocket = () => {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('hard');
           camera.position.copy(correctedTarget);
-          camera.position.y = Math.max(playerGroundY, camera.position.y);
+          constrainPlayerToWorld();
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
         }
