@@ -1903,6 +1903,8 @@ const mapBoundaryMinRadius = 1.02;
 const mapBoundaryMaxRadius = 1.14;
 const mapHalfExtent = 156;
 const mapPlayableHalfExtent = mapHalfExtent - 6;
+const mapWallHeight = 5.2;
+const mapWallThickness = 1.6;
 const terrainBaseY = -2.25;
 const mapBoundsPadding = playerCollisionRadius * 0.2;
 let currentMapSeed = null;
@@ -4273,6 +4275,42 @@ const rebuildMapFromSeed = (seed, force = false) => {
       maxZ: box.position.z + (d / 2),
     });
   }
+
+  // Visual perimeter walls to make map limits explicit for players.
+  const wallLimit = Math.max(12, mapPlayableHalfExtent + (mapWallThickness * 0.5));
+  const wallMat = borderMat.clone();
+  wallMat.emissiveIntensity = 0.2;
+  const northWall = new THREE.Mesh(
+    new THREE.BoxGeometry((wallLimit * 2) + (mapWallThickness * 2), mapWallHeight, mapWallThickness),
+    wallMat.clone(),
+  );
+  northWall.position.set(0, mapWallHeight * 0.5, wallLimit);
+  scene.add(northWall);
+  shootables.push(northWall);
+
+  const southWall = new THREE.Mesh(
+    new THREE.BoxGeometry((wallLimit * 2) + (mapWallThickness * 2), mapWallHeight, mapWallThickness),
+    wallMat.clone(),
+  );
+  southWall.position.set(0, mapWallHeight * 0.5, -wallLimit);
+  scene.add(southWall);
+  shootables.push(southWall);
+
+  const eastWall = new THREE.Mesh(
+    new THREE.BoxGeometry(mapWallThickness, mapWallHeight, wallLimit * 2),
+    wallMat.clone(),
+  );
+  eastWall.position.set(wallLimit, mapWallHeight * 0.5, 0);
+  scene.add(eastWall);
+  shootables.push(eastWall);
+
+  const westWall = new THREE.Mesh(
+    new THREE.BoxGeometry(mapWallThickness, mapWallHeight, wallLimit * 2),
+    wallMat.clone(),
+  );
+  westWall.position.set(-wallLimit, mapWallHeight * 0.5, 0);
+  scene.add(westWall);
+  shootables.push(westWall);
 
   const ammoRnd = createSeededRng(normalizedSeed ^ 0x85EBCA6B);
   const ammoPhaseRnd = createSeededRng(normalizedSeed ^ 0xA0D31F2B);
