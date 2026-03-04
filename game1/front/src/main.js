@@ -7122,10 +7122,10 @@ const createRemoteHealthBar = () => {
     return { bg: bgMesh, fill: fillMesh };
   };
 
-  const shieldBar = makeHorizontalBar(remoteResourceBarsYOffset, 0x67d5ff);
-  const manaBar = makeHorizontalBar(
+  const manaBar = makeHorizontalBar(remoteResourceBarsYOffset, 0x5f8dff);
+  const shieldBar = makeHorizontalBar(
     remoteResourceBarsYOffset - remoteResourceBarGapY,
-    0x5f8dff,
+    0x67d5ff,
   );
 
   const textCanvas = document.createElement('canvas');
