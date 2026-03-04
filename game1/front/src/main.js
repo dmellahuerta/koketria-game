@@ -3410,6 +3410,7 @@ let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
 let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
 let localReconcileExpiresAt = 0;
+let localCollisionBypassUntil = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 const reconcileStats = {
