@@ -7261,31 +7261,32 @@ const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
   const bounded = clampPointToMapBounds(targetX, targetZ, playerCollisionRadius + 0.05);
-  const clampedX = bounded.x;
-  const clampedZ = bounded.z;
+  const desiredX = bounded.x;
+  const desiredZ = bounded.z;
 
-  let resolvedX = currentX;
-  let resolvedZ = currentZ;
-
-  if (isWalkablePoint(clampedX, currentZ)) {
-    resolvedX = clampedX;
+  // Mirror backend_v2 resolve_player_position to avoid client/server drift.
+  if (isWalkablePoint(desiredX, desiredZ)) {
+    return { x: desiredX, z: desiredZ };
   }
-  if (isWalkablePoint(resolvedX, clampedZ)) {
-    resolvedZ = clampedZ;
+  if (isWalkablePoint(currentX, currentZ)) {
+    return { x: currentX, z: currentZ };
   }
 
-  // If both axis attempts fail (common near pillar corners), softly nudge to nearest walkable spot.
-  if (!isWalkablePoint(resolvedX, resolvedZ)) {
-    const fallback = findNearestWalkablePoint(clampedX, clampedZ);
-    const dx = fallback.x - currentX;
-    const dz = fallback.z - currentZ;
-    if ((dx * dx) + (dz * dz) <= 3.24) {
-      resolvedX = fallback.x;
-      resolvedZ = fallback.z;
+  let lastValidX = currentX;
+  let lastValidZ = currentZ;
+  for (let i = 1; i <= 10; i += 1) {
+    const t = i / 10;
+    const sampleX = currentX + ((desiredX - currentX) * t);
+    const sampleZ = currentZ + ((desiredZ - currentZ) * t);
+    if (isWalkablePoint(sampleX, sampleZ)) {
+      lastValidX = sampleX;
+      lastValidZ = sampleZ;
+    } else {
+      break;
     }
   }
 
-  return { x: resolvedX, z: resolvedZ };
+  return { x: lastValidX, z: lastValidZ };
 };
 
 const constrainPlayerToWorld = () => {
