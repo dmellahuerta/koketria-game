@@ -188,6 +188,7 @@ app.innerHTML = `
       <p>Frame ms avg/p95: <span id="frameMsValue">0.0 / 0.0</span></p>
       <p>Latencia: <span id="latencyValue">--</span></p>
       <p>ACK RTT avg/p95: <span id="ackRttValue">0.0 / 0.0</span></p>
+      <p>Shot ACK avg/p95 pend/s: <span id="shotAckValue">0.0 / 0.0 / 0 / 0.0</span></p>
       <p>WS out msg/s kb/s: <span id="wsOutValue">0.0 / 0.0</span></p>
       <p>Move send/s pendientes: <span id="moveFlowValue">0.0 / 0</span></p>
       <p>Draw calls: <span id="drawCallsValue">0</span></p>
@@ -382,6 +383,7 @@ const fpsValue = document.querySelector('#fpsValue');
 const frameMsValue = document.querySelector('#frameMsValue');
 const latencyValue = document.querySelector('#latencyValue');
 const ackRttValue = document.querySelector('#ackRttValue');
+const shotAckValue = document.querySelector('#shotAckValue');
 const wsOutValue = document.querySelector('#wsOutValue');
 const moveFlowValue = document.querySelector('#moveFlowValue');
 const drawCallsValue = document.querySelector('#drawCallsValue');
@@ -459,6 +461,9 @@ const renderPerfStats = {
 const tuningPerfStats = {
   frameMsSamples: [],
   ackRttSamples: [],
+  shotAckSamples: [],
+  shotAcksInWindow: 0,
+  shotAcksPerSec: 0,
   wsOutMsgsInWindow: 0,
   wsOutBytesInWindow: 0,
   wsOutMsgsPerSec: 0,
@@ -894,7 +899,12 @@ const renderPerfPanel = () => {
     ? tuningPerfStats.ackRttSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.ackRttSamples.length
     : 0;
   const ackP95 = percentileFromSamples(tuningPerfStats.ackRttSamples, 0.95);
+  const shotAckAvg = tuningPerfStats.shotAckSamples.length > 0
+    ? tuningPerfStats.shotAckSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.shotAckSamples.length
+    : 0;
+  const shotAckP95 = percentileFromSamples(tuningPerfStats.shotAckSamples, 0.95);
   ackRttValue.textContent = `${ackAvg.toFixed(1)} / ${ackP95.toFixed(1)}`;
+  shotAckValue.textContent = `${shotAckAvg.toFixed(1)} / ${shotAckP95.toFixed(1)} / ${pendingShotAcks.size} / ${tuningPerfStats.shotAcksPerSec.toFixed(1)}`;
   wsOutValue.textContent = `${tuningPerfStats.wsOutMsgsPerSec.toFixed(1)} / ${tuningPerfStats.wsOutKbps.toFixed(1)}`;
   moveFlowValue.textContent = `${tuningPerfStats.moveMsgsPerSec.toFixed(1)} / ${pendingMoveInputs.length}`;
   drawCallsValue.textContent = String(Math.round(renderPerfStats.drawCalls));
@@ -1029,6 +1039,13 @@ const requestLatencyProbe = (force = false) => {
 
 const updatePerfMetrics = () => {
   const now = performance.now();
+  if (pendingShotAcks.size > 0) {
+    for (const [shotId, sentAt] of pendingShotAcks.entries()) {
+      if (now - sentAt > 3000) {
+        pendingShotAcks.delete(shotId);
+      }
+    }
+  }
   const frameMs = Math.max(0, Math.min(250, now - tuningPerfStats.lastFrameAt));
   tuningPerfStats.lastFrameAt = now;
   if (frameMs > 0) {
@@ -1052,6 +1069,7 @@ const updatePerfMetrics = () => {
     tuningPerfStats.wsOutMsgsPerSec = (tuningPerfStats.wsOutMsgsInWindow * 1000) / elapsed;
     tuningPerfStats.wsOutKbps = ((tuningPerfStats.wsOutBytesInWindow * 8) / elapsed);
     tuningPerfStats.moveMsgsPerSec = (tuningPerfStats.moveMsgsInWindow * 1000) / elapsed;
+    tuningPerfStats.shotAcksPerSec = (tuningPerfStats.shotAcksInWindow * 1000) / elapsed;
     tuningPerfStats.softCorrectionsPerSec = (tuningPerfStats.softCorrectionsInWindow * 1000) / elapsed;
     tuningPerfStats.hardCorrectionsPerSec = (tuningPerfStats.hardCorrectionsInWindow * 1000) / elapsed;
     reconcileStats.correctionsInWindow = 0;
@@ -1059,6 +1077,7 @@ const updatePerfMetrics = () => {
     tuningPerfStats.wsOutMsgsInWindow = 0;
     tuningPerfStats.wsOutBytesInWindow = 0;
     tuningPerfStats.moveMsgsInWindow = 0;
+    tuningPerfStats.shotAcksInWindow = 0;
     tuningPerfStats.softCorrectionsInWindow = 0;
     tuningPerfStats.hardCorrectionsInWindow = 0;
     const fps = state.fps;
@@ -3430,6 +3449,7 @@ let localCollisionBypassUntil = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
 let localShotSeq = 0;
+const pendingShotAcks = new Map();
 const reconcileStats = {
   errorSamples: [],
   correctionsInWindow: 0,
@@ -6183,6 +6203,14 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'player_shot_ack') {
+      const ackShotId = Number(payload.data?.shotId);
+      if (Number.isFinite(ackShotId)) {
+        const sentAt = pendingShotAcks.get(ackShotId);
+        if (Number.isFinite(sentAt)) {
+          registerShotAckSample(performance.now() - sentAt);
+          pendingShotAcks.delete(ackShotId);
+        }
+      }
       localAvatar.shootUntil = performance.now() + 420;
       startShootSound();
       return;
@@ -7160,7 +7188,9 @@ const updateRemoteHealthBar = (entry) => {
 
 const clearLocalPredictionHistory = () => {
   pendingMoveInputs.length = 0;
+  pendingShotAcks.clear();
   localInputSeq = 0;
+  localShotSeq = 0;
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
   localCollisionBypassUntil = 0;
@@ -7171,6 +7201,9 @@ const clearLocalPredictionHistory = () => {
   reconcileStats.lateAcksPerSec = 0;
   tuningPerfStats.frameMsSamples.length = 0;
   tuningPerfStats.ackRttSamples.length = 0;
+  tuningPerfStats.shotAckSamples.length = 0;
+  tuningPerfStats.shotAcksInWindow = 0;
+  tuningPerfStats.shotAcksPerSec = 0;
   tuningPerfStats.wsOutMsgsInWindow = 0;
   tuningPerfStats.wsOutBytesInWindow = 0;
   tuningPerfStats.wsOutMsgsPerSec = 0;
@@ -7204,6 +7237,17 @@ const registerAckRttSample = (rttMs) => {
   if (tuningPerfStats.ackRttSamples.length > 180) {
     tuningPerfStats.ackRttSamples.splice(0, tuningPerfStats.ackRttSamples.length - 180);
   }
+};
+
+const registerShotAckSample = (rttMs) => {
+  if (!Number.isFinite(rttMs) || rttMs < 0) {
+    return;
+  }
+  tuningPerfStats.shotAckSamples.push(Math.min(2000, rttMs));
+  if (tuningPerfStats.shotAckSamples.length > 180) {
+    tuningPerfStats.shotAckSamples.splice(0, tuningPerfStats.shotAckSamples.length - 180);
+  }
+  tuningPerfStats.shotAcksInWindow += 1;
 };
 
 const registerCorrectionEvent = (kind) => {
@@ -7242,6 +7286,10 @@ const logTuningSnapshot = () => {
     ? tuningPerfStats.ackRttSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.ackRttSamples.length
     : 0;
   const ackP95 = percentileFromSamples(tuningPerfStats.ackRttSamples, 0.95);
+  const shotAckAvg = tuningPerfStats.shotAckSamples.length > 0
+    ? tuningPerfStats.shotAckSamples.reduce((sum, value) => sum + value, 0) / tuningPerfStats.shotAckSamples.length
+    : 0;
+  const shotAckP95 = percentileFromSamples(tuningPerfStats.shotAckSamples, 0.95);
   const predAvg = reconcileStats.errorSamples.length > 0
     ? reconcileStats.errorSamples.reduce((sum, value) => sum + value, 0) / reconcileStats.errorSamples.length
     : 0;
@@ -7269,6 +7317,10 @@ const logTuningSnapshot = () => {
       latencyMs: Number.isFinite(state.latencyMs) ? Number(state.latencyMs.toFixed(2)) : null,
       ackRttAvgMs: Number(ackAvg.toFixed(2)),
       ackRttP95Ms: Number(ackP95.toFixed(2)),
+      shotAckAvgMs: Number(shotAckAvg.toFixed(2)),
+      shotAckP95Ms: Number(shotAckP95.toFixed(2)),
+      shotAckPerSec: Number(tuningPerfStats.shotAcksPerSec.toFixed(2)),
+      pendingShotAcks: pendingShotAcks.size,
       wsOutMsgPerSec: Number(tuningPerfStats.wsOutMsgsPerSec.toFixed(2)),
       wsOutKbps: Number(tuningPerfStats.wsOutKbps.toFixed(2)),
       moveSendPerSec: Number(tuningPerfStats.moveMsgsPerSec.toFixed(2)),
@@ -8047,6 +8099,7 @@ const shoot = () => {
 
   localShotSeq += 1;
   const shotId = localShotSeq;
+  pendingShotAcks.set(shotId, performance.now());
 
   sendWs({
     type: 'player_shoot',
