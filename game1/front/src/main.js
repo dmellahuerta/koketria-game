@@ -4579,7 +4579,7 @@ const triggerMobileJump = () => {
 };
 
 const respawnPlayer = () => {
-  if (!isRespawning || !canPlay()) {
+  if (!isRespawning || !isMatchRunning()) {
     return;
   }
   const now = performance.now();
