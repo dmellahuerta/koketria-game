@@ -3301,11 +3301,20 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
 
                 if victim_hit.is_some() {
                     hammer.active = false;
+                    let impact_center = victim_hit
+                        .as_ref()
+                        .and_then(|victim_id| inner.clients.get(victim_id))
+                        .map(|victim| Vec3 {
+                            x: victim.state.position.x,
+                            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                            z: victim.state.position.z,
+                        })
+                        .unwrap_or_else(|| segment_end.clone());
                     if apply_radial_falloff_damage(
                         &mut inner,
                         &room_id,
                         &caster_id,
-                        &segment_end,
+                        &impact_center,
                         PUMORI_SPECIAL_EXPLOSION_RADIUS,
                         PUMORI_SPECIAL_HIT_DAMAGE,
                         PUMORI_SPECIAL_MIN_FACTOR,
