@@ -297,6 +297,8 @@ const BOT_RESPAWN_TICK_MS: u64 = 700;
 const BOT_SPECIAL_TICK_MS: u64 = 650;
 const BOT_PILLAR_COLLISION_RADIUS_FACTOR: f64 = 1.2;
 const RADIAL_LOS_CLEARANCE_UNITS: f64 = 0.24;
+const RADIAL_VERTICAL_FACTOR: f64 = 0.35;
+const RADIAL_VERTICAL_MAX_DELTA: f64 = 1.6;
 
 fn parse_addbot_count(text: &str) -> Option<usize> {
     let mut parts = text.split_whitespace();
@@ -3494,7 +3496,9 @@ fn apply_radial_falloff_damage(
         }
         let dx = victim.state.position.x - impact.x;
         let dz = victim.state.position.z - impact.z;
-        let dist = (dx * dx + dz * dz).sqrt();
+        let dy_raw = (victim_aim.y - impact.y).abs();
+        let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
+        let dist = (dx * dx + dz * dz + dy * dy).sqrt();
         if dist > radius {
             continue;
         }
@@ -3692,11 +3696,14 @@ async fn apply_delayed_area_wave_damage(
                 }
                 let dx = victim.state.position.x - impact.x;
                 let dz = victim.state.position.z - impact.z;
-                if (dx * dx + dz * dz).sqrt() > aoe_radius {
+                let dy_raw = (victim_aim.y - impact.y).abs();
+                let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
+                let dist = (dx * dx + dz * dz + dy * dy).sqrt();
+                if dist > aoe_radius {
                     continue;
                 }
                 hit_once.insert(victim_id.clone());
-                let t = (1.0 - (((dx * dx + dz * dz).sqrt()) / aoe_radius.max(0.001))).clamp(0.0, 1.0);
+                let t = (1.0 - (dist / aoe_radius.max(0.001))).clamp(0.0, 1.0);
                 let factor = min_factor + ((max_factor - min_factor) * t);
                 let mut damage = base_damage * factor;
                 if max_factor < 1.0 {
