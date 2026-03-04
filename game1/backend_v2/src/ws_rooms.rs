@@ -2400,12 +2400,10 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                       "ok": true,
                       "data": {
                         "playerId": bot_id,
-                        "state": {
-                          "position": { "x": x, "y": SPAWN_BASE_Y, "z": z },
-                          "rotation": { "yaw": yaw, "pitch": 0.0 },
-                          "jumping": false,
-                          "moving": true
-                        },
+                        "position": { "x": x, "y": SPAWN_BASE_Y, "z": z },
+                        "rotation": { "yaw": yaw, "pitch": 0.0 },
+                        "jumping": false,
+                        "moving": true,
                         "ts": ts
                       }
                     });
