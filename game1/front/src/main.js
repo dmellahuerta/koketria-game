@@ -3346,7 +3346,7 @@ const maxShotSpread = 1.2;
 const spreadDecayPerSecond = 2.25;
 const reloadTime = 1.2;
 const maxHealth = 100;
-const maxShield = 100;
+const maxShield = 25;
 const startShield = 0;
 const shieldDamageReduction = 0.6;
 const maxAmmoInMag = 30;
@@ -6503,6 +6503,37 @@ const connectWebSocket = () => {
       clampPendingHealthRegenToMissing();
       if (changed) {
         updateHud();
+      }
+      return;
+    }
+
+    if (payload.type === 'player_resources_public') {
+      const playerId = String(payload.data?.playerId || '');
+      if (!playerId || (state.self && playerId === state.self.id)) {
+        return;
+      }
+      const entry = state.remotePlayers.get(playerId);
+      if (!entry) {
+        return;
+      }
+      const nextHealth = Number(payload.data?.health);
+      const nextShield = Number(payload.data?.shield);
+      const nextMana = Number(payload.data?.mana);
+      let changed = false;
+      if (Number.isFinite(nextHealth)) {
+        entry.health = Math.max(0, Math.min(maxHealth, Math.round(nextHealth)));
+        changed = true;
+      }
+      if (Number.isFinite(nextShield)) {
+        entry.shield = Math.max(0, Math.min(maxShield, Math.round(nextShield)));
+        changed = true;
+      }
+      if (Number.isFinite(nextMana)) {
+        entry.mana = Math.max(0, Math.min(maxMana, Math.round(nextMana)));
+        changed = true;
+      }
+      if (changed) {
+        updateRemoteHealthBar(entry);
       }
       return;
     }

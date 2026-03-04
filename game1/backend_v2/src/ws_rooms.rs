@@ -165,7 +165,7 @@ impl WsRoomsState {
 }
 
 const MAX_HEALTH: f64 = 100.0;
-const MAX_SHIELD: f64 = 100.0;
+const MAX_SHIELD: f64 = 25.0;
 const START_SHIELD: f64 = 0.0;
 const MAX_MANA: f64 = 100.0;
 const MAX_AMMO_IN_MAG: i64 = 30;
@@ -179,7 +179,7 @@ const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
-const SHIELD_DAMAGE_COST_FACTOR: f64 = 0.85;
+const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
 const HEADSHOT_RADIUS: f64 = 0.62;
 const BODYSHOT_RADIUS: f64 = 1.15;
 const TORSO_RADIUS: f64 = 1.02;
@@ -268,7 +268,7 @@ const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
-const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 500;
+const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 200;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.24;
 const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
@@ -601,10 +601,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         loop {
             ticker.tick().await;
             let mut inner = ping_state.inner.lock().await;
+            let now = now_ms();
             let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
                 break;
             };
-            let now = now_ms();
             update_combat_regen(&mut entry.combat, now);
             entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
             entry.latency_probe_id = entry.latency_probe_seq;
@@ -621,6 +621,31 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             let resources_payload =
                 player_resources_payload(&entry.combat, entry.character.as_deref(), now);
             let _ = entry.tx.send(resources_payload.to_string());
+            let room_id_for_public = entry.room_id.clone();
+            let public_resources = Some((
+                entry.combat.health.round() as i64,
+                entry.combat.shield.round() as i64,
+                entry.combat.mana.round() as i64,
+            ));
+            if let (Some(room_id), Some((health, shield, mana))) =
+                (room_id_for_public, public_resources)
+            {
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"player_resources_public",
+                      "ok": true,
+                      "data": {
+                        "playerId": ping_client_id,
+                        "health": health,
+                        "shield": shield,
+                        "mana": mana,
+                        "ts": now
+                      }
+                    }),
+                    Some(&ping_client_id),
+                );
+            }
         }
     });
 
@@ -1934,7 +1959,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if !player_state.combat.alive {
                 return;
             }
-            if player_state.combat.shield >= MAX_SHIELD - 0.0001 {
+            if player_state.combat.shield > 0.0001 {
                 return;
             }
             let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
@@ -3085,8 +3110,7 @@ fn apply_hit_and_emit(
         }
         if victim.combat.shield > 0.0 {
             let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
-            let shield_cost = (base_damage * SHIELD_DAMAGE_COST_FACTOR).ceil();
-            victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
+            victim.combat.shield = (victim.combat.shield - SHIELD_HIT_COST_PER_HIT).max(0.0);
             victim.combat.health = (victim.combat.health - reduced).max(0.0);
         } else {
             victim.combat.health = (victim.combat.health - base_damage).max(0.0);
