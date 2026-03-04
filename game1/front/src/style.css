@@ -555,9 +555,9 @@ canvas {
 }
 
 .lobby-right-side .room-list {
-  height: clamp(140px, 22vh, 220px);
-  max-height: clamp(140px, 22vh, 220px);
-  min-height: 140px;
+  height: clamp(96px, 14vh, 140px);
+  max-height: clamp(96px, 14vh, 140px);
+  min-height: 96px;
   flex: 0 0 auto;
 }
 
