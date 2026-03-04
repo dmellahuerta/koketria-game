@@ -202,7 +202,7 @@ const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 5;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
-const FFA_RESPAWN_MS: i64 = 10_000;
+const FFA_RESPAWN_MS: i64 = 5_000;
 const VERSUS_RESPAWN_MS: i64 = 3_000;
 const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
 const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
@@ -1761,7 +1761,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
 
-            let (allow_cast, payload) = {
+            let (allow_cast, payload, origin) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
@@ -1770,6 +1770,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     (
                         false,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.state.position.clone(),
                     )
                 } else {
                     let can_cast = now >= entry.combat.pumori_cd_until_ms;
@@ -1779,6 +1780,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     (
                         can_cast,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.state.position.clone(),
                     )
                 }
             };
@@ -1794,7 +1796,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "data": {
                     "playerId": client_id,
                     "durationMs": PUMORI_ORBIT_DURATION_MS,
-                    "ts": now_ms()
+                    "ts": now_ms(),
+                    "origin": {
+                      "x": origin.x,
+                      "y": origin.y,
+                      "z": origin.z
+                    }
                   }
                 }),
                 None,
@@ -3312,7 +3319,12 @@ fn bot_try_cast_special(
                   "data": {
                     "playerId": bot_id,
                     "durationMs": PUMORI_ORBIT_DURATION_MS,
-                    "ts": now_ms()
+                    "ts": now_ms(),
+                    "origin": {
+                      "x": origin.x,
+                      "y": origin.y,
+                      "z": origin.z
+                    }
                   }
                 }),
                 None,

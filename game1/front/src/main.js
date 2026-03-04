@@ -237,7 +237,7 @@ app.innerHTML = `
   <div id="respawnScreen" class="hidden">
     <div class="respawn-card">
       <h2>Eliminado</h2>
-      <p>Respawn en <strong id="respawnCounter">10</strong>s</p>
+      <p>Respawn en <strong id="respawnCounter">5</strong>s</p>
     </div>
   </div>
 
@@ -1468,7 +1468,7 @@ const getRespawnDurationSeconds = () => {
   if (state.joinedRoom && isVersusRoom(state.joinedRoom.room)) {
     return 3;
   }
-  return 10;
+  return 5;
 };
 
 const updateTeamScoreHud = () => {
@@ -5924,13 +5924,14 @@ const getPlayerPositionById = (playerId) => {
   return null;
 };
 
-const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0) => {
+const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0, fallbackCenter = null) => {
   const ownerId = String(playerId || '');
   if (!ownerId) {
     return;
   }
   clearPumoriOrbitSpecialByOwner(ownerId);
-  const center = getPlayerPositionById(ownerId);
+  const center = getPlayerPositionById(ownerId)
+    || (fallbackCenter instanceof THREE.Vector3 ? fallbackCenter.clone() : null);
   const now = performance.now();
   const safeElapsedMs = Math.max(0, Number(elapsedMs) || 0);
   const visualStartAt = now - safeElapsedMs;
@@ -5950,7 +5951,7 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0) => {
     maxOrbitRadius: 22,
     maxActiveHammers: 28,
     phase: Math.random() * Math.PI * 2,
-    waitingOwnerUntil: center ? 0 : now + 2500,
+    waitingOwnerUntil: center ? 0 : now + 10000,
   });
 };
 
@@ -6828,13 +6829,26 @@ const connectWebSocket = () => {
       const ownerId = String(payload.data?.playerId || '');
       const durationMs = Number(payload.data?.durationMs || 10_000);
       const castTs = Number(payload.data?.ts);
+      const originData = payload.data?.origin || {};
       if (!ownerId) {
         return;
+      }
+      let fallbackCenter = null;
+      if (
+        Number.isFinite(Number(originData.x))
+        && Number.isFinite(Number(originData.y))
+        && Number.isFinite(Number(originData.z))
+      ) {
+        fallbackCenter = new THREE.Vector3(
+          Number(originData.x),
+          Number(originData.y),
+          Number(originData.z),
+        );
       }
       const elapsedMs = Number.isFinite(castTs)
         ? Math.max(0, getEstimatedServerNowMs() - castTs)
         : 0;
-      startPumoriOrbitSpecialVisual(ownerId, durationMs, elapsedMs);
+      startPumoriOrbitSpecialVisual(ownerId, durationMs, elapsedMs, fallbackCenter);
       return;
     }
 
