@@ -598,18 +598,23 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
                 break;
             };
+            let now = now_ms();
+            update_combat_regen(&mut entry.combat, now);
             entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
             entry.latency_probe_id = entry.latency_probe_seq;
-            entry.latency_probe_sent_at = now_ms();
+            entry.latency_probe_sent_at = now;
             let payload = json!({
               "type": "ping",
               "ok": true,
               "data": {
                 "probeId": entry.latency_probe_id,
-                "serverTs": now_ms()
+                "serverTs": now
               }
             });
             let _ = entry.tx.send(payload.to_string());
+            let resources_payload =
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now);
+            let _ = entry.tx.send(resources_payload.to_string());
         }
     });
 
