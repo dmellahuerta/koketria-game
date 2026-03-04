@@ -213,8 +213,8 @@ const SPAWN_POINT_COUNT: usize = 20;
 const MAP_PILLAR_COUNT: usize = 220;
 const MAP_AXIS_X_BASE: f64 = 118.0;
 const MAP_AXIS_Z_BASE: f64 = 96.0;
-const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.96;
-const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.04;
+const MAP_BOUNDARY_MIN_RADIUS: f64 = 1.02;
+const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.14;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
@@ -5601,7 +5601,7 @@ fn resolve_player_position_with_radius(
 }
 
 fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64, collision_radius: f64) -> bool {
-    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS * 0.6)
+    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS * 0.2)
         && !collides_with_map_box(meta, x, z, collision_radius)
 }
 
