@@ -284,7 +284,7 @@ const HEALTH_PICKUP_COUNT: usize = 20;
 const PICKUP_RESPAWN_MS: i64 = 60_000;
 const PICKUP_TAKE_RADIUS: f64 = 1.1;
 const BOT_MAX_PER_ROOM: usize = 8;
-const BOT_MOVE_TICK_MS: u64 = 100;
+const BOT_MOVE_TICK_MS: u64 = 60;
 const BOT_SHOOT_TICK_MS: u64 = 1250;
 const BOT_RESPAWN_TICK_MS: u64 = 700;
 const BOT_SPECIAL_TICK_MS: u64 = 650;
@@ -2521,7 +2521,7 @@ fn bot_apply_authoritative_shot(
     bot_id: &str,
 ) {
     let now = now_ms();
-    let (origin, direction, character_for_shot) = {
+    let (origin, fallback_direction, character_for_shot) = {
         let Some(entry) = inner.clients.get_mut(bot_id) else {
             return;
         };
@@ -2547,6 +2547,7 @@ fn bot_apply_authoritative_shot(
             });
         (origin, direction, entry.character.clone())
     };
+    let direction = bot_pick_target_direction(inner, room_id, bot_id, &origin, &fallback_direction);
 
     let wall_hit_distance = resolve_wall_hit_distance(inner, room_id, &origin, &direction, 95.0);
     let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, 95.0);
@@ -2623,6 +2624,53 @@ fn bot_apply_authoritative_shot(
             impact_delay_ms,
         ));
     }
+}
+
+fn bot_pick_target_direction(
+    inner: &Inner,
+    room_id: &str,
+    bot_id: &str,
+    origin: &Vec3,
+    fallback: &Vec3,
+) -> Vec3 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return fallback.clone();
+    };
+    let mut best_dir: Option<Vec3> = None;
+    let mut best_d2 = f64::MAX;
+    for victim_id in &room.players {
+        if victim_id == bot_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, bot_id, victim_id) {
+            continue;
+        }
+        let Some(victim) = inner.clients.get(victim_id) else {
+            continue;
+        };
+        if !victim.combat.alive {
+            continue;
+        }
+        let target = Vec3 {
+            x: victim.state.position.x,
+            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+            z: victim.state.position.z,
+        };
+        let to = Vec3 {
+            x: target.x - origin.x,
+            y: target.y - origin.y,
+            z: target.z - origin.z,
+        };
+        let d2 = to.x * to.x + to.y * to.y + to.z * to.z;
+        if d2 < 0.001 || d2 >= best_d2 {
+            continue;
+        }
+        if let Some(normalized) = normalize_vec3(to) {
+            best_d2 = d2;
+            best_dir = Some(normalized);
+        }
+    }
+    best_dir.unwrap_or_else(|| fallback.clone())
 }
 
 fn bot_try_cast_special(
