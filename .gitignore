@@ -4,3 +4,5 @@ backend/node_modules
 game1/front/node_modules
 game1/backend/node_modules
 game1/backend_v2/target
+output
+reset.sh
