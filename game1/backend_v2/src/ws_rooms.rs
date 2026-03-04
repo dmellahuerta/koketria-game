@@ -274,6 +274,9 @@ const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
 const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.018;
 const HITBOX_MOTION_INFLATE_MAX: f64 = 0.28;
 const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.06;
+const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 36;
+const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 3.0;
+const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 84;
 const MANA_PICKUP_COUNT: usize = 50;
 const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
@@ -3809,6 +3812,18 @@ fn find_best_hit(
         let target_speed = client_speed_at_ts(candidate, rewind_ts);
         let motion_inflate =
             (target_speed * HITBOX_MOTION_INFLATE_FACTOR).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
+        let sweep_window_ms = ((HITREG_SWEEP_BASE_WINDOW_MS as f64)
+            + (target_speed * HITREG_SWEEP_SPEED_WINDOW_FACTOR))
+            .round() as i64;
+        let sweep_window_ms = sweep_window_ms.clamp(0, HITREG_SWEEP_MAX_WINDOW_MS);
+        let mut sample_positions = Vec::with_capacity(3);
+        if sweep_window_ms > 0 {
+            sample_positions.push(client_position_at(candidate, rewind_ts - sweep_window_ms));
+        }
+        sample_positions.push(rewound.clone());
+        if sweep_window_ms > 0 {
+            sample_positions.push(client_position_at(candidate, rewind_ts + sweep_window_ms));
+        }
         let head_radius = HEADSHOT_RADIUS + motion_inflate.min(HITBOX_MOTION_INFLATE_HEAD_MAX);
         let body_radius = BODYSHOT_RADIUS + motion_inflate;
         let torso_radius = TORSO_RADIUS + motion_inflate;
@@ -3819,15 +3834,6 @@ fn find_best_hit(
             y: rewound.y + HEAD_CENTER_OFFSET_Y,
             z: rewound.z,
         };
-        let body_center = Vec3 {
-            x: rewound.x,
-            y: rewound.y + BODY_CENTER_OFFSET_Y,
-            z: rewound.z,
-        };
-        let torso_min_y = rewound.y - 0.28;
-        let torso_max_y = rewound.y + 0.58;
-        let legs_min_y = rewound.y - 1.05;
-        let legs_max_y = rewound.y - 0.18;
 
         let mut candidate_hit: Option<(bool, f64)> = None;
         if let Some(head_dist) = ray_hit_sphere(
@@ -3839,82 +3845,92 @@ fn find_best_hit(
         ) {
             candidate_hit = Some((true, head_dist));
         }
-        if let Some(body_dist) = ray_hit_sphere(
-            origin,
-            direction_norm,
-            &body_center,
-            body_radius,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if body_dist < cur => {
-                    candidate_hit = Some((false, body_dist));
+        for sample in &sample_positions {
+            if let Some(body_dist) = ray_hit_sphere(
+                origin,
+                direction_norm,
+                &Vec3 {
+                    x: sample.x,
+                    y: sample.y + BODY_CENTER_OFFSET_Y,
+                    z: sample.z,
+                },
+                body_radius,
+                max_distance,
+            ) {
+                match candidate_hit {
+                    Some((_is_head, cur)) if body_dist < cur => {
+                        candidate_hit = Some((false, body_dist));
+                    }
+                    None => {
+                        candidate_hit = Some((false, body_dist));
+                    }
+                    _ => {}
                 }
-                None => {
-                    candidate_hit = Some((false, body_dist));
-                }
-                _ => {}
             }
-        }
-        if let Some(torso_dist) = ray_hit_sphere(
-            origin,
-            direction_norm,
-            &Vec3 {
-                x: rewound.x,
-                y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
-                z: rewound.z,
-            },
-            torso_radius,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if torso_dist < cur => {
-                    candidate_hit = Some((false, torso_dist));
+            if let Some(torso_dist) = ray_hit_sphere(
+                origin,
+                direction_norm,
+                &Vec3 {
+                    x: sample.x,
+                    y: sample.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                    z: sample.z,
+                },
+                torso_radius,
+                max_distance,
+            ) {
+                match candidate_hit {
+                    Some((_is_head, cur)) if torso_dist < cur => {
+                        candidate_hit = Some((false, torso_dist));
+                    }
+                    None => {
+                        candidate_hit = Some((false, torso_dist));
+                    }
+                    _ => {}
                 }
-                None => {
-                    candidate_hit = Some((false, torso_dist));
-                }
-                _ => {}
             }
-        }
-        if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
-            origin,
-            direction_norm,
-            rewound.x,
-            rewound.z,
-            torso_min_y,
-            torso_max_y,
-            torso_capsule_radius,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if torso_capsule_dist < cur => {
-                    candidate_hit = Some((false, torso_capsule_dist));
+            let torso_min_y = sample.y - 0.28;
+            let torso_max_y = sample.y + 0.58;
+            let legs_min_y = sample.y - 1.05;
+            let legs_max_y = sample.y - 0.18;
+            if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
+                origin,
+                direction_norm,
+                sample.x,
+                sample.z,
+                torso_min_y,
+                torso_max_y,
+                torso_capsule_radius,
+                max_distance,
+            ) {
+                match candidate_hit {
+                    Some((_is_head, cur)) if torso_capsule_dist < cur => {
+                        candidate_hit = Some((false, torso_capsule_dist));
+                    }
+                    None => {
+                        candidate_hit = Some((false, torso_capsule_dist));
+                    }
+                    _ => {}
                 }
-                None => {
-                    candidate_hit = Some((false, torso_capsule_dist));
-                }
-                _ => {}
             }
-        }
-        if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
-            origin,
-            direction_norm,
-            rewound.x,
-            rewound.z,
-            legs_min_y,
-            legs_max_y,
-            legs_capsule_radius,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if legs_capsule_dist < cur => {
-                    candidate_hit = Some((false, legs_capsule_dist));
+            if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
+                origin,
+                direction_norm,
+                sample.x,
+                sample.z,
+                legs_min_y,
+                legs_max_y,
+                legs_capsule_radius,
+                max_distance,
+            ) {
+                match candidate_hit {
+                    Some((_is_head, cur)) if legs_capsule_dist < cur => {
+                        candidate_hit = Some((false, legs_capsule_dist));
+                    }
+                    None => {
+                        candidate_hit = Some((false, legs_capsule_dist));
+                    }
+                    _ => {}
                 }
-                None => {
-                    candidate_hit = Some((false, legs_capsule_dist));
-                }
-                _ => {}
             }
         }
 
