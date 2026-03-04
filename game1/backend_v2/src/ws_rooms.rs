@@ -270,7 +270,10 @@ const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
-const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
+const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.24;
+const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
+const MAGIC_IMPACT_REVALIDATION_SPEED_MAX: f64 = 0.16;
+const MAGIC_IMPACT_REVALIDATION_WINDOW_MS: i64 = 90;
 const SHOOT_REQ_MIN_INTERVAL_MS: i64 = 20;
 const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
 const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
@@ -3363,11 +3366,12 @@ async fn apply_delayed_authoritative_hit(
         if !inner.clients.contains_key(&attacker_id) {
             return;
         }
-        let Some(revalidated_headshot) = classify_point_hit_on_player(
+        let Some(revalidated_headshot) = classify_point_hit_on_player_with_history(
+            victim,
             &impact_point,
-            &victim.state.position,
             headshot,
-            MAGIC_IMPACT_REVALIDATION_MARGIN,
+            shot_ts,
+            impact_delay_ms as i64,
         ) else {
             return;
         };
@@ -4924,6 +4928,45 @@ fn classify_point_hit_on_player(
         return None;
     }
     None
+}
+
+fn classify_point_hit_on_player_with_history(
+    victim: &ClientSession,
+    impact_point: &Vec3,
+    prefer_headshot: bool,
+    shot_ts: Option<i64>,
+    impact_delay_ms: i64,
+) -> Option<bool> {
+    let now = now_ms();
+    let target_ts = match shot_ts {
+        Some(ts) => clamp_i64(ts + impact_delay_ms, now - STATE_HISTORY_WINDOW_MS, now),
+        None => now,
+    };
+    let sample_ts = [
+        target_ts - MAGIC_IMPACT_REVALIDATION_WINDOW_MS,
+        target_ts - (MAGIC_IMPACT_REVALIDATION_WINDOW_MS / 2),
+        target_ts,
+        target_ts + (MAGIC_IMPACT_REVALIDATION_WINDOW_MS / 2),
+    ];
+
+    let mut fallback_body: Option<bool> = None;
+    for ts in sample_ts {
+        let clamped_ts = clamp_i64(ts, now - STATE_HISTORY_WINDOW_MS, now);
+        let pos = client_position_at(victim, clamped_ts);
+        let speed = client_speed_at_ts(victim, clamped_ts);
+        let margin = MAGIC_IMPACT_REVALIDATION_MARGIN
+            + (speed * MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR)
+                .clamp(0.0, MAGIC_IMPACT_REVALIDATION_SPEED_MAX);
+        if let Some(result) = classify_point_hit_on_player(impact_point, &pos, prefer_headshot, margin) {
+            return Some(result);
+        }
+        if prefer_headshot {
+            fallback_body = classify_point_hit_on_player(impact_point, &pos, false, margin)
+                .or(fallback_body);
+        }
+    }
+
+    fallback_body
 }
 
 fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
