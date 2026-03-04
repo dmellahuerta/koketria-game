@@ -5601,7 +5601,7 @@ fn resolve_player_position_with_radius(
 }
 
 fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64, collision_radius: f64) -> bool {
-    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS)
+    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS * 0.6)
         && !collides_with_map_box(meta, x, z, collision_radius)
 }
 

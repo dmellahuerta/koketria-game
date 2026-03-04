@@ -1901,7 +1901,7 @@ const mapBoundaryMinRadius = 0.96;
 const mapBoundaryMaxRadius = 1.04;
 const mapHalfExtent = 156;
 const terrainBaseY = -2.25;
-const mapBoundsPadding = playerCollisionRadius;
+const mapBoundsPadding = playerCollisionRadius * 0.6;
 let currentMapSeed = null;
 let currentMapProfile = null;
 let currentMapCollisionHash = null;
@@ -8074,14 +8074,15 @@ const findNearestWalkablePoint = (originX, originZ) => {
 const applyWorldCollisions = (targetX, targetZ) => {
   const currentX = camera.position.x;
   const currentZ = camera.position.z;
+  const targetInsideMap = isInsideMapBounds(targetX, targetZ, mapBoundsPadding);
   const bounded = clampPointToMapBounds(targetX, targetZ, mapBoundsPadding);
   const desiredX = bounded.x;
   const desiredZ = bounded.z;
   const desiredState = getWalkabilityState(desiredX, desiredZ);
-  if (!desiredState.walkable) {
-    if (!desiredState.insideMap && desiredState.pillarHit) {
+  if (!targetInsideMap || !desiredState.walkable) {
+    if (!targetInsideMap && desiredState.pillarHit) {
       lastCollisionBlockReason = 'map+pillar';
-    } else if (!desiredState.insideMap) {
+    } else if (!targetInsideMap || !desiredState.insideMap) {
       lastCollisionBlockReason = 'map';
     } else if (desiredState.pillarHit) {
       lastCollisionBlockReason = 'pillar';
