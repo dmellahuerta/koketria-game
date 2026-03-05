@@ -3534,14 +3534,13 @@ const tracerMaterial = new THREE.MeshBasicMaterial({
 });
 const impactGeometry = new THREE.SphereGeometry(0.11, 8, 8);
 const impactMaterial = new THREE.MeshBasicMaterial({ color: 0x7dff92, transparent: true, opacity: 0.9 });
-const hitWaveGeometry = new THREE.RingGeometry(0.16, 0.24, 28);
+const hitWaveGeometry = new THREE.SphereGeometry(0.22, 14, 12);
 const hitWaveMaterial = new THREE.MeshBasicMaterial({
   color: 0x9fffb6,
   transparent: true,
-  opacity: 0.9,
+  opacity: 0.55,
   blending: THREE.AdditiveBlending,
   depthWrite: false,
-  side: THREE.DoubleSide,
 });
 const activeTracers = [];
 const activeImpacts = [];
@@ -3558,10 +3557,10 @@ const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
-const hitWaveYOffset = 0.04;
-const hitWaveStartScale = 0.9;
-const hitWaveLife = 0.2;
-const hitWaveExpand = 5.8;
+const hitWaveYOffset = 0.02;
+const hitWaveStartScale = 0.35;
+const hitWaveLife = 0.22;
+const hitWaveExpand = 7.4;
 const vfxNearDistance = 35;
 const vfxFarDistance = 165;
 const tmpSegDir = new THREE.Vector3();
@@ -6211,7 +6210,6 @@ const createHitWave = (position, color = 0x9fffb6) => {
   wave.material.color = new THREE.Color(color);
   wave.position.copy(position);
   wave.position.y += hitWaveYOffset;
-  wave.rotation.x = -Math.PI / 2;
   wave.scale.setScalar(hitWaveStartScale);
   wave.userData.life = state.showCollisionOnly ? Math.max(hitWaveLife, 0.32) : hitWaveLife;
   wave.userData.expand = state.showCollisionOnly ? hitWaveExpand * 1.25 : hitWaveExpand;
