@@ -6184,27 +6184,40 @@ const createImpact = (position, color = 0x7dff92) => {
 };
 
 const createHitWave = (position, color = 0x9fffb6) => {
-  if (state.showCollisionOnly) {
-    return null;
-  }
   if (!position) {
     return null;
   }
-  const budget = getVfxSpawnBudget(position);
-  if (budget < 0.999 && Math.random() > budget) {
-    return null;
+  if (!state.showCollisionOnly) {
+    const budget = getVfxSpawnBudget(position);
+    if (budget < 0.999 && Math.random() > budget) {
+      return null;
+    }
+    if (activeHitWaves.length >= getDynamicMaxImpacts()) {
+      return null;
+    }
   }
-  if (activeHitWaves.length >= getDynamicMaxImpacts()) {
-    return null;
-  }
-  const wave = new THREE.Mesh(hitWaveGeometry, hitWaveMaterial.clone());
+
+  const waveMaterial = state.showCollisionOnly
+    ? new THREE.MeshBasicMaterial({
+      color,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      toneMapped: false,
+    })
+    : hitWaveMaterial.clone();
+  const wave = new THREE.Mesh(hitWaveGeometry, waveMaterial);
   wave.material.color = new THREE.Color(color);
   wave.position.copy(position);
   wave.position.y += hitWaveYOffset;
   wave.rotation.x = -Math.PI / 2;
   wave.scale.setScalar(hitWaveStartScale);
-  wave.userData.life = hitWaveLife;
-  wave.userData.expand = hitWaveExpand;
+  wave.userData.life = state.showCollisionOnly ? Math.max(hitWaveLife, 0.32) : hitWaveLife;
+  wave.userData.expand = state.showCollisionOnly ? hitWaveExpand * 1.25 : hitWaveExpand;
+  if (state.showCollisionOnly) {
+    wave.renderOrder = 1900;
+  }
   scene.add(wave);
   activeHitWaves.push(wave);
   return wave;
