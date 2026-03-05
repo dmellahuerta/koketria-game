@@ -3570,6 +3570,10 @@ const tmpClosestPoint = new THREE.Vector3();
 const tmpTravelVec = new THREE.Vector3();
 const tmpLocalHead = new THREE.Vector3();
 const tmpLocalBody = new THREE.Vector3();
+const tmpCapsuleA = new THREE.Vector3();
+const tmpCapsuleB = new THREE.Vector3();
+const tmpCapsuleC = new THREE.Vector3();
+const tmpCapsuleD = new THREE.Vector3();
 const tracerUpAxis = new THREE.Vector3(0, 1, 0);
 const tmpWorldQuatA = new THREE.Quaternion();
 const tmpWorldQuatB = new THREE.Quaternion();
@@ -3679,13 +3683,15 @@ const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
 const unifiedMagicHitboxRadius = 0.24;
 const headshotRadius = 0.62;
-const bodyshotRadius = 1.15;
-const torsoRadius = 1.02;
+const bodyCapsuleRadius = 0.65;
+const bodyCapsuleTopOffsetY = -0.05;
+const bodyCapsuleBottomOffsetY = -1.45;
 const headCenterOffsetY = 0.18;
-const bodyCenterOffsetY = -0.45;
+const bodyCenterOffsetY = (bodyCapsuleTopOffsetY + bodyCapsuleBottomOffsetY) * 0.5;
 const remoteHeadCenterOffsetY = playerGroundY + headCenterOffsetY;
 const remoteBodyCenterOffsetY = playerGroundY + bodyCenterOffsetY;
-const remoteTorsoCenterOffsetY = playerGroundY + (bodyCenterOffsetY * 0.45);
+const remoteBodyCapsuleTopOffsetY = playerGroundY + bodyCapsuleTopOffsetY;
+const remoteBodyCapsuleBottomOffsetY = playerGroundY + bodyCapsuleBottomOffsetY;
 const remoteHealthBarYOffset = 2.45;
 const remoteHealthBarWidth = 0.9;
 const remoteHealthBarHeight = 0.09;
@@ -3739,7 +3745,6 @@ const DEBUG_WEAPON_ATTACH = false;
 const debugHitboxColors = {
   head: 0xff4d4d,
   body: 0x4de2ff,
-  torso: 0xb28cff,
 };
 const remoteInterpolationBaseMs = 235;
 const remoteInterpolationMinMs = 180;
@@ -6222,6 +6227,76 @@ const testSegmentSphereHit = (segStart, segEnd, center, radius) => {
   return null;
 };
 
+const testSegmentCapsuleHit = (segStart, segEnd, capStart, capEnd, radius) => {
+  const u = tmpCapsuleA.subVectors(segEnd, segStart);
+  const v = tmpCapsuleB.subVectors(capEnd, capStart);
+  const w = tmpCapsuleC.subVectors(segStart, capStart);
+
+  const a = u.dot(u);
+  const b = u.dot(v);
+  const c = v.dot(v);
+  const d = u.dot(w);
+  const e = v.dot(w);
+  const EPS = 1e-6;
+  const D = (a * c) - (b * b);
+
+  let sN;
+  let sD = D;
+  let tN;
+  let tD = D;
+
+  if (D < EPS) {
+    sN = 0;
+    sD = 1;
+    tN = e;
+    tD = c;
+  } else {
+    sN = (b * e) - (c * d);
+    tN = (a * e) - (b * d);
+    if (sN < 0) {
+      sN = 0;
+      tN = e;
+      tD = c;
+    } else if (sN > sD) {
+      sN = sD;
+      tN = e + b;
+      tD = c;
+    }
+  }
+
+  if (tN < 0) {
+    tN = 0;
+    if (-d < 0) {
+      sN = 0;
+    } else if (-d > a) {
+      sN = sD;
+    } else {
+      sN = -d;
+      sD = a;
+    }
+  } else if (tN > tD) {
+    tN = tD;
+    if ((-d + b) < 0) {
+      sN = 0;
+    } else if ((-d + b) > a) {
+      sN = sD;
+    } else {
+      sN = -d + b;
+      sD = a;
+    }
+  }
+
+  const sc = Math.abs(sN) < EPS ? 0 : sN / sD;
+  const tc = Math.abs(tN) < EPS ? 0 : tN / tD;
+
+  const closestOnShot = tmpCapsuleD.copy(segStart).addScaledVector(u, sc);
+  const closestOnCapsuleAxis = tmpLocalBody.copy(capStart).addScaledVector(v, tc);
+  if (closestOnShot.distanceToSquared(closestOnCapsuleAxis) <= radius * radius) {
+    return closestOnShot.clone();
+  }
+  return null;
+};
+
 const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
   tmpTravelVec.subVectors(segEnd, segStart);
   const distance = tmpTravelVec.length();
@@ -6261,23 +6336,23 @@ const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
 const getLocalSegmentCharacterImpact = (segStart, segEnd, extraRadius = 0) => {
   const extra = Math.max(0, Number(extraRadius) || 0);
   tmpLocalHead.set(camera.position.x, camera.position.y + headCenterOffsetY, camera.position.z);
-  tmpLocalBody.set(camera.position.x, camera.position.y + bodyCenterOffsetY, camera.position.z);
   const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, headshotRadius + extra);
   if (head) {
     return { point: head, headshot: true };
   }
-  const body = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, bodyshotRadius + extra);
-  if (body) {
-    return { point: body, headshot: false };
-  }
-  tmpLocalBody.set(
+  tmpCapsuleA.set(
     camera.position.x,
-    camera.position.y + (bodyCenterOffsetY * 0.45),
+    camera.position.y + bodyCapsuleTopOffsetY,
     camera.position.z,
   );
-  const torso = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, torsoRadius + extra);
-  if (torso) {
-    return { point: torso, headshot: false };
+  tmpCapsuleB.set(
+    camera.position.x,
+    camera.position.y + bodyCapsuleBottomOffsetY,
+    camera.position.z,
+  );
+  const body = testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, bodyCapsuleRadius + extra);
+  if (body) {
+    return { point: body, headshot: false };
   }
   return null;
 };
@@ -6292,19 +6367,18 @@ const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd, extraRadius = 
     entry.group.position.y + remoteHeadCenterOffsetY,
     entry.group.position.z,
   );
-  const bodyCenter = new THREE.Vector3(
+  tmpCapsuleA.set(
     entry.group.position.x,
-    entry.group.position.y + remoteBodyCenterOffsetY,
+    entry.group.position.y + remoteBodyCapsuleTopOffsetY,
     entry.group.position.z,
   );
-  const torsoCenter = new THREE.Vector3(
+  tmpCapsuleB.set(
     entry.group.position.x,
-    entry.group.position.y + remoteTorsoCenterOffsetY,
+    entry.group.position.y + remoteBodyCapsuleBottomOffsetY,
     entry.group.position.z,
   );
   return testSegmentSphereHit(segStart, segEnd, headCenter, headshotRadius + extra)
-    || testSegmentSphereHit(segStart, segEnd, bodyCenter, bodyshotRadius + extra)
-    || testSegmentSphereHit(segStart, segEnd, torsoCenter, torsoRadius + extra);
+    || testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, bodyCapsuleRadius + extra);
 };
 
 const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '', extraRadius = 0) => {
@@ -7621,24 +7695,31 @@ const getRenderCamera = () => {
 const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, options = {}) => {
   let closestDistance = maxDistance;
   let closestPoint = null;
-  const tmpCenter = new THREE.Vector3();
-  const toCenter = new THREE.Vector3();
-  const projectedPoint = new THREE.Vector3();
   const headRadius = Number.isFinite(options.headRadius) ? options.headRadius : headshotRadius;
-  const bodyRadius = Number.isFinite(options.bodyRadius) ? options.bodyRadius : bodyshotRadius;
-  const torsoHitRadius = Number.isFinite(options.torsoRadius) ? options.torsoRadius : torsoRadius;
+  const bodyRadius = Number.isFinite(options.bodyRadius) ? options.bodyRadius : bodyCapsuleRadius;
+  const segEnd = origin.clone().add(direction.clone().multiplyScalar(maxDistance));
 
   const tryHitSphere = (center, radius) => {
-    toCenter.copy(center).sub(origin);
-    const projection = toCenter.dot(direction);
-    if (projection < 0 || projection > closestDistance) {
+    const impact = testSegmentSphereHit(origin, segEnd, center, radius);
+    if (!impact) {
       return;
     }
-
-    projectedPoint.copy(direction).multiplyScalar(projection).add(origin);
-    if (projectedPoint.distanceToSquared(center) <= radius * radius) {
+    const projection = origin.distanceTo(impact);
+    if (projection <= closestDistance) {
       closestDistance = projection;
-      closestPoint = projectedPoint.clone();
+      closestPoint = impact;
+    }
+  };
+
+  const tryHitCapsule = (capStart, capEnd, radius) => {
+    const impact = testSegmentCapsuleHit(origin, segEnd, capStart, capEnd, radius);
+    if (!impact) {
+      return;
+    }
+    const projection = origin.distanceTo(impact);
+    if (projection <= closestDistance) {
+      closestDistance = projection;
+      closestPoint = impact;
     }
   };
 
@@ -7647,26 +7728,24 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, optio
       continue;
     }
 
-    tmpCenter.set(
+    tmpCapsuleC.set(
       entry.group.position.x,
       entry.group.position.y + remoteHeadCenterOffsetY,
       entry.group.position.z,
     );
-    tryHitSphere(tmpCenter, headRadius);
+    tryHitSphere(tmpCapsuleC, headRadius);
 
-    tmpCenter.set(
+    tmpCapsuleA.set(
       entry.group.position.x,
-      entry.group.position.y + remoteBodyCenterOffsetY,
+      entry.group.position.y + remoteBodyCapsuleTopOffsetY,
       entry.group.position.z,
     );
-    tryHitSphere(tmpCenter, bodyRadius);
-
-    tmpCenter.set(
+    tmpCapsuleB.set(
       entry.group.position.x,
-      entry.group.position.y + remoteTorsoCenterOffsetY,
+      entry.group.position.y + remoteBodyCapsuleBottomOffsetY,
       entry.group.position.z,
     );
-    tryHitSphere(tmpCenter, torsoHitRadius);
+    tryHitCapsule(tmpCapsuleA, tmpCapsuleB, bodyRadius);
   }
 
   if (!closestPoint) {
@@ -7839,7 +7918,7 @@ const ensureRemoteHitboxDebug = (entry) => {
   }
   if (!entry.hitboxDebug) {
     const group = new THREE.Group();
-    const mk = (radius, y, color) => {
+    const mkSphere = (radius, y, color) => {
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(radius, 14, 10),
         new THREE.MeshBasicMaterial({
@@ -7854,18 +7933,37 @@ const ensureRemoteHitboxDebug = (entry) => {
       mesh.position.set(0, y, 0);
       return mesh;
     };
-    const head = mk(headshotRadius, remoteHeadCenterOffsetY, debugHitboxColors.head);
-    const body = mk(bodyshotRadius, remoteBodyCenterOffsetY, debugHitboxColors.body);
-    const torso = mk(torsoRadius, remoteTorsoCenterOffsetY, debugHitboxColors.torso);
+    const mkCapsule = (radius, topY, bottomY, color) => {
+      const segmentLen = Math.max(0.01, (topY - bottomY) - (radius * 2));
+      const mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(radius, segmentLen, 8, 12),
+        new THREE.MeshBasicMaterial({
+          color,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      mesh.position.set(0, (topY + bottomY) * 0.5, 0);
+      return mesh;
+    };
+    const head = mkSphere(headshotRadius, remoteHeadCenterOffsetY, debugHitboxColors.head);
+    const body = mkCapsule(
+      bodyCapsuleRadius,
+      remoteBodyCapsuleTopOffsetY,
+      remoteBodyCapsuleBottomOffsetY,
+      debugHitboxColors.body,
+    );
     group.add(head);
     group.add(body);
-    group.add(torso);
     group.visible = false;
     group.renderOrder = 1800;
     entry.group.add(group);
     entry.hitboxDebug = {
       group,
-      meshes: [head, body, torso],
+      meshes: [head, body],
     };
   } else if (entry.hitboxDebug.group.parent !== entry.group) {
     entry.group.add(entry.hitboxDebug.group);
@@ -7890,7 +7988,7 @@ const ensureLocalHitboxDebug = () => {
     return;
   }
   const group = new THREE.Group();
-  const mk = (radius, y, color) => {
+  const mkSphere = (radius, y, color) => {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(radius, 14, 10),
       new THREE.MeshBasicMaterial({
@@ -7905,17 +8003,36 @@ const ensureLocalHitboxDebug = () => {
     mesh.position.set(0, y, 0);
     return mesh;
   };
-  const head = mk(headshotRadius, headCenterOffsetY, debugHitboxColors.head);
-  const body = mk(bodyshotRadius, bodyCenterOffsetY, debugHitboxColors.body);
-  const torso = mk(torsoRadius, bodyCenterOffsetY * 0.45, debugHitboxColors.torso);
+  const mkCapsule = (radius, topY, bottomY, color) => {
+    const segmentLen = Math.max(0.01, (topY - bottomY) - (radius * 2));
+    const mesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(radius, segmentLen, 8, 12),
+      new THREE.MeshBasicMaterial({
+        color,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    mesh.position.set(0, (topY + bottomY) * 0.5, 0);
+    return mesh;
+  };
+  const head = mkSphere(headshotRadius, headCenterOffsetY, debugHitboxColors.head);
+  const body = mkCapsule(
+    bodyCapsuleRadius,
+    bodyCapsuleTopOffsetY,
+    bodyCapsuleBottomOffsetY,
+    debugHitboxColors.body,
+  );
   group.add(head);
   group.add(body);
-  group.add(torso);
   group.renderOrder = 1801;
   group.visible = false;
   scene.add(group);
   localHitboxDebug.group = group;
-  localHitboxDebug.meshes = [head, body, torso];
+  localHitboxDebug.meshes = [head, body];
 };
 
 const updateLocalHitboxDebug = () => {
