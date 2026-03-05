@@ -3550,6 +3550,7 @@ const activeHolyProjectiles = [];
 const activeHammerProjectiles = [];
 const activePoisonProjectiles = [];
 const activeLunarProjectiles = [];
+const activeNormalShotCollisionVisuals = [];
 const activePumoriOrbitSpecials = [];
 const maxSilentSpecialVisualRays = 24;
 const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
@@ -5724,6 +5725,9 @@ const clearRemotePlayers = () => {
 };
 
 const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
+  if (state.showCollisionOnly) {
+    return;
+  }
   tmpTravelVec.subVectors(end, start);
   const distance = tmpTravelVec.length();
   if (distance <= 0.0001) {
@@ -5756,6 +5760,32 @@ const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
       old.material.dispose();
     }
   }
+};
+
+const createNormalShotCollisionVisual = (start, end, color = 0xf7ff80) => {
+  tmpTravelVec.subVectors(end, start);
+  const distance = tmpTravelVec.length();
+  if (distance <= 0.0001) {
+    return;
+  }
+  const line = new THREE.Mesh(
+    tracerGeometry,
+    new THREE.MeshBasicMaterial({
+      color,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  const mid = tmpClosestPoint.copy(start).add(end).multiplyScalar(0.5);
+  line.position.copy(mid);
+  line.quaternion.setFromUnitVectors(tracerUpAxis, tmpTravelVec.multiplyScalar(1 / distance));
+  line.scale.set(1.9, distance, 1.9);
+  line.userData.life = 0.12;
+  scene.add(line);
+  activeNormalShotCollisionVisuals.push(line);
 };
 
 const createHolyShotVisual = (start, end, options = {}) => {
@@ -6123,6 +6153,9 @@ const createLunarFireVisual = (start, end, options = {}) => {
 };
 
 const createImpact = (position, color = 0x7dff92) => {
+  if (state.showCollisionOnly) {
+    return null;
+  }
   const budget = getVfxSpawnBudget(position);
   if (budget < 0.999 && Math.random() > budget) {
     return null;
@@ -6140,6 +6173,9 @@ const createImpact = (position, color = 0x7dff92) => {
 };
 
 const createHitWave = (position, color = 0x9fffb6) => {
+  if (state.showCollisionOnly) {
+    return null;
+  }
   if (!position) {
     return null;
   }
@@ -6703,9 +6739,13 @@ const connectWebSocket = () => {
         createLunarFireVisual(origin, visualEnd, { source: 'remote', ownerId: shot.playerId, team: shooterTeam });
         triggerNaturePulse(origin);
       } else {
-        createTracer(origin, visualEnd, shooterPalette.tracer);
-        createImpact(visualEnd, shooterPalette.impactB);
-        createHitWave(visualEnd, shooterPalette.impactA);
+        if (state.showCollisionOnly) {
+          createNormalShotCollisionVisual(origin, visualEnd, shooterPalette.tracer);
+        } else {
+          createTracer(origin, visualEnd, shooterPalette.tracer);
+          createImpact(visualEnd, shooterPalette.impactB);
+          createHitWave(visualEnd, shooterPalette.impactA);
+        }
       }
       registerRemoteShootSound(origin, shooterCharacter);
       return;
@@ -9099,9 +9139,13 @@ const shoot = () => {
     createLunarFireVisual(origin, hitPoint, { source: 'local', ownerId: state.self?.id, team: myTeam });
     triggerNaturePulse(origin);
   } else {
-    createTracer(origin, hitPoint, myPalette.tracer);
-    createImpact(hitPoint, myPalette.impactB);
-    createHitWave(hitPoint, myPalette.impactA);
+    if (state.showCollisionOnly) {
+      createNormalShotCollisionVisual(origin, hitPoint, myPalette.tracer);
+    } else {
+      createTracer(origin, hitPoint, myPalette.tracer);
+      createImpact(hitPoint, myPalette.impactB);
+      createHitWave(hitPoint, myPalette.impactA);
+    }
   }
 
   localShotSeq += 1;
@@ -9880,6 +9924,17 @@ const updateEffects = (delta) => {
       scene.remove(tracer);
       tracer.material.dispose();
       activeTracers.splice(i, 1);
+    }
+  }
+
+  for (let i = activeNormalShotCollisionVisuals.length - 1; i >= 0; i -= 1) {
+    const line = activeNormalShotCollisionVisuals[i];
+    line.userData.life -= delta;
+    line.material.opacity = Math.max(0, line.userData.life * 8);
+    if (line.userData.life <= 0) {
+      scene.remove(line);
+      line.material.dispose();
+      activeNormalShotCollisionVisuals.splice(i, 1);
     }
   }
 
