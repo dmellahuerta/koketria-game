@@ -335,6 +335,7 @@ app.innerHTML = `
       <div class="options-actions">
         <button id="optResumeBtn" type="button">Volver al juego</button>
         <button id="optLeaveLobbyBtn" type="button">Volver al lobby</button>
+        <button id="optCollisionViewBtn" type="button">Colisiones: OFF</button>
       </div>
       <p class="options-hint">ESC: abrir/cerrar opciones</p>
     </div>
@@ -476,6 +477,7 @@ const optFovValue = document.querySelector('#optFovValue');
 const optShowPerf = document.querySelector('#optShowPerf');
 const optResumeBtn = document.querySelector('#optResumeBtn');
 const optLeaveLobbyBtn = document.querySelector('#optLeaveLobbyBtn');
+const optCollisionViewBtn = document.querySelector('#optCollisionViewBtn');
 
 const state = {
   ws: null,
@@ -490,6 +492,7 @@ const state = {
   showScoreboard: false,
   showPerf: false,
   showHitboxDebug: false,
+  showCollisionOnly: false,
   fps: 0,
   latencyMs: null,
 };
@@ -553,6 +556,7 @@ const versusChatMessages = [];
 const maxVersusChatMessages = 60;
 let isChatTyping = false;
 let isOptionsOpen = false;
+let hitboxDebugBeforeCollisionOnly = false;
 const settingsStorageKey = 'koketria_settings_v1';
 const playerNameStorageKey = 'koketria_player_name_v1';
 const settings = {
@@ -2106,6 +2110,7 @@ let lastVersusLobbyLayoutKey = '';
 
 const localAvatar = {
   group: null,
+  avatarRoot: null,
   mixer: null,
   actions: null,
   currentAnimation: '',
@@ -3259,6 +3264,9 @@ const syncOptionsUi = () => {
   optFov.value = String(Math.round(settings.fov));
   optFovValue.textContent = String(Math.round(settings.fov));
   optShowPerf.checked = Boolean(settings.showPerfByDefault);
+  if (optCollisionViewBtn) {
+    optCollisionViewBtn.textContent = `Colisiones: ${state.showCollisionOnly ? 'ON' : 'OFF'}`;
+  }
   syncLobbyMusicUi();
 };
 
@@ -5184,6 +5192,7 @@ const disposeLocalAvatar = () => {
     scene.remove(localAvatar.group);
   }
   localAvatar.group = null;
+  localAvatar.avatarRoot = null;
   localAvatar.mixer = null;
   localAvatar.actions = null;
   localAvatar.currentAnimation = '';
@@ -5207,6 +5216,7 @@ const ensureLocalAvatar = async () => {
   disposeLocalAvatar();
   const built = buildAnimatedRemoteModel(resource);
   localAvatar.group = built.group;
+  localAvatar.avatarRoot = built.avatarRoot;
   localAvatar.mixer = built.mixer;
   localAvatar.actions = built.actions;
   localAvatar.currentAnimation = '';
@@ -5226,6 +5236,9 @@ const updateLocalAvatar = (delta) => {
 
   const visible = Boolean(state.joinedRoom && isThirdPerson && !isRespawning);
   localAvatar.group.visible = visible;
+  if (localAvatar.avatarRoot && localAvatar.avatarRoot !== localAvatar.group) {
+    localAvatar.avatarRoot.visible = !state.showCollisionOnly;
+  }
   if (!visible) {
     return;
   }
@@ -5979,6 +5992,7 @@ const disposePumoriOrbitHammer = (hammerEntry, impactPoint = null) => {
   });
   hammerEntry.disposed = true;
   hammer.visible = false;
+  disposeProjectileCollisionDebug(hammerEntry);
 
   if (impactPoint) {
     const impactA = createImpact(impactPoint, 0xfff2c6);
@@ -7412,6 +7426,10 @@ optLeaveLobbyBtn.addEventListener('click', () => {
   sendWs({ type: 'leave_room' });
 });
 
+optCollisionViewBtn?.addEventListener('click', () => {
+  setCollisionOnlyMode(!state.showCollisionOnly);
+});
+
 const runOnceMobilePromptAction = (handler) => (event) => {
   if (event) {
     event.preventDefault();
@@ -7798,6 +7816,164 @@ const refreshRemoteHitboxDebugVisibility = () => {
   }
 };
 
+const localHitboxDebug = {
+  group: null,
+  meshes: [],
+};
+const projectileCollisionDebug = new Map();
+
+const ensureLocalHitboxDebug = () => {
+  if (localHitboxDebug.group) {
+    return;
+  }
+  const group = new THREE.Group();
+  const mk = (radius, y, color) => {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(radius, 14, 10),
+      new THREE.MeshBasicMaterial({
+        color,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    mesh.position.set(0, y, 0);
+    return mesh;
+  };
+  const head = mk(headshotRadius, headCenterOffsetY, debugHitboxColors.head);
+  const body = mk(bodyshotRadius, bodyCenterOffsetY, debugHitboxColors.body);
+  const torso = mk(torsoRadius, bodyCenterOffsetY * 0.45, debugHitboxColors.torso);
+  group.add(head);
+  group.add(body);
+  group.add(torso);
+  group.renderOrder = 1801;
+  group.visible = false;
+  scene.add(group);
+  localHitboxDebug.group = group;
+  localHitboxDebug.meshes = [head, body, torso];
+};
+
+const updateLocalHitboxDebug = () => {
+  if (!localHitboxDebug.group) {
+    return;
+  }
+  localHitboxDebug.group.position.set(camera.position.x, camera.position.y, camera.position.z);
+  localHitboxDebug.group.visible = Boolean(state.showCollisionOnly && state.joinedRoom);
+};
+
+const disposeProjectileCollisionDebug = (projectile) => {
+  const marker = projectileCollisionDebug.get(projectile);
+  if (!marker) {
+    return;
+  }
+  if (marker.parent) {
+    marker.parent.remove(marker);
+  }
+  if (marker.geometry) {
+    marker.geometry.dispose();
+  }
+  if (marker.material) {
+    marker.material.dispose();
+  }
+  projectileCollisionDebug.delete(projectile);
+};
+
+const ensureProjectileCollisionDebug = (projectile, radius, color) => {
+  if (!projectile?.pos) {
+    return;
+  }
+  let marker = projectileCollisionDebug.get(projectile);
+  if (!marker) {
+    marker = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(0.05, Number(radius) || 0.22), 10, 8),
+      new THREE.MeshBasicMaterial({
+        color,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    marker.renderOrder = 1802;
+    scene.add(marker);
+    projectileCollisionDebug.set(projectile, marker);
+  }
+  marker.position.copy(projectile.pos);
+  marker.visible = Boolean(state.showCollisionOnly);
+};
+
+const sweepProjectileCollisionDebug = () => {
+  const active = new Set();
+  for (let i = 0; i < activeHolyProjectiles.length; i += 1) active.add(activeHolyProjectiles[i]);
+  for (let i = 0; i < activeHammerProjectiles.length; i += 1) active.add(activeHammerProjectiles[i]);
+  for (let i = 0; i < activePoisonProjectiles.length; i += 1) active.add(activePoisonProjectiles[i]);
+  for (let i = 0; i < activeLunarProjectiles.length; i += 1) active.add(activeLunarProjectiles[i]);
+  for (let i = 0; i < activePumoriOrbitSpecials.length; i += 1) {
+    const special = activePumoriOrbitSpecials[i];
+    if (!special?.hammers) {
+      continue;
+    }
+    for (let j = 0; j < special.hammers.length; j += 1) {
+      active.add(special.hammers[j]);
+    }
+  }
+  for (const projectile of projectileCollisionDebug.keys()) {
+    if (!active.has(projectile)) {
+      disposeProjectileCollisionDebug(projectile);
+    }
+  }
+};
+
+const syncCollisionOnlyModeVisuals = () => {
+  ensureLocalHitboxDebug();
+  refreshRemoteHitboxDebugVisibility();
+  updateLocalHitboxDebug();
+  for (const entry of state.remotePlayers.values()) {
+    if (!entry) {
+      continue;
+    }
+    if (entry.avatarRoot && entry.avatarRoot !== entry.group) {
+      entry.avatarRoot.visible = !state.showCollisionOnly;
+    }
+    if (entry.body) {
+      entry.body.visible = !state.showCollisionOnly;
+    }
+    if (entry.head) {
+      entry.head.visible = !state.showCollisionOnly;
+    }
+    if (entry.healthBar?.holder) {
+      entry.healthBar.holder.visible = !state.showCollisionOnly && !entry.isDead;
+    }
+    if (entry.teamOutline) {
+      entry.teamOutline.visible = !state.showCollisionOnly && entry.teamOutline.visible;
+    }
+  }
+};
+
+const setCollisionOnlyMode = (enabled) => {
+  const next = Boolean(enabled);
+  if (state.showCollisionOnly === next) {
+    if (optCollisionViewBtn) {
+      optCollisionViewBtn.textContent = `Colisiones: ${next ? 'ON' : 'OFF'}`;
+    }
+    return;
+  }
+  if (next) {
+    hitboxDebugBeforeCollisionOnly = Boolean(state.showHitboxDebug);
+    state.showHitboxDebug = true;
+  } else {
+    state.showHitboxDebug = hitboxDebugBeforeCollisionOnly;
+  }
+  state.showCollisionOnly = next;
+  if (optCollisionViewBtn) {
+    optCollisionViewBtn.textContent = `Colisiones: ${next ? 'ON' : 'OFF'}`;
+  }
+  syncCollisionOnlyModeVisuals();
+};
+
 const createTeamOutline = (team) => {
   const normalizedTeam = normalizePlayerTeam(team);
   const color = normalizedTeam === 'red' ? 0xff7f7f : 0x7fa8ff;
@@ -7882,7 +8058,7 @@ const updateRemoteHealthBar = (entry) => {
     entry.healthBar.textTexture.needsUpdate = true;
     entry.healthBar.lastText = hpTextKey;
   }
-  entry.healthBar.holder.visible = !entry.isDead;
+  entry.healthBar.holder.visible = !state.showCollisionOnly && !entry.isDead;
 };
 
 const clearLocalPredictionHistory = () => {
@@ -8741,6 +8917,9 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     state.showHitboxDebug = !state.showHitboxDebug;
     refreshRemoteHitboxDebugVisibility();
+    if (!state.showHitboxDebug && state.showCollisionOnly) {
+      setCollisionOnlyMode(false);
+    }
     return;
   }
 
@@ -9616,6 +9795,15 @@ const updateRemotePlayers = (delta) => {
     if (entry.head) {
       entry.head.rotation.x = lerpAngle(entry.head.rotation.x, entry.targetPitch, factor);
     }
+    if (entry.avatarRoot && entry.avatarRoot !== entry.group) {
+      entry.avatarRoot.visible = !state.showCollisionOnly;
+    }
+    if (entry.body) {
+      entry.body.visible = !state.showCollisionOnly;
+    }
+    if (entry.head) {
+      entry.head.visible = !state.showCollisionOnly;
+    }
     if (entry.healthBar?.holder) {
       const cam = getRenderCamera();
       const holder = entry.healthBar.holder;
@@ -9631,11 +9819,11 @@ const updateRemotePlayers = (delta) => {
       const visibleByDistance = distance <= remoteHealthBarMaxVisibleDistance;
       const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
       holder.scale.setScalar(scale);
-      holder.visible = !entry.isDead && visibleByDistance;
+      holder.visible = !state.showCollisionOnly && !entry.isDead && visibleByDistance;
     }
     if (entry.teamOutline) {
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
-      entry.teamOutline.visible = shouldShowTeamMarkers() && !entry.isDead && distance <= 55;
+      entry.teamOutline.visible = !state.showCollisionOnly && shouldShowTeamMarkers() && !entry.isDead && distance <= 55;
     }
 
     if (entry.mixer) {
@@ -9744,6 +9932,8 @@ const updateHolyProjectiles = (delta) => {
       .add(projectile.up.clone().multiplyScalar(wobbleB));
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
+    projectile.mesh.visible = !state.showCollisionOnly;
+    ensureProjectileCollisionDebug(projectile, 0.22, 0x9af6ff);
 
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.02) * 0.24));
 
@@ -9776,6 +9966,7 @@ const updateHolyProjectiles = (delta) => {
       scene.remove(projectile.mesh);
       projectile.mesh.geometry.dispose();
       projectile.mesh.material.dispose();
+      disposeProjectileCollisionDebug(projectile);
       activeHolyProjectiles.splice(i, 1);
 
       const impactCenter = impactPoint ? impactPoint.clone() : projectile.end.clone();
@@ -9817,6 +10008,8 @@ const updateHammerProjectiles = (delta) => {
     projectile.velocity.y -= hammerGravity * delta;
     projectile.pos.add(projectile.velocity.clone().multiplyScalar(delta));
     projectile.mesh.position.copy(projectile.pos);
+    projectile.mesh.visible = !state.showCollisionOnly;
+    ensureProjectileCollisionDebug(projectile, 0.4, 0xffeaa5);
 
     const traveledStep = projectile.pos.distanceTo(projectile.prevPos);
     projectile.traveledDistance += traveledStep;
@@ -9877,6 +10070,7 @@ const updateHammerProjectiles = (delta) => {
           node.material.dispose();
         }
       });
+      disposeProjectileCollisionDebug(projectile);
       activeHammerProjectiles.splice(i, 1);
 
       if (impactPoint) {
@@ -9929,6 +10123,8 @@ const updatePoisonProjectiles = (delta) => {
       .add(projectile.up.clone().multiplyScalar(waveB));
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
+    projectile.mesh.visible = !state.showCollisionOnly;
+    ensureProjectileCollisionDebug(projectile, 0.22, 0x70ff8a);
 
     projectile.mesh.scale.setScalar(1.12 + (Math.sin(performance.now() * 0.02) * 0.28));
 
@@ -9968,6 +10164,7 @@ const updatePoisonProjectiles = (delta) => {
       scene.remove(projectile.mesh);
       projectile.mesh.geometry.dispose();
       projectile.mesh.material.dispose();
+      disposeProjectileCollisionDebug(projectile);
       activePoisonProjectiles.splice(i, 1);
 
       const impactCenter = impactPoint ? impactPoint.clone() : projectile.end.clone();
@@ -10018,6 +10215,8 @@ const updateLunarProjectiles = (delta) => {
       .add(projectile.up.clone().multiplyScalar(waveB));
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
+    projectile.mesh.visible = !state.showCollisionOnly;
+    ensureProjectileCollisionDebug(projectile, 0.24, 0x9fd9ff);
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.03) * 0.18));
 
     projectile.trailTimer += delta;
@@ -10054,6 +10253,7 @@ const updateLunarProjectiles = (delta) => {
       scene.remove(projectile.mesh);
       projectile.mesh.geometry.dispose();
       projectile.mesh.material.dispose();
+      disposeProjectileCollisionDebug(projectile);
       activeLunarProjectiles.splice(i, 1);
 
       const impactCenter = impactPoint ? impactPoint.clone() : projectile.end.clone();
@@ -10163,6 +10363,9 @@ const updatePumoriOrbitSpecials = (delta) => {
         center.z + (Math.sin(angle) * radius),
       );
       hammer.rotation.set((t * 5.8) + j, (t * 6.5) + (j * 0.7), (t * 4.9) + j);
+      hammer.visible = !state.showCollisionOnly;
+      hammerEntry.pos = hammer.position;
+      ensureProjectileCollisionDebug(hammerEntry, 0.34, 0xffe8b8);
 
       let impactPoint = null;
       if (hammer.position.y <= 0.22) {
@@ -10427,6 +10630,7 @@ const animate = () => {
     applyLocalMovementReconciliation(delta);
     updateHealthRegen(delta);
     updateLocalAvatar(delta);
+    updateLocalHitboxDebug();
     updateThirdPersonCamera();
     updateAmmoPickups(delta);
     updateShieldPickups(delta);
@@ -10441,6 +10645,7 @@ const animate = () => {
     updatePoisonProjectiles(delta);
     updateLunarProjectiles(delta);
     updatePumoriOrbitSpecials(delta);
+    sweepProjectileCollisionDebug();
     updateShooting(delta);
     updateResourceSync();
     updateRespawnCountdown();
