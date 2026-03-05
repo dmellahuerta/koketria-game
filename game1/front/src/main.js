@@ -3706,13 +3706,50 @@ const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
 const unifiedMagicHitboxRadius = 0.24;
-const headshotRadius = 0.31;
-const bodyCapsuleRadius = 0.33;
+const defaultHitboxProfile = Object.freeze({
+  headshotRadius: 0.31,
+  headCenterOffsetY: -0.3,
+  bodyCapsuleRadius: 0.33,
+  bodyCapsuleTopOffsetY: -0.52,
+  bodyCapsuleBottomOffsetY: -1.85,
+});
+const characterHitboxProfiles = Object.freeze({
+  default: defaultHitboxProfile,
+  silentman: defaultHitboxProfile,
+  silenmant: defaultHitboxProfile,
+  pumori: defaultHitboxProfile,
+  neoorphen: defaultHitboxProfile,
+  pezunalunar: defaultHitboxProfile,
+  pezuanalunar: defaultHitboxProfile,
+});
+const normalizeHitboxCharacterKey = (characterId) => {
+  return String(characterId || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+};
+const getHitboxProfileForCharacter = (characterId) => {
+  const key = normalizeHitboxCharacterKey(characterId);
+  return characterHitboxProfiles[key] || defaultHitboxProfile;
+};
+const getRemoteHitboxProfileForCharacter = (characterId) => {
+  const profile = getHitboxProfileForCharacter(characterId);
+  return {
+    headshotRadius: profile.headshotRadius,
+    bodyCapsuleRadius: profile.bodyCapsuleRadius,
+    headCenterOffsetY: playerGroundY + profile.headCenterOffsetY,
+    bodyCapsuleTopOffsetY: playerGroundY + profile.bodyCapsuleTopOffsetY,
+    bodyCapsuleBottomOffsetY: playerGroundY + profile.bodyCapsuleBottomOffsetY,
+  };
+};
+const headshotRadius = defaultHitboxProfile.headshotRadius;
+const bodyCapsuleRadius = defaultHitboxProfile.bodyCapsuleRadius;
 // Runtime hitbox offsets are anchored to camera/player position (y ~= 1.7).
 // Config tool values are anchored to feet (y = 0), so we offset by -playerGroundY.
-const bodyCapsuleTopOffsetY = -0.52;
-const bodyCapsuleBottomOffsetY = -1.85;
-const headCenterOffsetY = -0.3;
+const bodyCapsuleTopOffsetY = defaultHitboxProfile.bodyCapsuleTopOffsetY;
+const bodyCapsuleBottomOffsetY = defaultHitboxProfile.bodyCapsuleBottomOffsetY;
+const headCenterOffsetY = defaultHitboxProfile.headCenterOffsetY;
 const bodyCenterOffsetY = (bodyCapsuleTopOffsetY + bodyCapsuleBottomOffsetY) * 0.5;
 const remoteHeadCenterOffsetY = playerGroundY + headCenterOffsetY;
 const remoteBodyCenterOffsetY = playerGroundY + bodyCenterOffsetY;
@@ -6373,22 +6410,33 @@ const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
 
 const getLocalSegmentCharacterImpact = (segStart, segEnd, extraRadius = 0) => {
   const extra = Math.max(0, Number(extraRadius) || 0);
-  tmpLocalHead.set(camera.position.x, camera.position.y + headCenterOffsetY, camera.position.z);
-  const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, headshotRadius + extra);
+  const profile = getHitboxProfileForCharacter(activeCharacter || state.self?.character);
+  tmpLocalHead.set(
+    camera.position.x,
+    camera.position.y + profile.headCenterOffsetY,
+    camera.position.z,
+  );
+  const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, profile.headshotRadius + extra);
   if (head) {
     return { point: head, headshot: true };
   }
   tmpCapsuleA.set(
     camera.position.x,
-    camera.position.y + bodyCapsuleTopOffsetY,
+    camera.position.y + profile.bodyCapsuleTopOffsetY,
     camera.position.z,
   );
   tmpCapsuleB.set(
     camera.position.x,
-    camera.position.y + bodyCapsuleBottomOffsetY,
+    camera.position.y + profile.bodyCapsuleBottomOffsetY,
     camera.position.z,
   );
-  const body = testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, bodyCapsuleRadius + extra);
+  const body = testSegmentCapsuleHit(
+    segStart,
+    segEnd,
+    tmpCapsuleA,
+    tmpCapsuleB,
+    profile.bodyCapsuleRadius + extra,
+  );
   if (body) {
     return { point: body, headshot: false };
   }
@@ -6400,23 +6448,24 @@ const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd, extraRadius = 
     return null;
   }
   const extra = Math.max(0, Number(extraRadius) || 0);
+  const profile = getRemoteHitboxProfileForCharacter(entry.character);
   const headCenter = new THREE.Vector3(
     entry.group.position.x,
-    entry.group.position.y + remoteHeadCenterOffsetY,
+    entry.group.position.y + profile.headCenterOffsetY,
     entry.group.position.z,
   );
   tmpCapsuleA.set(
     entry.group.position.x,
-    entry.group.position.y + remoteBodyCapsuleTopOffsetY,
+    entry.group.position.y + profile.bodyCapsuleTopOffsetY,
     entry.group.position.z,
   );
   tmpCapsuleB.set(
     entry.group.position.x,
-    entry.group.position.y + remoteBodyCapsuleBottomOffsetY,
+    entry.group.position.y + profile.bodyCapsuleBottomOffsetY,
     entry.group.position.z,
   );
-  return testSegmentSphereHit(segStart, segEnd, headCenter, headshotRadius + extra)
-    || testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, bodyCapsuleRadius + extra);
+  return testSegmentSphereHit(segStart, segEnd, headCenter, profile.headshotRadius + extra)
+    || testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, profile.bodyCapsuleRadius + extra);
 };
 
 const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '', extraRadius = 0) => {
@@ -7736,8 +7785,6 @@ const getRenderCamera = () => {
 const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, options = {}) => {
   let closestDistance = maxDistance;
   let closestPoint = null;
-  const headRadius = Number.isFinite(options.headRadius) ? options.headRadius : headshotRadius;
-  const bodyRadius = Number.isFinite(options.bodyRadius) ? options.bodyRadius : bodyCapsuleRadius;
   const segEnd = origin.clone().add(direction.clone().multiplyScalar(maxDistance));
 
   const tryHitSphere = (center, radius) => {
@@ -7768,25 +7815,32 @@ const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, optio
     if (!entry?.group || entry.isDead) {
       continue;
     }
+    const profile = getRemoteHitboxProfileForCharacter(entry.character);
+    const effectiveHeadRadius = Number.isFinite(options.headRadius)
+      ? Number(options.headRadius)
+      : profile.headshotRadius;
+    const effectiveBodyRadius = Number.isFinite(options.bodyRadius)
+      ? Number(options.bodyRadius)
+      : profile.bodyCapsuleRadius;
 
     tmpCapsuleC.set(
       entry.group.position.x,
-      entry.group.position.y + remoteHeadCenterOffsetY,
+      entry.group.position.y + profile.headCenterOffsetY,
       entry.group.position.z,
     );
-    tryHitSphere(tmpCapsuleC, headRadius);
+    tryHitSphere(tmpCapsuleC, effectiveHeadRadius);
 
     tmpCapsuleA.set(
       entry.group.position.x,
-      entry.group.position.y + remoteBodyCapsuleTopOffsetY,
+      entry.group.position.y + profile.bodyCapsuleTopOffsetY,
       entry.group.position.z,
     );
     tmpCapsuleB.set(
       entry.group.position.x,
-      entry.group.position.y + remoteBodyCapsuleBottomOffsetY,
+      entry.group.position.y + profile.bodyCapsuleBottomOffsetY,
       entry.group.position.z,
     );
-    tryHitCapsule(tmpCapsuleA, tmpCapsuleB, bodyRadius);
+    tryHitCapsule(tmpCapsuleA, tmpCapsuleB, effectiveBodyRadius);
   }
 
   if (!closestPoint) {
@@ -7957,7 +8011,12 @@ const ensureRemoteHitboxDebug = (entry) => {
   if (!entry?.group) {
     return;
   }
+  const profileKey = normalizeHitboxCharacterKey(entry.character) || 'default';
+  if (entry.hitboxDebug?.profileKey && entry.hitboxDebug.profileKey !== profileKey) {
+    disposeRemoteHitboxDebug(entry);
+  }
   if (!entry.hitboxDebug) {
+    const profile = getRemoteHitboxProfileForCharacter(entry.character);
     const group = new THREE.Group();
     const mkSphere = (radius, y, color) => {
       const mesh = new THREE.Mesh(
@@ -7990,11 +8049,11 @@ const ensureRemoteHitboxDebug = (entry) => {
       mesh.position.set(0, (topY + bottomY) * 0.5, 0);
       return mesh;
     };
-    const head = mkSphere(headshotRadius, remoteHeadCenterOffsetY, debugHitboxColors.head);
+    const head = mkSphere(profile.headshotRadius, profile.headCenterOffsetY, debugHitboxColors.head);
     const body = mkCapsule(
-      bodyCapsuleRadius,
-      remoteBodyCapsuleTopOffsetY,
-      remoteBodyCapsuleBottomOffsetY,
+      profile.bodyCapsuleRadius,
+      profile.bodyCapsuleTopOffsetY,
+      profile.bodyCapsuleBottomOffsetY,
       debugHitboxColors.body,
     );
     group.add(head);
@@ -8005,6 +8064,7 @@ const ensureRemoteHitboxDebug = (entry) => {
     entry.hitboxDebug = {
       group,
       meshes: [head, body],
+      profileKey,
     };
   } else if (entry.hitboxDebug.group.parent !== entry.group) {
     entry.group.add(entry.hitboxDebug.group);
@@ -8021,13 +8081,25 @@ const refreshRemoteHitboxDebugVisibility = () => {
 const localHitboxDebug = {
   group: null,
   meshes: [],
+  profileKey: '',
 };
 const projectileCollisionDebug = new Map();
 
 const ensureLocalHitboxDebug = () => {
-  if (localHitboxDebug.group) {
+  const profileKey = normalizeHitboxCharacterKey(activeCharacter || state.self?.character) || 'default';
+  if (localHitboxDebug.group && localHitboxDebug.profileKey === profileKey) {
     return;
   }
+  if (localHitboxDebug.group) {
+    scene.remove(localHitboxDebug.group);
+    for (let i = 0; i < localHitboxDebug.meshes.length; i += 1) {
+      const mesh = localHitboxDebug.meshes[i];
+      if (!mesh) continue;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) mesh.material.dispose();
+    }
+  }
+  const profile = getHitboxProfileForCharacter(activeCharacter || state.self?.character);
   const group = new THREE.Group();
   const mkSphere = (radius, y, color) => {
     const mesh = new THREE.Mesh(
@@ -8060,11 +8132,11 @@ const ensureLocalHitboxDebug = () => {
     mesh.position.set(0, (topY + bottomY) * 0.5, 0);
     return mesh;
   };
-  const head = mkSphere(headshotRadius, headCenterOffsetY, debugHitboxColors.head);
+  const head = mkSphere(profile.headshotRadius, profile.headCenterOffsetY, debugHitboxColors.head);
   const body = mkCapsule(
-    bodyCapsuleRadius,
-    bodyCapsuleTopOffsetY,
-    bodyCapsuleBottomOffsetY,
+    profile.bodyCapsuleRadius,
+    profile.bodyCapsuleTopOffsetY,
+    profile.bodyCapsuleBottomOffsetY,
     debugHitboxColors.body,
   );
   group.add(head);
@@ -8074,6 +8146,7 @@ const ensureLocalHitboxDebug = () => {
   scene.add(group);
   localHitboxDebug.group = group;
   localHitboxDebug.meshes = [head, body];
+  localHitboxDebug.profileKey = profileKey;
 };
 
 const updateLocalHitboxDebug = () => {
