@@ -6,6 +6,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 const shouldRegisterServiceWorker = import.meta.env.PROD
   && 'serviceWorker' in navigator
   && window.isSecureContext;
+const isDevCollisionToolsEnabled = Boolean(import.meta.env.DEV);
 
 if (shouldRegisterServiceWorker) {
   window.addEventListener('load', () => {
@@ -265,7 +266,9 @@ app.innerHTML = `
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
     </div>
   </div>
-  <button id="collisionModeBtn" type="button" class="collision-mode-btn">COL: OFF</button>
+  ${isDevCollisionToolsEnabled
+    ? '<button id="collisionModeBtn" type="button" class="collision-mode-btn">COL: OFF</button>'
+    : ''}
   <div id="mobileFullscreenPrompt" class="mobile-fullscreen-prompt hidden">
     <div class="mobile-fullscreen-card">
       <h3>Modo Pantalla Completa</h3>
@@ -7599,6 +7602,9 @@ optLeaveLobbyBtn.addEventListener('click', () => {
 });
 
 collisionModeBtn?.addEventListener('click', () => {
+  if (!isDevCollisionToolsEnabled) {
+    return;
+  }
   setCollisionOnlyMode(!state.showCollisionOnly);
 });
 
@@ -8169,6 +8175,14 @@ const syncCollisionOnlyModeVisuals = () => {
 };
 
 const setCollisionOnlyMode = (enabled) => {
+  if (!isDevCollisionToolsEnabled) {
+    state.showCollisionOnly = false;
+    if (collisionModeBtn) {
+      collisionModeBtn.textContent = 'COL: OFF';
+    }
+    syncCollisionOnlyModeVisuals();
+    return;
+  }
   const next = Boolean(enabled);
   if (state.showCollisionOnly === next) {
     if (collisionModeBtn) {
