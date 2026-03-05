@@ -733,6 +733,7 @@ canvas {
     transform: translateX(-50%);
     width: min(98vw, 760px);
     max-height: calc(100vh - env(safe-area-inset-top, 8px) - env(safe-area-inset-bottom, 8px) - 10px);
+    min-height: 0;
     padding: 12px;
     border-radius: 10px;
   }
@@ -805,15 +806,18 @@ canvas {
     transform: translateX(-50%);
     width: min(99vw, 980px);
     max-height: calc(100vh - env(safe-area-inset-top, 8px) - env(safe-area-inset-bottom, 8px) - 8px);
+    min-height: 0;
   }
 
   .versus-card {
+    min-height: 0;
     max-height: none;
     overflow: visible;
     padding: 10px;
   }
 
   .versus-layout {
+    height: auto;
     max-height: none;
     grid-template-columns: 1fr;
     gap: 10px;
