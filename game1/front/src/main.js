@@ -3664,8 +3664,8 @@ let isLocked = false;
 let yaw = 0;
 let pitch = 0;
 const speed = 9;
-const moveAcceleration = 24;
-const moveDeceleration = 18;
+const moveAcceleration = 38;
+const moveDeceleration = 30;
 const airControlFactor = 0.45;
 const strafeOnlySpeedFactor = 0.92;
 const playerGroundY = 1.7;
@@ -9667,10 +9667,9 @@ const updateMovement = (delta) => {
   }
 
   move.set(0, 0, 0);
-  camera.getWorldDirection(forward);
-  forward.y = 0;
-  forward.normalize();
-  right.crossVectors(forward, camera.up).normalize();
+  // Use yaw-aligned axes so movement follows aiming direction consistently.
+  forward.set(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
+  right.set(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
 
   if (keys.KeyW) move.add(forward);
   if (keys.KeyS) move.sub(forward);
