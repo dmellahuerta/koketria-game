@@ -177,7 +177,7 @@ canvas {
   top: 50%;
   left: 50%;
   width: min(97vw, 1220px);
-  max-height: 95vh;
+  max-height: 97vh;
   overflow: auto;
   transform: translate(-50%, -50%);
   z-index: 20;
@@ -194,7 +194,7 @@ canvas {
   top: 50%;
   left: 50%;
   width: min(98vw, 1360px);
-  max-height: 96vh;
+  max-height: 97vh;
   transform: translate(-50%, -50%);
   z-index: 24;
   overflow: auto;
@@ -207,7 +207,7 @@ canvas {
   padding: 14px;
   box-shadow: 0 0 35px rgba(57, 214, 57, 0.22);
   color: #c8ffd2;
-  max-height: 96vh;
+  max-height: 97vh;
   overflow: hidden;
 }
 
@@ -215,7 +215,7 @@ canvas {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 32%);
   gap: 14px;
-  max-height: calc(96vh - 28px);
+  max-height: calc(97vh - 28px);
 }
 
 .versus-main {
@@ -516,7 +516,7 @@ canvas {
 
 #lobby .lobby-main {
   min-width: 0;
-  max-height: calc(95vh - 56px);
+  max-height: calc(97vh - 56px);
   overflow: auto;
   padding-right: 2px;
 }
@@ -536,7 +536,7 @@ canvas {
   flex-direction: column;
   gap: 8px;
   min-height: 280px;
-  max-height: calc(95vh - 56px);
+  max-height: calc(97vh - 56px);
 }
 
 .lobby-left-side .room-list {
