@@ -10000,9 +10000,16 @@ const updateHolyProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const pos = projectile.start.clone().lerp(projectile.end, t);
-    projectile.pos.copy(pos);
-    projectile.mesh.position.copy(pos);
+    const linePos = projectile.start.clone().lerp(projectile.end, t);
+    projectile.pos.copy(linePos);
+    const angle = projectile.phase + (t * projectile.spin);
+    const spiralRadius = Math.max(0, projectile.radius * (1 - (t * projectile.radiusFalloff)));
+    const wobbleA = Math.cos(angle) * spiralRadius;
+    const wobbleB = Math.sin(angle) * spiralRadius;
+    const renderPos = linePos.clone()
+      .add(projectile.right.clone().multiplyScalar(wobbleA))
+      .add(projectile.up.clone().multiplyScalar(wobbleB));
+    projectile.mesh.position.copy(renderPos);
     projectile.mesh.visible = !state.showCollisionOnly;
     ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x9af6ff);
 
@@ -10012,7 +10019,7 @@ const updateHolyProjectiles = (delta) => {
     const trailInterval = projectile.source === 'remote' ? 0.028 : 0.012;
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
-      const spark = createImpact(pos, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
+      const spark = createImpact(renderPos, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (spark) {
         spark.scale.setScalar(1.35 + Math.random() * 0.95);
         spark.userData.life = 0.3 + Math.random() * 0.18;
@@ -10199,9 +10206,15 @@ const updatePoisonProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const pos = projectile.start.clone().lerp(projectile.end, t);
-    projectile.pos.copy(pos);
-    projectile.mesh.position.copy(pos);
+    const linePos = projectile.start.clone().lerp(projectile.end, t);
+    projectile.pos.copy(linePos);
+    const angle = projectile.phase + (t * projectile.spin);
+    const waveA = Math.sin(angle) * projectile.waveAmpA * (1 - (t * 0.22));
+    const waveB = Math.sin((angle * 0.5) + (Math.PI * 0.35)) * projectile.waveAmpB;
+    const renderPos = linePos.clone()
+      .add(projectile.right.clone().multiplyScalar(waveA))
+      .add(projectile.up.clone().multiplyScalar(waveB));
+    projectile.mesh.position.copy(renderPos);
     projectile.mesh.visible = !state.showCollisionOnly;
     ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x70ff8a);
 
@@ -10213,8 +10226,8 @@ const updatePoisonProjectiles = (delta) => {
       projectile.trailTimer = 0;
       const colorA = Math.random() > 0.5 ? projectile.colors.tracer : projectile.colors.a;
       const colorB = Math.random() > 0.5 ? projectile.colors.tracer : projectile.colors.b;
-      const puffA = createImpact(pos, colorA);
-      const puffB = createImpact(pos.clone().add(projectile.right.clone().multiplyScalar((Math.random() - 0.5) * 0.12)), colorB);
+      const puffA = createImpact(renderPos, colorA);
+      const puffB = createImpact(renderPos.clone().add(projectile.right.clone().multiplyScalar((Math.random() - 0.5) * 0.12)), colorB);
       if (puffA) {
         puffA.scale.setScalar(0.72 + (Math.random() * 0.35));
         puffA.userData.life = 0.22 + (Math.random() * 0.08);
@@ -10299,9 +10312,15 @@ const updateLunarProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const pos = projectile.start.clone().lerp(projectile.end, t);
-    projectile.pos.copy(pos);
-    projectile.mesh.position.copy(pos);
+    const linePos = projectile.start.clone().lerp(projectile.end, t);
+    projectile.pos.copy(linePos);
+    const angle = projectile.phase + (t * projectile.spin);
+    const waveA = Math.sin(angle) * projectile.waveAmpA;
+    const waveB = Math.cos((angle * 0.7) + Math.PI * 0.3) * projectile.waveAmpB;
+    const renderPos = linePos.clone()
+      .add(projectile.right.clone().multiplyScalar(waveA))
+      .add(projectile.up.clone().multiplyScalar(waveB));
+    projectile.mesh.position.copy(renderPos);
     projectile.mesh.visible = !state.showCollisionOnly;
     ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x9fd9ff);
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.03) * 0.18));
@@ -10311,9 +10330,9 @@ const updateLunarProjectiles = (delta) => {
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
       const tailLen = 2.9 + Math.random() * 1.4;
-      const tailEnd = pos.clone().add(projectile.dir.clone().multiplyScalar(-tailLen));
+      const tailEnd = renderPos.clone().add(projectile.dir.clone().multiplyScalar(-tailLen));
       const tailColor = Math.random() > 0.5 ? projectile.colors.a : projectile.colors.tracer;
-      createTracer(pos, tailEnd, tailColor, { radiusScale: 1.8, life: 0.36, opacity: 0.92 });
+      createTracer(renderPos, tailEnd, tailColor, { radiusScale: 1.8, life: 0.36, opacity: 0.92 });
 
       const ember = createImpact(tailEnd, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (ember) {
