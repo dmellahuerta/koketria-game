@@ -37,23 +37,23 @@ app.innerHTML = `
 
     <div class="field">
       <label for="headRadius">Head radius <span class="value" id="headRadiusVal"></span></label>
-      <input id="headRadius" type="range" min="0.05" max="1.2" step="0.01" value="0.38" />
+      <input id="headRadius" type="range" min="0.05" max="1.2" step="0.01" value="0.31" />
     </div>
     <div class="field">
       <label for="headOffsetY">Head offset Y <span class="value" id="headOffsetYVal"></span></label>
-      <input id="headOffsetY" type="range" min="-1.2" max="1.4" step="0.01" value="0.18" />
+      <input id="headOffsetY" type="range" min="-1.2" max="1.4" step="0.01" value="1.4" />
     </div>
     <div class="field">
       <label for="capsuleRadius">Capsule radius <span class="value" id="capsuleRadiusVal"></span></label>
-      <input id="capsuleRadius" type="range" min="0.1" max="2.0" step="0.01" value="0.42" />
+      <input id="capsuleRadius" type="range" min="0.1" max="2.0" step="0.01" value="0.33" />
     </div>
     <div class="field">
       <label for="capsuleTopY">Capsule top Y <span class="value" id="capsuleTopYVal"></span></label>
-      <input id="capsuleTopY" type="range" min="-2.0" max="2.0" step="0.01" value="0.05" />
+      <input id="capsuleTopY" type="range" min="-2.0" max="2.0" step="0.01" value="1.18" />
     </div>
     <div class="field">
       <label for="capsuleBottomY">Capsule bottom Y <span class="value" id="capsuleBottomYVal"></span></label>
-      <input id="capsuleBottomY" type="range" min="-3.5" max="1.5" step="0.01" value="-1.55" />
+      <input id="capsuleBottomY" type="range" min="-3.5" max="1.5" step="0.01" value="-0.15" />
     </div>
 
     <div class="field actions">
@@ -96,11 +96,11 @@ const labels = {
 };
 
 const defaults = {
-  headRadius: 0.38,
-  headOffsetY: 0.18,
-  capsuleRadius: 0.42,
-  capsuleTopY: 0.05,
-  capsuleBottomY: -1.55,
+  headRadius: 0.31,
+  headOffsetY: 1.4,
+  capsuleRadius: 0.33,
+  capsuleTopY: 1.18,
+  capsuleBottomY: -0.15,
 };
 
 const gltfLoader = new GLTFLoader();
