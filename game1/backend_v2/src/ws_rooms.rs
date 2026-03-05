@@ -350,6 +350,10 @@ fn parse_addbot_count(text: &str) -> Option<usize> {
     Some(requested.clamp(1, BOT_MAX_PER_ROOM))
 }
 
+fn is_clearbots_command(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("/clearbots")
+}
+
 fn compute_rewind_timestamp(
     now_ms_v: i64,
     client_shot_ts: Option<i64>,
@@ -399,6 +403,10 @@ impl RoomMeta {
 
     fn rotate(&mut self, room_id: &str) {
         let seed = room_seed(room_id, now_ms());
+        let map_seed = positive_seed(seed);
+        let map_profile = create_map_profile(map_seed as u64);
+        let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
         self.weather = pick_from(WEATHER_TYPES, seed, Some(self.weather.as_str())).to_string();
         self.battle_theme = pick_from(
             BATTLE_THEMES,
@@ -406,9 +414,13 @@ impl RoomMeta {
             Some(self.battle_theme.as_str()),
         )
         .to_string();
-        reset_pickups(&mut self.mana_pickups);
-        reset_pickups(&mut self.shield_pickups);
-        reset_pickups(&mut self.health_pickups);
+        self.map_seed = map_seed;
+        self.map_profile = map_profile;
+        self.map_collision = map_collision;
+        self.map_collision_hash = map_collision_hash;
+        self.mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
+        self.shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
+        self.health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
     }
 }
 
@@ -1184,6 +1196,22 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 inner.broadcast_lobby_chat(client_id, &client.name, &text, now_ms());
                 return;
             };
+            if is_clearbots_command(&text) {
+                let removed = handle_clear_bots_command(&mut inner, &room_id);
+                if removed == 0 {
+                    inner.send_to(
+                        client_id,
+                        system_chat_payload("No hay bots para limpiar en esta sala.", now_ms()),
+                    );
+                } else {
+                    inner.broadcast_room(
+                        &room_id,
+                        system_chat_payload(&format!("Bots eliminados: {}", removed), now_ms()),
+                        None,
+                    );
+                }
+                return;
+            }
             if let Some(requested) = parse_addbot_count(&text) {
                 let mut added_ids: Vec<String> = Vec::new();
                 for _ in 0..requested {
@@ -2797,6 +2825,33 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
     );
     join_room_internal(inner, &bot_id, room_id);
     Some(bot_id)
+}
+
+fn handle_clear_bots_command(inner: &mut Inner, room_id: &str) -> usize {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return 0;
+    };
+    if room.mode != RoomMode::FreeForAll {
+        return 0;
+    }
+    let bot_ids: Vec<String> = room
+        .players
+        .iter()
+        .filter_map(|id| match inner.clients.get(id) {
+            Some(client) if client.is_bot => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    if bot_ids.is_empty() {
+        return 0;
+    }
+
+    for bot_id in &bot_ids {
+        let _ = leave_room_internal(inner, bot_id, false);
+        inner.clients.remove(bot_id);
+    }
+    inner.broadcast_lobby_presence();
+    bot_ids.len()
 }
 
 async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
@@ -5678,12 +5733,6 @@ fn create_pickups(seed: u64, salt: u64, count: usize) -> Vec<PickupState> {
         });
     }
     pickups
-}
-
-fn reset_pickups(pickups: &mut [PickupState]) {
-    for pickup in pickups {
-        pickup.respawn_at_ms = 0;
-    }
 }
 
 fn pickup_state_payload(meta: &RoomMeta, now: i64) -> Value {
