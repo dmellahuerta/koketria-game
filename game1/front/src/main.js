@@ -3677,6 +3677,7 @@ const healthPickupRespawnMs = 60_000;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
+const unifiedMagicHitboxRadius = 0.24;
 const headshotRadius = 0.62;
 const bodyshotRadius = 1.15;
 const torsoRadius = 1.02;
@@ -5830,6 +5831,7 @@ const createHolyShotVisual = (start, end, options = {}) => {
     distance,
     traveled: 0,
     speed: 85,
+    hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 15) + (Math.random() * Math.PI * 6),
     radius: 0.72,
@@ -6080,6 +6082,7 @@ const createPoisonGasVisual = (start, end, options = {}) => {
     distance,
     traveled: 0,
     speed: 60,
+    hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 9) + (Math.random() * Math.PI * 3),
     waveAmpA: 1.05,
@@ -6137,6 +6140,7 @@ const createLunarFireVisual = (start, end, options = {}) => {
     distance,
     traveled: 0,
     speed: 80,
+    hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 10) + (Math.random() * Math.PI * 4),
     waveAmpA: 0.4,
@@ -6254,14 +6258,15 @@ const getSegmentWallImpact = (segStart, segEnd, pad = 0.2) => {
     : wallPoint;
 };
 
-const getLocalSegmentCharacterImpact = (segStart, segEnd) => {
+const getLocalSegmentCharacterImpact = (segStart, segEnd, extraRadius = 0) => {
+  const extra = Math.max(0, Number(extraRadius) || 0);
   tmpLocalHead.set(camera.position.x, camera.position.y + headCenterOffsetY, camera.position.z);
   tmpLocalBody.set(camera.position.x, camera.position.y + bodyCenterOffsetY, camera.position.z);
-  const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, headshotRadius);
+  const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, headshotRadius + extra);
   if (head) {
     return { point: head, headshot: true };
   }
-  const body = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, bodyshotRadius);
+  const body = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, bodyshotRadius + extra);
   if (body) {
     return { point: body, headshot: false };
   }
@@ -6270,17 +6275,18 @@ const getLocalSegmentCharacterImpact = (segStart, segEnd) => {
     camera.position.y + (bodyCenterOffsetY * 0.45),
     camera.position.z,
   );
-  const torso = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, torsoRadius);
+  const torso = testSegmentSphereHit(segStart, segEnd, tmpLocalBody, torsoRadius + extra);
   if (torso) {
     return { point: torso, headshot: false };
   }
   return null;
 };
 
-const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd) => {
+const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd, extraRadius = 0) => {
   if (!entry?.group || entry.isDead) {
     return null;
   }
+  const extra = Math.max(0, Number(extraRadius) || 0);
   const headCenter = new THREE.Vector3(
     entry.group.position.x,
     entry.group.position.y + remoteHeadCenterOffsetY,
@@ -6296,12 +6302,12 @@ const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd) => {
     entry.group.position.y + remoteTorsoCenterOffsetY,
     entry.group.position.z,
   );
-  return testSegmentSphereHit(segStart, segEnd, headCenter, headshotRadius)
-    || testSegmentSphereHit(segStart, segEnd, bodyCenter, bodyshotRadius)
-    || testSegmentSphereHit(segStart, segEnd, torsoCenter, torsoRadius);
+  return testSegmentSphereHit(segStart, segEnd, headCenter, headshotRadius + extra)
+    || testSegmentSphereHit(segStart, segEnd, bodyCenter, bodyshotRadius + extra)
+    || testSegmentSphereHit(segStart, segEnd, torsoCenter, torsoRadius + extra);
 };
 
-const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '') => {
+const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '', extraRadius = 0) => {
   const owner = String(ownerId || '');
   for (const entry of state.remotePlayers.values()) {
     if (!entry || entry.isDead) {
@@ -6310,7 +6316,7 @@ const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '') => {
     if (owner && String(entry.id || '') === owner) {
       continue;
     }
-    const impact = getRemoteSegmentCharacterImpact(entry, segStart, segEnd);
+    const impact = getRemoteSegmentCharacterImpact(entry, segStart, segEnd, extraRadius);
     if (impact) {
       return impact;
     }
@@ -9994,18 +10000,11 @@ const updateHolyProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const angle = projectile.phase + (t * projectile.spin);
-    const spiralRadius = Math.max(0, projectile.radius * (1 - (t * projectile.radiusFalloff)));
-    const wobbleA = Math.cos(angle) * spiralRadius;
-    const wobbleB = Math.sin(angle) * spiralRadius;
-    const basePos = projectile.start.clone().lerp(projectile.end, t);
-    const pos = basePos
-      .add(projectile.right.clone().multiplyScalar(wobbleA))
-      .add(projectile.up.clone().multiplyScalar(wobbleB));
+    const pos = projectile.start.clone().lerp(projectile.end, t);
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
     projectile.mesh.visible = !state.showCollisionOnly;
-    ensureProjectileCollisionDebug(projectile, 0.22, 0x9af6ff);
+    ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x9af6ff);
 
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.02) * 0.24));
 
@@ -10023,20 +10022,29 @@ const updateHolyProjectiles = (delta) => {
     let impactPoint = null;
     let impactHeadshot = false;
     if (projectile.source === 'remote') {
-      const localImpact = getLocalSegmentCharacterImpact(projectile.prevPos, projectile.pos);
+      const localImpact = getLocalSegmentCharacterImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (localImpact) {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
       }
     } else {
-      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      const remoteImpact = getRemotePlayersSegmentImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.ownerId,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (remoteImpact) {
         impactPoint = remoteImpact.clone();
       }
     }
 
     if (!impactPoint) {
-      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, 0.22);
+      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, projectile.hitRadius || unifiedMagicHitboxRadius);
     }
 
     if (impactPoint || t >= 1) {
@@ -10191,17 +10199,11 @@ const updatePoisonProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const angle = projectile.phase + (t * projectile.spin);
-    const waveA = Math.sin(angle) * projectile.waveAmpA * (1 - (t * 0.22));
-    const waveB = Math.sin((angle * 0.5) + (Math.PI * 0.35)) * projectile.waveAmpB;
-    const basePos = projectile.start.clone().lerp(projectile.end, t);
-    const pos = basePos
-      .add(projectile.right.clone().multiplyScalar(waveA))
-      .add(projectile.up.clone().multiplyScalar(waveB));
+    const pos = projectile.start.clone().lerp(projectile.end, t);
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
     projectile.mesh.visible = !state.showCollisionOnly;
-    ensureProjectileCollisionDebug(projectile, 0.22, 0x70ff8a);
+    ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x70ff8a);
 
     projectile.mesh.scale.setScalar(1.12 + (Math.sin(performance.now() * 0.02) * 0.28));
 
@@ -10226,20 +10228,29 @@ const updatePoisonProjectiles = (delta) => {
     let impactPoint = null;
     let impactHeadshot = false;
     if (projectile.source === 'remote') {
-      const localImpact = getLocalSegmentCharacterImpact(projectile.prevPos, projectile.pos);
+      const localImpact = getLocalSegmentCharacterImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (localImpact) {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
       }
     } else {
-      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      const remoteImpact = getRemotePlayersSegmentImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.ownerId,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (remoteImpact) {
         impactPoint = remoteImpact.clone();
       }
     }
 
     if (!impactPoint) {
-      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, 0.22);
+      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, projectile.hitRadius || unifiedMagicHitboxRadius);
     }
 
     if (impactPoint || t >= 1) {
@@ -10288,17 +10299,11 @@ const updateLunarProjectiles = (delta) => {
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const angle = projectile.phase + (t * projectile.spin);
-    const waveA = Math.sin(angle) * projectile.waveAmpA;
-    const waveB = Math.cos((angle * 0.7) + Math.PI * 0.3) * projectile.waveAmpB;
-    const basePos = projectile.start.clone().lerp(projectile.end, t);
-    const pos = basePos
-      .add(projectile.right.clone().multiplyScalar(waveA))
-      .add(projectile.up.clone().multiplyScalar(waveB));
+    const pos = projectile.start.clone().lerp(projectile.end, t);
     projectile.pos.copy(pos);
     projectile.mesh.position.copy(pos);
     projectile.mesh.visible = !state.showCollisionOnly;
-    ensureProjectileCollisionDebug(projectile, 0.24, 0x9fd9ff);
+    ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x9fd9ff);
     projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.03) * 0.18));
 
     projectile.trailTimer += delta;
@@ -10320,20 +10325,29 @@ const updateLunarProjectiles = (delta) => {
     let impactPoint = null;
     let impactHeadshot = false;
     if (projectile.source === 'remote') {
-      const localImpact = getLocalSegmentCharacterImpact(projectile.prevPos, projectile.pos);
+      const localImpact = getLocalSegmentCharacterImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (localImpact) {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
       }
     } else {
-      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      const remoteImpact = getRemotePlayersSegmentImpact(
+        projectile.prevPos,
+        projectile.pos,
+        projectile.ownerId,
+        projectile.hitRadius || unifiedMagicHitboxRadius,
+      );
       if (remoteImpact) {
         impactPoint = remoteImpact.clone();
       }
     }
 
     if (!impactPoint) {
-      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, 0.24);
+      impactPoint = getSegmentWallImpact(projectile.prevPos, projectile.pos, projectile.hitRadius || unifiedMagicHitboxRadius);
     }
 
     if (impactPoint || t >= 1) {
