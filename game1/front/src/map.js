@@ -155,20 +155,30 @@ let isPainting = false;
 let strokeBeforeHeights = null;
 let strokeChanged = false;
 let isTestMode = false;
+let isPointerLocked = false;
 const inputKeys = {
   KeyW: false,
   KeyA: false,
   KeyS: false,
   KeyD: false,
+  Space: false,
 };
 const tmpHeightOrigin = new THREE.Vector3();
 const downDirection = new THREE.Vector3(0, -1, 0);
-const tmpFollowPos = new THREE.Vector3();
 const tmpMoveDir = new THREE.Vector3();
 const playerMoveSpeed = 15;
 const playerHeightOffset = 1.7;
-const testCameraDistance = 9.5;
-const testCameraHeight = 4.5;
+const testEyeHeight = 1.25;
+const testJumpVelocity = 7.2;
+const testGravity = 22;
+const testMouseSensitivity = 0.0022;
+const testPlayerPos = new THREE.Vector3();
+const testForward = new THREE.Vector3();
+const testRight = new THREE.Vector3();
+let testYaw = 0;
+let testPitch = 0;
+let testVerticalVelocity = 0;
+let testIsGrounded = true;
 const testPlayer = new THREE.Group();
 testPlayer.visible = false;
 const playerBody = new THREE.Mesh(
@@ -261,7 +271,7 @@ const updateTestModeUi = () => {
   const testing = isTestMode;
   testModeBtn.textContent = testing ? 'Volver al editor' : 'Probar mapa';
   testModeInfo.textContent = testing
-    ? 'Test activo: WASD para mover personaje'
+    ? 'Test activo: click en el canvas, WASD + Space + mouse'
     : 'Editor activo';
   modeSelect.disabled = testing;
   radiusRange.disabled = testing;
@@ -272,15 +282,21 @@ const updateTestModeUi = () => {
   exportBtn.disabled = testing;
   controls.enabled = !testing;
   brushHelper.visible = !testing && brushHelper.visible;
-  testPlayer.visible = testing;
+  testPlayer.visible = false;
 };
 
 const resetTestPlayer = () => {
   const startX = 0;
   const startZ = 0;
   const h = getTerrainHeightAt(startX, startZ);
-  testPlayer.position.set(startX, h + playerHeightOffset, startZ);
-  testPlayer.rotation.set(0, 0, 0);
+  testPlayerPos.set(startX, h + playerHeightOffset, startZ);
+  testYaw = 0;
+  testPitch = 0;
+  testVerticalVelocity = 0;
+  testIsGrounded = true;
+  testPlayer.position.copy(testPlayerPos);
+  camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
+  camera.rotation.set(0, testYaw, 0);
 };
 
 const setTestMode = (enabled) => {
@@ -290,6 +306,8 @@ const setTestMode = (enabled) => {
     strokeBeforeHeights = null;
     strokeChanged = false;
     resetTestPlayer();
+  } else if (document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock();
   }
   updateTestModeUi();
 };
@@ -332,7 +350,7 @@ const resize = () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h, false);
-  applyFov(camera.fov, true);
+  applyFov(camera.fov, !isTestMode);
 };
 
 const getPointerHit = (event) => {
@@ -402,7 +420,12 @@ const exportTerrainHeights = () => {
 };
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (isTestMode) return;
+  if (isTestMode) {
+    if (document.pointerLockElement !== renderer.domElement) {
+      renderer.domElement.requestPointerLock();
+    }
+    return;
+  }
   if (event.button !== 0) return;
   const p = getPointerHit(event);
   if (!p) return;
@@ -462,6 +485,19 @@ window.addEventListener('keyup', (event) => {
   inputKeys[event.code] = false;
 });
 
+document.addEventListener('pointerlockchange', () => {
+  isPointerLocked = document.pointerLockElement === renderer.domElement;
+});
+
+window.addEventListener('mousemove', (event) => {
+  if (!isTestMode || !isPointerLocked) {
+    return;
+  }
+  testYaw -= event.movementX * testMouseSensitivity;
+  testPitch -= event.movementY * testMouseSensitivity;
+  testPitch = Math.max(-1.35, Math.min(1.35, testPitch));
+});
+
 undoBtn.addEventListener('click', () => {
   const entry = historyUndo.pop();
   if (!entry) return;
@@ -507,34 +543,52 @@ const tick = () => {
   requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (isTestMode) {
+    const groundY = getTerrainHeightAt(testPlayerPos.x, testPlayerPos.z) + playerHeightOffset;
+    if (testPlayerPos.y <= groundY + 0.001) {
+      testPlayerPos.y = groundY;
+      testVerticalVelocity = 0;
+      testIsGrounded = true;
+    } else {
+      testIsGrounded = false;
+    }
+
+    if (inputKeys.Space && testIsGrounded) {
+      testVerticalVelocity = testJumpVelocity;
+      testIsGrounded = false;
+    }
+
+    if (!testIsGrounded) {
+      testVerticalVelocity -= testGravity * dt;
+      testPlayerPos.y += testVerticalVelocity * dt;
+      const nextGround = getTerrainHeightAt(testPlayerPos.x, testPlayerPos.z) + playerHeightOffset;
+      if (testPlayerPos.y <= nextGround) {
+        testPlayerPos.y = nextGround;
+        testVerticalVelocity = 0;
+        testIsGrounded = true;
+      }
+    }
+
     tmpMoveDir.set(0, 0, 0);
-    if (inputKeys.KeyW) tmpMoveDir.z -= 1;
-    if (inputKeys.KeyS) tmpMoveDir.z += 1;
-    if (inputKeys.KeyA) tmpMoveDir.x -= 1;
-    if (inputKeys.KeyD) tmpMoveDir.x += 1;
+    testForward.set(-Math.sin(testYaw), 0, -Math.cos(testYaw));
+    testRight.set(Math.cos(testYaw), 0, -Math.sin(testYaw));
+    if (inputKeys.KeyW) tmpMoveDir.add(testForward);
+    if (inputKeys.KeyS) tmpMoveDir.sub(testForward);
+    if (inputKeys.KeyA) tmpMoveDir.sub(testRight);
+    if (inputKeys.KeyD) tmpMoveDir.add(testRight);
     if (tmpMoveDir.lengthSq() > 0.0001) {
       tmpMoveDir.normalize();
-      const nextX = testPlayer.position.x + (tmpMoveDir.x * playerMoveSpeed * dt);
-      const nextZ = testPlayer.position.z + (tmpMoveDir.z * playerMoveSpeed * dt);
+      const nextX = testPlayerPos.x + (tmpMoveDir.x * playerMoveSpeed * dt);
+      const nextZ = testPlayerPos.z + (tmpMoveDir.z * playerMoveSpeed * dt);
       const clamped = clampInsideBounds(nextX, nextZ, 1.8);
-      const nextY = getTerrainHeightAt(clamped.x, clamped.z) + playerHeightOffset;
-      testPlayer.position.set(clamped.x, nextY, clamped.z);
-      testPlayer.rotation.y = Math.atan2(tmpMoveDir.x, tmpMoveDir.z);
-    } else {
-      const stayY = getTerrainHeightAt(testPlayer.position.x, testPlayer.position.z) + playerHeightOffset;
-      testPlayer.position.y = stayY;
+      testPlayerPos.x = clamped.x;
+      testPlayerPos.z = clamped.z;
     }
-    const forward = new THREE.Vector3(
-      Math.sin(testPlayer.rotation.y),
-      0,
-      Math.cos(testPlayer.rotation.y),
-    );
-    tmpFollowPos.copy(testPlayer.position)
-      .addScaledVector(forward, -testCameraDistance)
-      .add(new THREE.Vector3(0, testCameraHeight, 0));
-    camera.position.lerp(tmpFollowPos, 0.12);
-    controls.target.lerp(testPlayer.position, 0.18);
-    camera.lookAt(controls.target);
+
+    testPlayer.position.copy(testPlayerPos);
+    camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = testYaw;
+    camera.rotation.x = testPitch;
   } else {
     controls.update();
   }
