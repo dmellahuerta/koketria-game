@@ -341,6 +341,40 @@ const BOT_PILLAR_COLLISION_RADIUS_FACTOR: f64 = 1.2;
 const RADIAL_LOS_CLEARANCE_UNITS: f64 = 0.24;
 const RADIAL_VERTICAL_FACTOR: f64 = 0.35;
 const RADIAL_VERTICAL_MAX_DELTA: f64 = 1.6;
+const HITREG_TEMPORAL_SUBSTEPS_MIN: usize = 3;
+const HITREG_TEMPORAL_SUBSTEPS_MAX: usize = 7;
+
+#[derive(Clone, Copy)]
+struct HitboxProfile {
+    head_radius: f64,
+    body_radius: f64,
+    torso_radius: f64,
+    torso_capsule_radius: f64,
+    legs_capsule_radius: f64,
+    head_center_offset_y: f64,
+    body_center_offset_y: f64,
+}
+
+const HITBOX_PROFILE_DEFAULT: HitboxProfile = HitboxProfile {
+    head_radius: HEADSHOT_RADIUS,
+    body_radius: BODYSHOT_RADIUS,
+    torso_radius: TORSO_RADIUS,
+    torso_capsule_radius: TORSO_CAPSULE_RADIUS,
+    legs_capsule_radius: LEGS_CAPSULE_RADIUS,
+    head_center_offset_y: HEAD_CENTER_OFFSET_Y,
+    body_center_offset_y: BODY_CENTER_OFFSET_Y,
+};
+
+fn hitbox_profile_for_character(character: Option<&str>) -> HitboxProfile {
+    match normalize_character(character).as_str() {
+        // mismos valores por ahora; definido por personaje para habilitar ajuste independiente.
+        "silentman" | "silenmant" => HITBOX_PROFILE_DEFAULT,
+        "pumori" => HITBOX_PROFILE_DEFAULT,
+        "neoorphen" => HITBOX_PROFILE_DEFAULT,
+        "pezunalunar" | "pezuanalunar" => HITBOX_PROFILE_DEFAULT,
+        _ => HITBOX_PROFILE_DEFAULT,
+    }
+}
 
 fn parse_addbot_count(text: &str) -> Option<usize> {
     let mut parts = text.split_whitespace();
@@ -5073,6 +5107,7 @@ fn find_best_hit(
         }
 
         let rewound = client_position_at(candidate, rewind_ts);
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
         let target_speed = client_speed_at_ts(candidate, rewind_ts);
         let speed_inflate =
             (target_speed * HITBOX_MOTION_INFLATE_FACTOR).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
@@ -5083,22 +5118,34 @@ fn find_best_hit(
             + (target_speed * HITREG_SWEEP_SPEED_WINDOW_FACTOR))
             .round() as i64;
         let sweep_window_ms = sweep_window_ms.clamp(0, HITREG_SWEEP_MAX_WINDOW_MS);
-        let mut sample_positions = Vec::with_capacity(3);
-        if sweep_window_ms > 0 {
-            sample_positions.push(client_position_at(candidate, rewind_ts - sweep_window_ms));
+        let mut sample_positions = Vec::new();
+        if sweep_window_ms <= 0 {
+            sample_positions.push(rewound.clone());
+        } else {
+            let long_shot_bonus = ((max_distance / 24.0).floor() as usize).min(2);
+            let temporal_steps = (HITREG_TEMPORAL_SUBSTEPS_MIN + long_shot_bonus)
+                .clamp(HITREG_TEMPORAL_SUBSTEPS_MIN, HITREG_TEMPORAL_SUBSTEPS_MAX);
+            sample_positions.reserve(temporal_steps);
+            for i in 0..temporal_steps {
+                let t = if temporal_steps <= 1 {
+                    0.5
+                } else {
+                    (i as f64) / ((temporal_steps - 1) as f64)
+                };
+                let offset_ms = ((-sweep_window_ms as f64)
+                    + ((2.0 * sweep_window_ms as f64) * t))
+                    .round() as i64;
+                sample_positions.push(client_position_at(candidate, rewind_ts + offset_ms));
+            }
         }
-        sample_positions.push(rewound.clone());
-        if sweep_window_ms > 0 {
-            sample_positions.push(client_position_at(candidate, rewind_ts + sweep_window_ms));
-        }
-        let head_radius = HEADSHOT_RADIUS + motion_inflate.min(HITBOX_MOTION_INFLATE_HEAD_MAX);
-        let body_radius = BODYSHOT_RADIUS + motion_inflate;
-        let torso_radius = TORSO_RADIUS + motion_inflate;
-        let torso_capsule_radius = TORSO_CAPSULE_RADIUS + motion_inflate;
-        let legs_capsule_radius = LEGS_CAPSULE_RADIUS + (motion_inflate * 0.85);
+        let head_radius = profile.head_radius + motion_inflate.min(HITBOX_MOTION_INFLATE_HEAD_MAX);
+        let body_radius = profile.body_radius + motion_inflate;
+        let torso_radius = profile.torso_radius + motion_inflate;
+        let torso_capsule_radius = profile.torso_capsule_radius + motion_inflate;
+        let legs_capsule_radius = profile.legs_capsule_radius + (motion_inflate * 0.85);
         let head_center = Vec3 {
             x: rewound.x,
-            y: rewound.y + HEAD_CENTER_OFFSET_Y,
+            y: rewound.y + profile.head_center_offset_y,
             z: rewound.z,
         };
 
@@ -5118,7 +5165,7 @@ fn find_best_hit(
                 direction_norm,
                 &Vec3 {
                     x: sample.x,
-                    y: sample.y + BODY_CENTER_OFFSET_Y,
+                    y: sample.y + profile.body_center_offset_y,
                     z: sample.z,
                 },
                 body_radius,
@@ -5139,7 +5186,7 @@ fn find_best_hit(
                 direction_norm,
                 &Vec3 {
                     x: sample.x,
-                    y: sample.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                    y: sample.y + (profile.body_center_offset_y * 0.45),
                     z: sample.z,
                 },
                 torso_radius,
@@ -5234,16 +5281,17 @@ fn find_pumori_hammer_hit(
         if !candidate.combat.alive {
             continue;
         }
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
 
         let center = &candidate.state.position;
         let head_center = Vec3 {
             x: center.x,
-            y: center.y + HEAD_CENTER_OFFSET_Y,
+            y: center.y + profile.head_center_offset_y,
             z: center.z,
         };
         let body_center = Vec3 {
             x: center.x,
-            y: center.y + BODY_CENTER_OFFSET_Y,
+            y: center.y + profile.body_center_offset_y,
             z: center.z,
         };
 
@@ -5252,7 +5300,7 @@ fn find_pumori_hammer_hit(
             origin,
             direction_norm,
             &head_center,
-            PUMORI_HAMMER_HEAD_RADIUS,
+            PUMORI_HAMMER_HEAD_RADIUS.min(profile.head_radius + 0.18),
             max_distance,
         ) {
             hit_dist = Some(d);
@@ -5261,7 +5309,7 @@ fn find_pumori_hammer_hit(
             origin,
             direction_norm,
             &body_center,
-            PUMORI_HAMMER_BODY_RADIUS,
+            PUMORI_HAMMER_BODY_RADIUS.min(profile.body_radius + 0.65),
             max_distance,
         ) {
             match hit_dist {
@@ -5302,22 +5350,25 @@ fn find_pumori_hammer_overlap_hit(
         if !candidate.combat.alive {
             continue;
         }
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
 
         let center = &candidate.state.position;
         let head_center = Vec3 {
             x: center.x,
-            y: center.y + HEAD_CENTER_OFFSET_Y,
+            y: center.y + profile.head_center_offset_y,
             z: center.z,
         };
         let body_center = Vec3 {
             x: center.x,
-            y: center.y + BODY_CENTER_OFFSET_Y,
+            y: center.y + profile.body_center_offset_y,
             z: center.z,
         };
         let head_d2 = distance_sq(hammer_pos, &head_center);
         let body_d2 = distance_sq(hammer_pos, &body_center);
-        let in_head = head_d2 <= (PUMORI_HAMMER_HEAD_RADIUS * PUMORI_HAMMER_HEAD_RADIUS);
-        let in_body = body_d2 <= (PUMORI_HAMMER_BODY_RADIUS * PUMORI_HAMMER_BODY_RADIUS);
+        let head_radius = PUMORI_HAMMER_HEAD_RADIUS.min(profile.head_radius + 0.18);
+        let body_radius = PUMORI_HAMMER_BODY_RADIUS.min(profile.body_radius + 0.65);
+        let in_head = head_d2 <= (head_radius * head_radius);
+        let in_body = body_d2 <= (body_radius * body_radius);
         if !in_head && !in_body {
             continue;
         }
@@ -5447,33 +5498,34 @@ fn has_line_of_sight_with_margin(
 fn classify_point_hit_on_player(
     impact_point: &Vec3,
     base_position: &Vec3,
+    profile: HitboxProfile,
     prefer_headshot: bool,
     margin: f64,
 ) -> Option<bool> {
     let head_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + HEAD_CENTER_OFFSET_Y,
+        y: base_position.y + profile.head_center_offset_y,
         z: base_position.z,
     };
     let body_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + BODY_CENTER_OFFSET_Y,
+        y: base_position.y + profile.body_center_offset_y,
         z: base_position.z,
     };
-    let head_radius = HEADSHOT_RADIUS + margin;
+    let head_radius = profile.head_radius + margin;
     if distance_sq(impact_point, &head_center) <= head_radius * head_radius {
         return Some(true);
     }
-    let body_radius = BODYSHOT_RADIUS + margin;
+    let body_radius = profile.body_radius + margin;
     if distance_sq(impact_point, &body_center) <= body_radius * body_radius {
         return Some(false);
     }
     let torso_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+        y: base_position.y + (profile.body_center_offset_y * 0.45),
         z: base_position.z,
     };
-    let torso_radius = TORSO_RADIUS + margin;
+    let torso_radius = profile.torso_radius + margin;
     if distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius {
         return Some(false);
     }
@@ -5490,6 +5542,7 @@ fn classify_point_hit_on_player_with_history(
     shot_ts: Option<i64>,
     impact_delay_ms: i64,
 ) -> Option<bool> {
+    let profile = hitbox_profile_for_character(victim.character.as_deref());
     let now = now_ms();
     let target_ts = match shot_ts {
         Some(ts) => clamp_i64(ts + impact_delay_ms, now - STATE_HISTORY_WINDOW_MS, now),
@@ -5510,11 +5563,17 @@ fn classify_point_hit_on_player_with_history(
         let margin = MAGIC_IMPACT_REVALIDATION_MARGIN
             + (speed * MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR)
                 .clamp(0.0, MAGIC_IMPACT_REVALIDATION_SPEED_MAX);
-        if let Some(result) = classify_point_hit_on_player(impact_point, &pos, prefer_headshot, margin) {
+        if let Some(result) = classify_point_hit_on_player(
+            impact_point,
+            &pos,
+            profile,
+            prefer_headshot,
+            margin,
+        ) {
             return Some(result);
         }
         if prefer_headshot {
-            fallback_body = classify_point_hit_on_player(impact_point, &pos, false, margin)
+            fallback_body = classify_point_hit_on_player(impact_point, &pos, profile, false, margin)
                 .or(fallback_body);
         }
     }
