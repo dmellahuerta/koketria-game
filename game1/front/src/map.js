@@ -166,15 +166,20 @@ const inputKeys = {
 const tmpHeightOrigin = new THREE.Vector3();
 const downDirection = new THREE.Vector3(0, -1, 0);
 const tmpMoveDir = new THREE.Vector3();
-const playerMoveSpeed = 15;
+const moveSpeed = 9;
+const moveAcceleration = 24;
+const moveDeceleration = 18;
+const airControlFactor = 0.45;
+const strafeOnlySpeedFactor = 0.92;
 const playerHeightOffset = 1.7;
-const testEyeHeight = 1.25;
-const testJumpVelocity = 7.2;
-const testGravity = 22;
+const testEyeHeight = 0;
+const testJumpVelocity = 6.8;
+const testGravity = 18;
 const testMouseSensitivity = 0.0022;
 const testPlayerPos = new THREE.Vector3();
 const testForward = new THREE.Vector3();
 const testRight = new THREE.Vector3();
+const testHorizontalVelocity = new THREE.Vector2(0, 0);
 let testYaw = 0;
 let testPitch = 0;
 let testVerticalVelocity = 0;
@@ -293,6 +298,7 @@ const resetTestPlayer = () => {
   testYaw = 0;
   testPitch = 0;
   testVerticalVelocity = 0;
+  testHorizontalVelocity.set(0, 0);
   testIsGrounded = true;
   testPlayer.position.copy(testPlayerPos);
   camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
@@ -308,6 +314,8 @@ const setTestMode = (enabled) => {
     resetTestPlayer();
   } else if (document.pointerLockElement === renderer.domElement) {
     document.exitPointerLock();
+    testHorizontalVelocity.set(0, 0);
+    testVerticalVelocity = 0;
   }
   updateTestModeUi();
 };
@@ -575,14 +583,32 @@ const tick = () => {
     if (inputKeys.KeyS) tmpMoveDir.sub(testForward);
     if (inputKeys.KeyA) tmpMoveDir.sub(testRight);
     if (inputKeys.KeyD) tmpMoveDir.add(testRight);
-    if (tmpMoveDir.lengthSq() > 0.0001) {
+    const hasMoveInput = tmpMoveDir.lengthSq() > 0.0001;
+    const hasForward = Boolean(inputKeys.KeyW || inputKeys.KeyS);
+    const hasStrafe = Boolean(inputKeys.KeyA || inputKeys.KeyD);
+    const speedFactor = (hasStrafe && !hasForward) ? strafeOnlySpeedFactor : 1;
+    const desiredSpeed = moveSpeed * speedFactor;
+    if (hasMoveInput) {
       tmpMoveDir.normalize();
-      const nextX = testPlayerPos.x + (tmpMoveDir.x * playerMoveSpeed * dt);
-      const nextZ = testPlayerPos.z + (tmpMoveDir.z * playerMoveSpeed * dt);
-      const clamped = clampInsideBounds(nextX, nextZ, 1.8);
-      testPlayerPos.x = clamped.x;
-      testPlayerPos.z = clamped.z;
     }
+    const desiredVx = hasMoveInput ? (tmpMoveDir.x * desiredSpeed) : 0;
+    const desiredVz = hasMoveInput ? (tmpMoveDir.z * desiredSpeed) : 0;
+    const accel = moveAcceleration * (testIsGrounded ? 1 : airControlFactor);
+    const decel = moveDeceleration * (testIsGrounded ? 1 : airControlFactor);
+    const gain = Math.min(1, accel * dt);
+    const drag = Math.min(1, decel * dt);
+    if (hasMoveInput) {
+      testHorizontalVelocity.x += (desiredVx - testHorizontalVelocity.x) * gain;
+      testHorizontalVelocity.y += (desiredVz - testHorizontalVelocity.y) * gain;
+    } else {
+      testHorizontalVelocity.x += (0 - testHorizontalVelocity.x) * drag;
+      testHorizontalVelocity.y += (0 - testHorizontalVelocity.y) * drag;
+    }
+    const nextX = testPlayerPos.x + (testHorizontalVelocity.x * dt);
+    const nextZ = testPlayerPos.z + (testHorizontalVelocity.y * dt);
+    const clamped = clampInsideBounds(nextX, nextZ, 1.8);
+    testPlayerPos.x = clamped.x;
+    testPlayerPos.z = clamped.z;
 
     testPlayer.position.copy(testPlayerPos);
     camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
