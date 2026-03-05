@@ -6301,6 +6301,23 @@ const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd) => {
     || testSegmentSphereHit(segStart, segEnd, torsoCenter, torsoRadius);
 };
 
+const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '') => {
+  const owner = String(ownerId || '');
+  for (const entry of state.remotePlayers.values()) {
+    if (!entry || entry.isDead) {
+      continue;
+    }
+    if (owner && String(entry.id || '') === owner) {
+      continue;
+    }
+    const impact = getRemoteSegmentCharacterImpact(entry, segStart, segEnd);
+    if (impact) {
+      return impact;
+    }
+  }
+  return null;
+};
+
 const applyIncomingProjectileHit = (hitInfo, killerId) => {
   // Damage is now authoritative on backend.
   void hitInfo;
@@ -10011,6 +10028,11 @@ const updateHolyProjectiles = (delta) => {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
       }
+    } else {
+      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      if (remoteImpact) {
+        impactPoint = remoteImpact.clone();
+      }
     }
 
     if (!impactPoint) {
@@ -10209,6 +10231,11 @@ const updatePoisonProjectiles = (delta) => {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
       }
+    } else {
+      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      if (remoteImpact) {
+        impactPoint = remoteImpact.clone();
+      }
     }
 
     if (!impactPoint) {
@@ -10297,6 +10324,11 @@ const updateLunarProjectiles = (delta) => {
       if (localImpact) {
         impactPoint = localImpact.point;
         impactHeadshot = localImpact.headshot;
+      }
+    } else {
+      const remoteImpact = getRemotePlayersSegmentImpact(projectile.prevPos, projectile.pos, projectile.ownerId);
+      if (remoteImpact) {
+        impactPoint = remoteImpact.clone();
       }
     }
 
