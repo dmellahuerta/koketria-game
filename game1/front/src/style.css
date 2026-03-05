@@ -577,9 +577,10 @@ canvas {
 
 .lobby-right-side .room-list {
   min-height: 0;
-  height: auto;
+  height: 100%;
   max-height: none;
   flex: 1 1 auto;
+  align-content: start;
 }
 
 .lobby-side h3 {
@@ -919,7 +920,7 @@ button:disabled {
 .room-list {
   display: grid;
   gap: 8px;
-  max-height: 22vh;
+  max-height: clamp(180px, 30vh, 360px);
   overflow: auto;
   padding-right: 4px;
 }
@@ -1780,6 +1781,22 @@ button:disabled {
   touch-action: none;
 }
 
+.collision-mode-btn {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 36;
+  min-width: 72px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(123, 255, 123, 0.45);
+  background: rgba(0, 23, 0, 0.84);
+  color: #d5ffd5;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  pointer-events: auto;
+}
+
 .mobile-left {
   left: max(14px, env(safe-area-inset-left));
 }
@@ -1925,6 +1942,15 @@ button:disabled {
 
 #app:not(.in-room) #optionsScreen {
   display: none;
+}
+
+#app:not(.in-room) .collision-mode-btn {
+  display: none;
+}
+
+#app.mobile-input .collision-mode-btn {
+  top: calc(max(14px, env(safe-area-inset-top)) + 64px);
+  left: max(14px, env(safe-area-inset-left));
 }
 
 #app.in-room #lobby {

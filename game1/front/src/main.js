@@ -265,6 +265,7 @@ app.innerHTML = `
       <button id="mobileFireBtn" type="button" class="mobile-btn fire">Ataque</button>
     </div>
   </div>
+  <button id="collisionModeBtn" type="button" class="collision-mode-btn">COL: OFF</button>
   <div id="mobileFullscreenPrompt" class="mobile-fullscreen-prompt hidden">
     <div class="mobile-fullscreen-card">
       <h3>Modo Pantalla Completa</h3>
@@ -335,7 +336,6 @@ app.innerHTML = `
       <div class="options-actions">
         <button id="optResumeBtn" type="button">Volver al juego</button>
         <button id="optLeaveLobbyBtn" type="button">Volver al lobby</button>
-        <button id="optCollisionViewBtn" type="button">Colisiones: OFF</button>
       </div>
       <p class="options-hint">ESC: abrir/cerrar opciones</p>
     </div>
@@ -458,6 +458,7 @@ const mobileFireBtn = document.querySelector('#mobileFireBtn');
 const mobileSpecialBtn = document.querySelector('#mobileSpecialBtn');
 const mobileJumpBtn = document.querySelector('#mobileJumpBtn');
 const mobileOptionsBtn = document.querySelector('#mobileOptionsBtn');
+const collisionModeBtn = document.querySelector('#collisionModeBtn');
 const mobileFullscreenPrompt = document.querySelector('#mobileFullscreenPrompt');
 const mobileFsAcceptBtn = document.querySelector('#mobileFsAcceptBtn');
 const mobileFsSkipBtn = document.querySelector('#mobileFsSkipBtn');
@@ -477,7 +478,6 @@ const optFovValue = document.querySelector('#optFovValue');
 const optShowPerf = document.querySelector('#optShowPerf');
 const optResumeBtn = document.querySelector('#optResumeBtn');
 const optLeaveLobbyBtn = document.querySelector('#optLeaveLobbyBtn');
-const optCollisionViewBtn = document.querySelector('#optCollisionViewBtn');
 
 const state = {
   ws: null,
@@ -3264,8 +3264,8 @@ const syncOptionsUi = () => {
   optFov.value = String(Math.round(settings.fov));
   optFovValue.textContent = String(Math.round(settings.fov));
   optShowPerf.checked = Boolean(settings.showPerfByDefault);
-  if (optCollisionViewBtn) {
-    optCollisionViewBtn.textContent = `Colisiones: ${state.showCollisionOnly ? 'ON' : 'OFF'}`;
+  if (collisionModeBtn) {
+    collisionModeBtn.textContent = `COL: ${state.showCollisionOnly ? 'ON' : 'OFF'}`;
   }
   syncLobbyMusicUi();
 };
@@ -7563,7 +7563,7 @@ optLeaveLobbyBtn.addEventListener('click', () => {
   sendWs({ type: 'leave_room' });
 });
 
-optCollisionViewBtn?.addEventListener('click', () => {
+collisionModeBtn?.addEventListener('click', () => {
   setCollisionOnlyMode(!state.showCollisionOnly);
 });
 
@@ -8136,8 +8136,8 @@ const syncCollisionOnlyModeVisuals = () => {
 const setCollisionOnlyMode = (enabled) => {
   const next = Boolean(enabled);
   if (state.showCollisionOnly === next) {
-    if (optCollisionViewBtn) {
-      optCollisionViewBtn.textContent = `Colisiones: ${next ? 'ON' : 'OFF'}`;
+    if (collisionModeBtn) {
+      collisionModeBtn.textContent = `COL: ${next ? 'ON' : 'OFF'}`;
     }
     return;
   }
@@ -8148,8 +8148,8 @@ const setCollisionOnlyMode = (enabled) => {
     state.showHitboxDebug = hitboxDebugBeforeCollisionOnly;
   }
   state.showCollisionOnly = next;
-  if (optCollisionViewBtn) {
-    optCollisionViewBtn.textContent = `Colisiones: ${next ? 'ON' : 'OFF'}`;
+  if (collisionModeBtn) {
+    collisionModeBtn.textContent = `COL: ${next ? 'ON' : 'OFF'}`;
   }
   syncCollisionOnlyModeVisuals();
 };
