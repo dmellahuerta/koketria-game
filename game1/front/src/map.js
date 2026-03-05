@@ -105,20 +105,23 @@ scene.add(dir);
 const terrainGeometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
 terrainGeometry.rotateX(-Math.PI / 2);
 const terrainMaterial = new THREE.MeshStandardMaterial({
-  color: 0x1a5133,
-  roughness: 0.95,
-  metalness: 0.03,
+  color: 0x021102,
+  roughness: 1,
+  metalness: 0,
   flatShading: false,
 });
 const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
 terrain.receiveShadow = false;
 scene.add(terrain);
 
-const terrainWire = new THREE.LineSegments(
-  new THREE.WireframeGeometry(terrainGeometry),
-  new THREE.LineBasicMaterial({ color: 0x76ff9b, transparent: true, opacity: 0.18 }),
+const floorGrid = new THREE.GridHelper(
+  terrainSize,
+  60,
+  0x3fff66,
+  0x0f4a1f,
 );
-scene.add(terrainWire);
+floorGrid.position.y = 0.01;
+scene.add(floorGrid);
 
 const boundaryY = 0.4;
 const half = terrainSize * 0.5;
