@@ -1455,6 +1455,28 @@ const getTeamByPlayerId = (playerId) => {
   return normalizePlayerTeam(entry?.team);
 };
 
+const isEnemyEntryForLocalPlayer = (entry) => {
+  if (!entry) {
+    return false;
+  }
+  const myTeam = normalizePlayerTeam(localAvatar.team);
+  const otherTeam = normalizePlayerTeam(entry.team);
+  if (myTeam && otherTeam) {
+    return myTeam !== otherTeam;
+  }
+  return true;
+};
+
+const shouldShowRemoteHealthBar = (entry, visibleByDistance = true) => {
+  if (!entry || entry.isDead || !visibleByDistance) {
+    return false;
+  }
+  if (!state.showCollisionOnly) {
+    return true;
+  }
+  return isEnemyEntryForLocalPlayer(entry);
+};
+
 const getVersusScoreTarget = (room) => {
   const type = String(room?.versusType || '').trim().toLowerCase();
   if (type === '1v1') {
@@ -8138,7 +8160,7 @@ const syncCollisionOnlyModeVisuals = () => {
       entry.head.visible = !state.showCollisionOnly;
     }
     if (entry.healthBar?.holder) {
-      entry.healthBar.holder.visible = !state.showCollisionOnly && !entry.isDead;
+      entry.healthBar.holder.visible = shouldShowRemoteHealthBar(entry, true);
     }
     if (entry.teamOutline) {
       entry.teamOutline.visible = !state.showCollisionOnly && entry.teamOutline.visible;
@@ -8251,7 +8273,7 @@ const updateRemoteHealthBar = (entry) => {
     entry.healthBar.textTexture.needsUpdate = true;
     entry.healthBar.lastText = hpTextKey;
   }
-  entry.healthBar.holder.visible = !state.showCollisionOnly && !entry.isDead;
+  entry.healthBar.holder.visible = shouldShowRemoteHealthBar(entry, true);
 };
 
 const clearLocalPredictionHistory = () => {
@@ -10016,7 +10038,7 @@ const updateRemotePlayers = (delta) => {
       const visibleByDistance = distance <= remoteHealthBarMaxVisibleDistance;
       const scale = Math.max(0.74, Math.min(1.06, 1.12 - (distance / 170)));
       holder.scale.setScalar(scale);
-      holder.visible = !state.showCollisionOnly && !entry.isDead && visibleByDistance;
+      holder.visible = shouldShowRemoteHealthBar(entry, visibleByDistance);
     }
     if (entry.teamOutline) {
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
