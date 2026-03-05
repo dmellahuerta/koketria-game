@@ -39,6 +39,11 @@ app.innerHTML = `
       <button id="flattenBtn" type="button">Plano base</button>
       <button id="exportBtn" type="button">Exportar alturas</button>
     </div>
+    <div class="field actions">
+      <button id="testModeBtn" type="button">Probar mapa</button>
+      <button id="resetPlayerBtn" type="button">Reset personaje</button>
+    </div>
+    <p id="testModeInfo" class="value">Editor activo</p>
 
     <div class="field">
       <label for="exportOut">Datos (JSON)</label>
@@ -62,6 +67,9 @@ const undoBtn = document.querySelector('#undoBtn');
 const redoBtn = document.querySelector('#redoBtn');
 const flattenBtn = document.querySelector('#flattenBtn');
 const exportBtn = document.querySelector('#exportBtn');
+const testModeBtn = document.querySelector('#testModeBtn');
+const resetPlayerBtn = document.querySelector('#resetPlayerBtn');
+const testModeInfo = document.querySelector('#testModeInfo');
 const exportOut = document.querySelector('#exportOut');
 const canvasWrap = document.querySelector('#canvasWrap');
 
@@ -140,11 +148,42 @@ brushHelper.visible = false;
 scene.add(brushHelper);
 
 const raycaster = new THREE.Raycaster();
+const terrainHeightRaycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const hitPoint = new THREE.Vector3();
 let isPainting = false;
 let strokeBeforeHeights = null;
 let strokeChanged = false;
+let isTestMode = false;
+const inputKeys = {
+  KeyW: false,
+  KeyA: false,
+  KeyS: false,
+  KeyD: false,
+};
+const tmpHeightOrigin = new THREE.Vector3();
+const downDirection = new THREE.Vector3(0, -1, 0);
+const tmpFollowPos = new THREE.Vector3();
+const tmpMoveDir = new THREE.Vector3();
+const playerMoveSpeed = 15;
+const playerHeightOffset = 1.7;
+const testCameraDistance = 9.5;
+const testCameraHeight = 4.5;
+const testPlayer = new THREE.Group();
+testPlayer.visible = false;
+const playerBody = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.42, 1.0, 4, 8),
+  new THREE.MeshStandardMaterial({ color: 0x8de7ab, roughness: 0.55, metalness: 0.05 }),
+);
+const playerHead = new THREE.Mesh(
+  new THREE.SphereGeometry(0.26, 16, 12),
+  new THREE.MeshStandardMaterial({ color: 0xd6ffe2, roughness: 0.5, metalness: 0.02 }),
+);
+playerBody.position.set(0, 0.5, 0);
+playerHead.position.set(0, 1.35, 0);
+testPlayer.add(playerBody);
+testPlayer.add(playerHead);
+scene.add(testPlayer);
 
 const historyUndo = [];
 const historyRedo = [];
@@ -198,6 +237,61 @@ const updateLabels = () => {
   strengthValue.textContent = Number(strengthRange.value).toFixed(1);
   fovValue.textContent = String(Math.round(Number(fovRange.value)));
   brushHelper.scale.setScalar(Number(radiusRange.value));
+};
+
+const getTerrainHeightAt = (x, z) => {
+  tmpHeightOrigin.set(x, 300, z);
+  terrainHeightRaycaster.set(tmpHeightOrigin, downDirection);
+  terrainHeightRaycaster.far = 700;
+  const hits = terrainHeightRaycaster.intersectObject(terrain, false);
+  if (hits.length <= 0) {
+    return 0;
+  }
+  return Number(hits[0].point.y) || 0;
+};
+
+const clampInsideBounds = (x, z, margin = 1.4) => {
+  return {
+    x: Math.max(-half + margin, Math.min(half - margin, x)),
+    z: Math.max(-half + margin, Math.min(half - margin, z)),
+  };
+};
+
+const updateTestModeUi = () => {
+  const testing = isTestMode;
+  testModeBtn.textContent = testing ? 'Volver al editor' : 'Probar mapa';
+  testModeInfo.textContent = testing
+    ? 'Test activo: WASD para mover personaje'
+    : 'Editor activo';
+  modeSelect.disabled = testing;
+  radiusRange.disabled = testing;
+  strengthRange.disabled = testing;
+  undoBtn.disabled = testing || historyUndo.length <= 0;
+  redoBtn.disabled = testing || historyRedo.length <= 0;
+  flattenBtn.disabled = testing;
+  exportBtn.disabled = testing;
+  controls.enabled = !testing;
+  brushHelper.visible = !testing && brushHelper.visible;
+  testPlayer.visible = testing;
+};
+
+const resetTestPlayer = () => {
+  const startX = 0;
+  const startZ = 0;
+  const h = getTerrainHeightAt(startX, startZ);
+  testPlayer.position.set(startX, h + playerHeightOffset, startZ);
+  testPlayer.rotation.set(0, 0, 0);
+};
+
+const setTestMode = (enabled) => {
+  isTestMode = Boolean(enabled);
+  if (isTestMode) {
+    isPainting = false;
+    strokeBeforeHeights = null;
+    strokeChanged = false;
+    resetTestPlayer();
+  }
+  updateTestModeUi();
 };
 
 const applyFov = (fov, keepFraming = true) => {
@@ -308,6 +402,7 @@ const exportTerrainHeights = () => {
 };
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (isTestMode) return;
   if (event.button !== 0) return;
   const p = getPointerHit(event);
   if (!p) return;
@@ -320,6 +415,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 });
 
 window.addEventListener('pointerup', () => {
+  if (isTestMode) return;
   if (!isPainting) return;
   isPainting = false;
   controls.enabled = true;
@@ -332,6 +428,10 @@ window.addEventListener('pointerup', () => {
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
+  if (isTestMode) {
+    brushHelper.visible = false;
+    return;
+  }
   const p = getPointerHit(event);
   if (!p) {
     brushHelper.visible = false;
@@ -343,6 +443,23 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   if (isPainting) {
     strokeChanged = applyBrush(hitPoint, event.shiftKey) || strokeChanged;
   }
+});
+
+window.addEventListener('keydown', (event) => {
+  if (!(event.code in inputKeys)) {
+    return;
+  }
+  inputKeys[event.code] = true;
+  if (isTestMode) {
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (!(event.code in inputKeys)) {
+    return;
+  }
+  inputKeys[event.code] = false;
 });
 
 undoBtn.addEventListener('click', () => {
@@ -363,6 +480,12 @@ redoBtn.addEventListener('click', () => {
 
 flattenBtn.addEventListener('click', flattenTerrain);
 exportBtn.addEventListener('click', exportTerrainHeights);
+testModeBtn.addEventListener('click', () => {
+  setTestMode(!isTestMode);
+});
+resetPlayerBtn.addEventListener('click', () => {
+  resetTestPlayer();
+});
 radiusRange.addEventListener('input', updateLabels);
 strengthRange.addEventListener('input', updateLabels);
 fovRange.addEventListener('input', () => {
@@ -377,12 +500,44 @@ updateLabels();
 updateHistoryButtons();
 applyFov(initialFov, true);
 resize();
+updateTestModeUi();
 
 const clock = new THREE.Clock();
 const tick = () => {
   requestAnimationFrame(tick);
-  clock.getDelta();
-  controls.update();
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (isTestMode) {
+    tmpMoveDir.set(0, 0, 0);
+    if (inputKeys.KeyW) tmpMoveDir.z -= 1;
+    if (inputKeys.KeyS) tmpMoveDir.z += 1;
+    if (inputKeys.KeyA) tmpMoveDir.x -= 1;
+    if (inputKeys.KeyD) tmpMoveDir.x += 1;
+    if (tmpMoveDir.lengthSq() > 0.0001) {
+      tmpMoveDir.normalize();
+      const nextX = testPlayer.position.x + (tmpMoveDir.x * playerMoveSpeed * dt);
+      const nextZ = testPlayer.position.z + (tmpMoveDir.z * playerMoveSpeed * dt);
+      const clamped = clampInsideBounds(nextX, nextZ, 1.8);
+      const nextY = getTerrainHeightAt(clamped.x, clamped.z) + playerHeightOffset;
+      testPlayer.position.set(clamped.x, nextY, clamped.z);
+      testPlayer.rotation.y = Math.atan2(tmpMoveDir.x, tmpMoveDir.z);
+    } else {
+      const stayY = getTerrainHeightAt(testPlayer.position.x, testPlayer.position.z) + playerHeightOffset;
+      testPlayer.position.y = stayY;
+    }
+    const forward = new THREE.Vector3(
+      Math.sin(testPlayer.rotation.y),
+      0,
+      Math.cos(testPlayer.rotation.y),
+    );
+    tmpFollowPos.copy(testPlayer.position)
+      .addScaledVector(forward, -testCameraDistance)
+      .add(new THREE.Vector3(0, testCameraHeight, 0));
+    camera.position.lerp(tmpFollowPos, 0.12);
+    controls.target.lerp(testPlayer.position, 0.18);
+    camera.lookAt(controls.target);
+  } else {
+    controls.update();
+  }
   renderer.render(scene, camera);
 };
 tick();
