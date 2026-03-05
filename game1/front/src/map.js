@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const app = document.querySelector('#app');
 app.innerHTML = `
@@ -163,7 +162,6 @@ let strokeBeforeHeights = null;
 let strokeChanged = false;
 let isTestMode = false;
 let isPointerLocked = false;
-let testIsThirdPerson = false;
 const inputKeys = {
   KeyW: false,
   KeyA: false,
@@ -184,8 +182,6 @@ const testEyeHeight = 0;
 const testJumpVelocity = 6.8;
 const testGravity = 18;
 const testMouseSensitivity = 0.0022;
-const testThirdPersonDistance = 5.2;
-const testThirdPersonHeight = 1.5;
 const testPlayerPos = new THREE.Vector3();
 const testForward = new THREE.Vector3();
 const testRight = new THREE.Vector3();
@@ -210,85 +206,6 @@ playerHead.position.set(0, 1.35, 0);
 testPlayer.add(playerBody);
 testPlayer.add(playerHead);
 scene.add(testPlayer);
-
-const gltfLoader = new GLTFLoader();
-let testCharacterMixer = null;
-const testCharacterActions = {};
-let testCharacterCurrentAction = '';
-let testCharacterModelLoaded = false;
-
-const playTestCharacterAction = (name) => {
-  if (!testCharacterMixer) {
-    return;
-  }
-  const next = testCharacterActions[name] || testCharacterActions.idle || testCharacterActions.running;
-  if (!next || testCharacterCurrentAction === name) {
-    return;
-  }
-  Object.values(testCharacterActions).forEach((action) => {
-    if (action && action !== next) {
-      action.stop();
-    }
-  });
-  next.reset();
-  next.setLoop(THREE.LoopRepeat, Infinity);
-  next.clampWhenFinished = false;
-  next.play();
-  testCharacterCurrentAction = name;
-};
-
-const loadGltfMaybe = (url) => {
-  return new Promise((resolve) => {
-    gltfLoader.load(url, resolve, undefined, () => resolve(null));
-  });
-};
-
-const loadTestCharacterModel = async () => {
-  if (testCharacterModelLoaded) {
-    return;
-  }
-  const character = 'silentman';
-  const candidates = [
-    { key: 'running', urls: [`/characters/${character}/running`, `/characters/${character}/running.glb`] },
-    { key: 'idle', urls: [`/characters/${character}/idle`, `/characters/${character}/idle.glb`] },
-  ];
-  const loaded = [];
-  for (let i = 0; i < candidates.length; i += 1) {
-    const item = candidates[i];
-    for (let j = 0; j < item.urls.length; j += 1) {
-      const gltf = await loadGltfMaybe(item.urls[j]);
-      if (gltf?.scene) {
-        loaded.push({ key: item.key, gltf });
-        break;
-      }
-    }
-  }
-  const base = loaded.find((x) => x.key === 'idle') || loaded.find((x) => x.key === 'running') || null;
-  if (!base?.gltf?.scene) {
-    return;
-  }
-  playerBody.visible = false;
-  playerHead.visible = false;
-  const model = base.gltf.scene;
-  const box = new THREE.Box3().setFromObject(model);
-  const center = box.getCenter(new THREE.Vector3());
-  model.position.set(-center.x, -box.min.y, -center.z);
-  model.scale.setScalar(1);
-  testPlayer.add(model);
-  if (base.gltf.animations?.length) {
-    testCharacterMixer = new THREE.AnimationMixer(model);
-    const running = loaded.find((x) => x.key === 'running')?.gltf?.animations?.[0] || null;
-    const idle = loaded.find((x) => x.key === 'idle')?.gltf?.animations?.[0] || running;
-    if (running) {
-      testCharacterActions.running = testCharacterMixer.clipAction(running);
-    }
-    if (idle) {
-      testCharacterActions.idle = testCharacterMixer.clipAction(idle);
-    }
-    playTestCharacterAction('idle');
-  }
-  testCharacterModelLoaded = true;
-};
 
 const historyUndo = [];
 const historyRedo = [];
@@ -377,7 +294,7 @@ const updateTestModeUi = () => {
   exportBtn.disabled = testing;
   controls.enabled = !testing;
   brushHelper.visible = !testing && brushHelper.visible;
-  testPlayer.visible = testing && testIsThirdPerson;
+  testPlayer.visible = false;
   testCrosshair.style.display = testing ? 'block' : 'none';
 };
 
@@ -388,7 +305,6 @@ const resetTestPlayer = () => {
   testPlayerPos.set(startX, h + playerHeightOffset, startZ);
   testYaw = 0;
   testPitch = 0;
-  testIsThirdPerson = false;
   testVerticalVelocity = 0;
   testHorizontalVelocity.set(0, 0);
   testIsGrounded = true;
@@ -579,12 +495,6 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
-  if (isTestMode && event.code === 'KeyC') {
-    event.preventDefault();
-    testIsThirdPerson = !testIsThirdPerson;
-    testPlayer.visible = testIsThirdPerson;
-    return;
-  }
   if (!(event.code in inputKeys)) {
     return;
   }
@@ -689,8 +599,14 @@ const tick = () => {
     }
 
     tmpMoveDir.set(0, 0, 0);
-    testForward.set(-Math.sin(testYaw), 0, -Math.cos(testYaw)).normalize();
-    testRight.set(Math.cos(testYaw), 0, -Math.sin(testYaw)).normalize();
+    camera.getWorldDirection(testForward);
+    testForward.y = 0;
+    if (testForward.lengthSq() <= 1e-8) {
+      testForward.set(0, 0, -1);
+    } else {
+      testForward.normalize();
+    }
+    testRight.crossVectors(testForward, worldUp).normalize();
     if (inputKeys.KeyW) tmpMoveDir.add(testForward);
     if (inputKeys.KeyS) tmpMoveDir.sub(testForward);
     if (inputKeys.KeyA) tmpMoveDir.sub(testRight);
@@ -705,10 +621,17 @@ const tick = () => {
     }
     const desiredVx = hasMoveInput ? (tmpMoveDir.x * desiredSpeed) : 0;
     const desiredVz = hasMoveInput ? (tmpMoveDir.z * desiredSpeed) : 0;
-    const controlFactor = testIsGrounded ? 1 : airControlFactor;
-    const response = 1 - Math.exp(-((hasMoveInput ? moveAcceleration : moveDeceleration) * controlFactor) * dt);
-    testHorizontalVelocity.x += (desiredVx - testHorizontalVelocity.x) * response;
-    testHorizontalVelocity.y += (desiredVz - testHorizontalVelocity.y) * response;
+    const accel = moveAcceleration * (testIsGrounded ? 1 : airControlFactor);
+    const decel = moveDeceleration * (testIsGrounded ? 1 : airControlFactor);
+    const gain = Math.min(1, accel * dt);
+    const drag = Math.min(1, decel * dt);
+    if (hasMoveInput) {
+      testHorizontalVelocity.x += (desiredVx - testHorizontalVelocity.x) * gain;
+      testHorizontalVelocity.y += (desiredVz - testHorizontalVelocity.y) * gain;
+    } else {
+      testHorizontalVelocity.x += (0 - testHorizontalVelocity.x) * drag;
+      testHorizontalVelocity.y += (0 - testHorizontalVelocity.y) * drag;
+    }
     const nextX = testPlayerPos.x + (testHorizontalVelocity.x * dt);
     const nextZ = testPlayerPos.z + (testHorizontalVelocity.y * dt);
     const clamped = clampInsideBounds(nextX, nextZ, 1.8);
@@ -716,29 +639,13 @@ const tick = () => {
     testPlayerPos.z = clamped.z;
 
     testPlayer.position.copy(testPlayerPos);
-    testPlayer.rotation.y = testYaw;
-    if (testCharacterMixer) {
-      testCharacterMixer.update(dt);
-      playTestCharacterAction(hasMoveInput ? 'running' : 'idle');
-    }
-    if (testIsThirdPerson) {
-      const followForward = new THREE.Vector3(-Math.sin(testYaw), 0, -Math.cos(testYaw)).normalize();
-      const followPos = testPlayerPos.clone()
-        .addScaledVector(followForward, -testThirdPersonDistance)
-        .addScaledVector(worldUp, testThirdPersonHeight);
-      camera.position.lerp(followPos, Math.min(1, dt * 8));
-      const lookAt = testPlayerPos.clone().addScaledVector(worldUp, 1.35);
-      camera.lookAt(lookAt);
-    } else {
-      camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
-      camera.rotation.order = 'YXZ';
-      camera.rotation.y = testYaw;
-      camera.rotation.x = testPitch;
-    }
+    camera.position.set(testPlayerPos.x, testPlayerPos.y + testEyeHeight, testPlayerPos.z);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = testYaw;
+    camera.rotation.x = testPitch;
   } else {
     controls.update();
   }
   renderer.render(scene, camera);
 };
 tick();
-    loadTestCharacterModel();
