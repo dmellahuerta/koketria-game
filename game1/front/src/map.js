@@ -210,7 +210,7 @@ const applyFov = (fov, keepFraming = true) => {
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const minDistByHeight = halfH / Math.tan(fovRad * 0.5);
     const minDistByWidth = halfW / (Math.tan(fovRad * 0.5) * Math.max(0.2, camera.aspect));
-    const fitDistance = Math.max(minDistByHeight, minDistByWidth) * 1.16;
+    const fitDistance = Math.max(minDistByHeight, minDistByWidth) * 1.03;
     const viewDir = camera.position.clone().sub(controls.target).normalize();
     camera.position.copy(controls.target.clone().addScaledVector(viewDir, fitDistance));
     if (camera.position.y < 34) {
