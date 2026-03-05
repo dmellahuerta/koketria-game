@@ -53,7 +53,6 @@ app.innerHTML = `
   </aside>
   <section class="viewport">
     <div class="badge">Click + arrastrar: editar | Shift: modo inverso | Mouse: orbitar/zoom</div>
-    <button id="exitTestBtn" class="exit-test-btn" type="button">Volver a edicion</button>
     <div id="canvasWrap"></div>
     <div id="testCrosshair" class="test-crosshair" aria-hidden="true"></div>
   </section>
@@ -76,7 +75,6 @@ const testModeInfo = document.querySelector('#testModeInfo');
 const exportOut = document.querySelector('#exportOut');
 const canvasWrap = document.querySelector('#canvasWrap');
 const testCrosshair = document.querySelector('#testCrosshair');
-const exitTestBtn = document.querySelector('#exitTestBtn');
 
 const terrainSize = 240;
 const terrainSegments = 120;
@@ -408,10 +406,6 @@ const setTestMode = (enabled) => {
     Object.keys(inputKeys).forEach((k) => { inputKeys[k] = false; });
     resetTestPlayer();
     renderer.domElement.focus();
-    app.classList.add('test-mode');
-    if (typeof app.requestFullscreen === 'function' && document.fullscreenElement !== app) {
-      app.requestFullscreen().catch(() => {});
-    }
     if (document.pointerLockElement !== renderer.domElement) {
       try {
         renderer.domElement.requestPointerLock();
@@ -420,21 +414,11 @@ const setTestMode = (enabled) => {
       }
     }
   } else if (document.pointerLockElement === renderer.domElement) {
-    app.classList.remove('test-mode');
-    if (document.fullscreenElement === app && typeof document.exitFullscreen === 'function') {
-      document.exitFullscreen().catch(() => {});
-    }
     document.exitPointerLock();
     testHorizontalVelocity.set(0, 0);
     testVerticalVelocity = 0;
     Object.keys(inputKeys).forEach((k) => { inputKeys[k] = false; });
-  } else {
-    app.classList.remove('test-mode');
-    if (document.fullscreenElement === app && typeof document.exitFullscreen === 'function') {
-      document.exitFullscreen().catch(() => {});
-    }
   }
-  resize();
   updateTestModeUi();
 };
 
@@ -624,9 +608,6 @@ window.addEventListener('blur', () => {
 document.addEventListener('pointerlockchange', () => {
   isPointerLocked = document.pointerLockElement === renderer.domElement;
 });
-document.addEventListener('fullscreenchange', () => {
-  resize();
-});
 
 window.addEventListener('mousemove', (event) => {
   if (!isTestMode || !isPointerLocked) {
@@ -657,11 +638,6 @@ flattenBtn.addEventListener('click', flattenTerrain);
 exportBtn.addEventListener('click', exportTerrainHeights);
 testModeBtn.addEventListener('click', () => {
   setTestMode(!isTestMode);
-});
-exitTestBtn.addEventListener('click', () => {
-  if (isTestMode) {
-    setTestMode(false);
-  }
 });
 resetPlayerBtn.addEventListener('click', () => {
   resetTestPlayer();
