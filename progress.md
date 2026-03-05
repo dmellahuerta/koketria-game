@@ -39,3 +39,10 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - Overrides útiles: `WG_URL`, `WG_ITERATIONS`, `WG_PAUSE_MS`, `WG_SCREENSHOT_DIR`, `WG_ACTIONS_FILE`.
   - Ajuste: por defecto ahora crea directorio único por corrida (`output/web-game-<run_id>`) y no borra salidas previas.
   - Limpieza opcional: `WG_CLEAN_OUTPUT=1`.
+
+- Auditoría colisiones (2026-03-05):
+  - Front: build OK tras cambios de onda expansiva esférica + health bars en collision mode.
+  - Backend Rust: `cargo check` OK.
+  - Carga ws: `run_ws_load_matrix` con 5 bots / 10s => errores 0, desconexiones esperadas 5/5, pong avg/max 2.57/5ms.
+  - Revisión estática: rutas de impacto normal/habilidades y daño radial existen para normal shot, silent R, neo R, pezuna R y pumori R.
+  - Gap pendiente: validar visualmente en sesión real de 2+ jugadores que cada habilidad especial remota muestre exactamente la misma onda de impacto en collision-only.
