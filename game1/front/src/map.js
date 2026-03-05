@@ -85,7 +85,6 @@ camera.position.set(0, 120, 145);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.domElement.tabIndex = 0;
 canvasWrap.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -312,21 +311,11 @@ const setTestMode = (enabled) => {
     isPainting = false;
     strokeBeforeHeights = null;
     strokeChanged = false;
-    Object.keys(inputKeys).forEach((k) => { inputKeys[k] = false; });
     resetTestPlayer();
-    renderer.domElement.focus();
-    if (document.pointerLockElement !== renderer.domElement) {
-      try {
-        renderer.domElement.requestPointerLock();
-      } catch {
-        // no-op
-      }
-    }
   } else if (document.pointerLockElement === renderer.domElement) {
     document.exitPointerLock();
     testHorizontalVelocity.set(0, 0);
     testVerticalVelocity = 0;
-    Object.keys(inputKeys).forEach((k) => { inputKeys[k] = false; });
   }
   updateTestModeUi();
 };
@@ -502,10 +491,6 @@ window.addEventListener('keyup', (event) => {
     return;
   }
   inputKeys[event.code] = false;
-});
-
-window.addEventListener('blur', () => {
-  Object.keys(inputKeys).forEach((k) => { inputKeys[k] = false; });
 });
 
 document.addEventListener('pointerlockchange', () => {
