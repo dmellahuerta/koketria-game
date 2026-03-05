@@ -37,23 +37,23 @@ app.innerHTML = `
 
     <div class="field">
       <label for="headRadius">Head radius <span class="value" id="headRadiusVal"></span></label>
-      <input id="headRadius" type="range" min="0.1" max="0.8" step="0.01" value="0.38" />
+      <input id="headRadius" type="range" min="0.05" max="1.2" step="0.01" value="0.38" />
     </div>
     <div class="field">
       <label for="headOffsetY">Head offset Y <span class="value" id="headOffsetYVal"></span></label>
-      <input id="headOffsetY" type="range" min="-0.3" max="0.6" step="0.01" value="0.18" />
+      <input id="headOffsetY" type="range" min="-1.2" max="1.4" step="0.01" value="0.18" />
     </div>
     <div class="field">
       <label for="capsuleRadius">Capsule radius <span class="value" id="capsuleRadiusVal"></span></label>
-      <input id="capsuleRadius" type="range" min="0.2" max="1.2" step="0.01" value="0.42" />
+      <input id="capsuleRadius" type="range" min="0.1" max="2.0" step="0.01" value="0.42" />
     </div>
     <div class="field">
       <label for="capsuleTopY">Capsule top Y <span class="value" id="capsuleTopYVal"></span></label>
-      <input id="capsuleTopY" type="range" min="-0.8" max="0.8" step="0.01" value="0.05" />
+      <input id="capsuleTopY" type="range" min="-2.0" max="2.0" step="0.01" value="0.05" />
     </div>
     <div class="field">
       <label for="capsuleBottomY">Capsule bottom Y <span class="value" id="capsuleBottomYVal"></span></label>
-      <input id="capsuleBottomY" type="range" min="-2.2" max="0.2" step="0.01" value="-1.55" />
+      <input id="capsuleBottomY" type="range" min="-3.5" max="1.5" step="0.01" value="-1.55" />
     </div>
 
     <div class="field actions">
@@ -134,6 +134,21 @@ const state = {
   sceneModel: null,
   mixer: null,
   animationSet: {},
+};
+
+const tempBox = new THREE.Box3();
+const tempCenter = new THREE.Vector3();
+
+const recenterModelToOrigin = () => {
+  if (!state.sceneModel) return;
+  tempBox.setFromObject(state.sceneModel);
+  if (tempBox.isEmpty()) return;
+  tempBox.getCenter(tempCenter);
+  state.sceneModel.position.set(
+    state.sceneModel.position.x - tempCenter.x,
+    state.sceneModel.position.y - tempBox.min.y,
+    state.sceneModel.position.z - tempCenter.z,
+  );
 };
 
 const getCharacterAssetKey = (characterId) => {
@@ -291,6 +306,7 @@ const loadCharacter = async (characterId) => {
   clone.position.set(-center.x, -box.min.y, -center.z);
   modelRoot.add(clone);
   state.sceneModel = clone;
+  recenterModelToOrigin();
 
   const size = box.getSize(new THREE.Vector3());
   camera.position.set(0, Math.max(1.2, size.y * 0.7), Math.max(2.8, size.y * 1.1));
@@ -396,6 +412,7 @@ const init = async () => {
     requestAnimationFrame(tick);
     const dt = Math.min(clock.getDelta(), 0.05);
     if (state.mixer) state.mixer.update(dt);
+    recenterModelToOrigin();
     controls.update();
     renderer.render(scene, camera);
   };
