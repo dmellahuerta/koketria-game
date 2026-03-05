@@ -127,12 +127,6 @@ app.innerHTML = `
               <button id="versusStartBtn" type="button">Iniciar partida</button>
               <button id="versusLeaveBtn" type="button">Volver al lobby</button>
             </div>
-            <div class="versus-chat-box">
-              <div class="versus-chat-input">
-                <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
-                <button id="versusChatSendBtn" type="button">Enviar</button>
-              </div>
-            </div>
           </div>
           <div class="lobby-music-row versus-music-row">
             <label for="versusLobbyMusicVolume">Volumen música lobby1</label>
@@ -144,6 +138,10 @@ app.innerHTML = `
         <div class="versus-chat-side">
           <h3>Chat Lobby 2</h3>
           <div id="versusChatLog" class="versus-chat-log"></div>
+          <div class="versus-chat-input">
+            <input id="versusChatInput" type="text" maxlength="180" placeholder="Escribe para el lobby 2..." autocomplete="off" />
+            <button id="versusChatSendBtn" type="button">Enviar</button>
+          </div>
         </div>
       </div>
     </div>
