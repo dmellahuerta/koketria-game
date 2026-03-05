@@ -95,6 +95,38 @@
         background: rgba(6, 18, 11, 0.86);
         font-size: 0.78rem;
       }
+      .test-crosshair {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 24px;
+        height: 24px;
+        transform: translate(-50%, -50%);
+        z-index: 6;
+        pointer-events: none;
+        display: none;
+      }
+      .test-crosshair::before,
+      .test-crosshair::after {
+        content: '';
+        position: absolute;
+        background: rgba(210, 255, 220, 0.96);
+        box-shadow: 0 0 6px rgba(110, 255, 150, 0.5);
+      }
+      .test-crosshair::before {
+        left: 50%;
+        top: 4px;
+        width: 2px;
+        height: 16px;
+        transform: translateX(-50%);
+      }
+      .test-crosshair::after {
+        top: 50%;
+        left: 4px;
+        width: 16px;
+        height: 2px;
+        transform: translateY(-50%);
+      }
       @media (max-width: 900px) {
         #app {
           grid-template-columns: 1fr;

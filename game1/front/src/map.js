@@ -53,6 +53,7 @@ app.innerHTML = `
   <section class="viewport">
     <div class="badge">Click + arrastrar: editar | Shift: modo inverso | Mouse: orbitar/zoom</div>
     <div id="canvasWrap"></div>
+    <div id="testCrosshair" class="test-crosshair" aria-hidden="true"></div>
   </section>
 `;
 
@@ -72,6 +73,7 @@ const resetPlayerBtn = document.querySelector('#resetPlayerBtn');
 const testModeInfo = document.querySelector('#testModeInfo');
 const exportOut = document.querySelector('#exportOut');
 const canvasWrap = document.querySelector('#canvasWrap');
+const testCrosshair = document.querySelector('#testCrosshair');
 
 const terrainSize = 240;
 const terrainSegments = 120;
@@ -180,6 +182,7 @@ const testMouseSensitivity = 0.0022;
 const testPlayerPos = new THREE.Vector3();
 const testForward = new THREE.Vector3();
 const testRight = new THREE.Vector3();
+const worldUp = new THREE.Vector3(0, 1, 0);
 const testHorizontalVelocity = new THREE.Vector2(0, 0);
 let testYaw = 0;
 let testPitch = 0;
@@ -289,6 +292,7 @@ const updateTestModeUi = () => {
   controls.enabled = !testing;
   brushHelper.visible = !testing && brushHelper.visible;
   testPlayer.visible = false;
+  testCrosshair.style.display = testing ? 'block' : 'none';
 };
 
 const resetTestPlayer = () => {
@@ -592,8 +596,14 @@ const tick = () => {
     }
 
     tmpMoveDir.set(0, 0, 0);
-    testForward.set(-Math.sin(testYaw), 0, -Math.cos(testYaw));
-    testRight.set(Math.cos(testYaw), 0, -Math.sin(testYaw));
+    camera.getWorldDirection(testForward);
+    testForward.y = 0;
+    if (testForward.lengthSq() <= 1e-8) {
+      testForward.set(0, 0, -1);
+    } else {
+      testForward.normalize();
+    }
+    testRight.crossVectors(testForward, worldUp).normalize();
     if (inputKeys.KeyW) tmpMoveDir.add(testForward);
     if (inputKeys.KeyS) tmpMoveDir.sub(testForward);
     if (inputKeys.KeyA) tmpMoveDir.sub(testRight);
