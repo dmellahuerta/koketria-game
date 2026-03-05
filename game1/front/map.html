@@ -28,6 +28,17 @@
         grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
         height: 100%;
       }
+      #app.test-mode {
+        display: block;
+      }
+      #app.test-mode .panel {
+        display: none;
+      }
+      #app.test-mode .viewport {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+      }
       .panel {
         border-right: 1px solid var(--line);
         background: rgba(7, 24, 14, 0.9);
@@ -94,6 +105,23 @@
         padding: 6px 8px;
         background: rgba(6, 18, 11, 0.86);
         font-size: 0.78rem;
+      }
+      .exit-test-btn {
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        z-index: 8;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: rgba(6, 18, 11, 0.9);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+        display: none;
+      }
+      #app.test-mode .exit-test-btn {
+        display: block;
       }
       .test-crosshair {
         position: absolute;
