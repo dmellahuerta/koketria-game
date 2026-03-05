@@ -26,11 +26,6 @@ app.innerHTML = `
     </div>
 
     <div class="field actions">
-      <button id="undoBtn" type="button">Deshacer</button>
-      <button id="redoBtn" type="button">Rehacer</button>
-    </div>
-
-    <div class="field actions">
       <button id="flattenBtn" type="button">Plano base</button>
       <button id="exportBtn" type="button">Exportar alturas</button>
     </div>
@@ -51,8 +46,6 @@ const radiusRange = document.querySelector('#radiusRange');
 const strengthRange = document.querySelector('#strengthRange');
 const radiusValue = document.querySelector('#radiusValue');
 const strengthValue = document.querySelector('#strengthValue');
-const undoBtn = document.querySelector('#undoBtn');
-const redoBtn = document.querySelector('#redoBtn');
 const flattenBtn = document.querySelector('#flattenBtn');
 const exportBtn = document.querySelector('#exportBtn');
 const exportOut = document.querySelector('#exportOut');
@@ -133,55 +126,6 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const hitPoint = new THREE.Vector3();
 let isPainting = false;
-let strokeBeforeHeights = null;
-let strokeChanged = false;
-
-const historyUndo = [];
-const historyRedo = [];
-const maxHistoryEntries = 80;
-
-const captureHeights = () => {
-  const position = terrainGeometry.attributes.position;
-  const heights = new Float32Array(position.count);
-  for (let i = 0; i < position.count; i += 1) {
-    heights[i] = position.getY(i);
-  }
-  return heights;
-};
-
-const applyHeights = (heights) => {
-  if (!(heights instanceof Float32Array)) {
-    return;
-  }
-  const position = terrainGeometry.attributes.position;
-  const count = Math.min(position.count, heights.length);
-  for (let i = 0; i < count; i += 1) {
-    position.setY(i, heights[i]);
-  }
-  position.needsUpdate = true;
-  terrainGeometry.computeVertexNormals();
-  terrainGeometry.attributes.normal.needsUpdate = true;
-};
-
-const updateHistoryButtons = () => {
-  undoBtn.disabled = historyUndo.length <= 0;
-  redoBtn.disabled = historyRedo.length <= 0;
-};
-
-const pushHistoryEntry = (before, after) => {
-  if (!(before instanceof Float32Array) || !(after instanceof Float32Array)) {
-    return;
-  }
-  historyUndo.push({
-    before,
-    after,
-  });
-  if (historyUndo.length > maxHistoryEntries) {
-    historyUndo.shift();
-  }
-  historyRedo.length = 0;
-  updateHistoryButtons();
-};
 
 const updateLabels = () => {
   radiusValue.textContent = Number(radiusRange.value).toFixed(1);
@@ -215,7 +159,6 @@ const applyBrush = (point, invert = false) => {
   const sign = invert ? -direction : direction;
 
   const position = terrainGeometry.attributes.position;
-  let changed = false;
   for (let i = 0; i < position.count; i += 1) {
     const vx = position.getX(i);
     const vz = position.getZ(i);
@@ -225,19 +168,14 @@ const applyBrush = (point, invert = false) => {
     if (dist > radius) continue;
     const falloff = 1 - (dist / radius);
     const delta = strength * falloff * sign;
-    if (Math.abs(delta) <= 1e-6) continue;
     position.setY(i, position.getY(i) + delta);
-    changed = true;
   }
-  if (!changed) return false;
   position.needsUpdate = true;
   terrainGeometry.computeVertexNormals();
   terrainGeometry.attributes.normal.needsUpdate = true;
-  return true;
 };
 
 const flattenTerrain = () => {
-  const before = captureHeights();
   const position = terrainGeometry.attributes.position;
   for (let i = 0; i < position.count; i += 1) {
     position.setY(i, 0);
@@ -245,8 +183,6 @@ const flattenTerrain = () => {
   position.needsUpdate = true;
   terrainGeometry.computeVertexNormals();
   terrainGeometry.attributes.normal.needsUpdate = true;
-  const after = captureHeights();
-  pushHistoryEntry(before, after);
 };
 
 const exportTerrainHeights = () => {
@@ -268,23 +204,15 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   const p = getPointerHit(event);
   if (!p) return;
   isPainting = true;
-  strokeBeforeHeights = captureHeights();
-  strokeChanged = false;
   controls.enabled = false;
   hitPoint.copy(p);
-  strokeChanged = applyBrush(hitPoint, event.shiftKey) || strokeChanged;
+  applyBrush(hitPoint, event.shiftKey);
 });
 
 window.addEventListener('pointerup', () => {
   if (!isPainting) return;
   isPainting = false;
   controls.enabled = true;
-  if (strokeChanged && strokeBeforeHeights) {
-    const after = captureHeights();
-    pushHistoryEntry(strokeBeforeHeights, after);
-  }
-  strokeBeforeHeights = null;
-  strokeChanged = false;
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
@@ -297,24 +225,8 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   brushHelper.visible = true;
   brushHelper.position.set(hitPoint.x, hitPoint.y + 0.04, hitPoint.z);
   if (isPainting) {
-    strokeChanged = applyBrush(hitPoint, event.shiftKey) || strokeChanged;
+    applyBrush(hitPoint, event.shiftKey);
   }
-});
-
-undoBtn.addEventListener('click', () => {
-  const entry = historyUndo.pop();
-  if (!entry) return;
-  applyHeights(entry.before);
-  historyRedo.push(entry);
-  updateHistoryButtons();
-});
-
-redoBtn.addEventListener('click', () => {
-  const entry = historyRedo.pop();
-  if (!entry) return;
-  applyHeights(entry.after);
-  historyUndo.push(entry);
-  updateHistoryButtons();
 });
 
 flattenBtn.addEventListener('click', flattenTerrain);
@@ -324,7 +236,6 @@ strengthRange.addEventListener('input', updateLabels);
 window.addEventListener('resize', resize);
 
 updateLabels();
-updateHistoryButtons();
 resize();
 
 const clock = new THREE.Clock();
