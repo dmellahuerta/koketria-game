@@ -176,7 +176,7 @@ canvas {
   position: fixed;
   top: 50%;
   left: 50%;
-  width: min(96vw, 980px);
+  width: min(97vw, 1220px);
   max-height: 95vh;
   overflow: auto;
   transform: translate(-50%, -50%);
@@ -193,7 +193,7 @@ canvas {
   position: fixed;
   top: 50%;
   left: 50%;
-  width: min(98vw, 1180px);
+  width: min(98vw, 1360px);
   max-height: 96vh;
   transform: translate(-50%, -50%);
   z-index: 24;
