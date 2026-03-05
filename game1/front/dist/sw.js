@@ -1,5 +1,5 @@
-const CACHE_NAME = 'koketria-game-v3';
-const RUNTIME_CACHE = 'koketria-runtime-v3';
+const CACHE_NAME = 'koketria-game-v4';
+const RUNTIME_CACHE = 'koketria-runtime-v4';
 const CORE_ASSETS = ['/manifest.webmanifest', '/pwa-icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -60,18 +60,18 @@ self.addEventListener('fetch', (event) => {
 
   if (isAssetFile) {
     event.respondWith((async () => {
-      const cached = await caches.match(request);
-      if (cached) {
-        return cached;
-      }
       try {
-        const fresh = await fetch(request);
+        const fresh = await fetch(request, { cache: 'no-store' });
         if (fresh && fresh.status === 200 && fresh.type === 'basic') {
           const cache = await caches.open(RUNTIME_CACHE);
           cache.put(request, fresh.clone());
         }
         return fresh;
       } catch {
+        const cached = await caches.match(request);
+        if (cached) {
+          return cached;
+        }
         return new Response('', { status: 504, statusText: 'Offline' });
       }
     })());

@@ -977,6 +977,7 @@ const pushLobbyChatMessage = (playerName, text) => {
 const setProfileReady = (value) => {
   state.profileReady = Boolean(value);
   syncLobbyScreens();
+  refreshBackgroundMusic();
 };
 
 const logoutToNameGate = () => {
@@ -3547,6 +3548,44 @@ const registerRemoteShootSound = async (origin, characterId = '') => {
 
 const updateRemoteShootSound = () => {};
 
+// Plays the character attack sound for each missile of a special R ability.
+// Lower volume (×0.45) and lower pitch (playbackRate 0.82) to differentiate from normal shots.
+// Uses a dedicated pool so missiles never cut each other or normal shots.
+const SPECIAL_MISSILE_PLAYBACK_RATE = 0.82;
+const specialMissileVoices = [];
+const maxSpecialMissileVoices = 16;
+const pendingMissileTimers = [];
+
+// Synchronous — requires a pre-resolved src URL.
+const playSpecialMissileSound = (src, startPos, ownerId) => {
+  if (!src) return;
+  if (specialMissileVoices.length >= maxSpecialMissileVoices) return;
+  const isLocal = ownerId === state.self?.id;
+  let vol;
+  if (isLocal) {
+    vol = shootSound.volume;
+  } else {
+    const remoteVol = getRemoteShootVolume(startPos);
+    if (remoteVol <= 0.02) return;
+    vol = remoteVol * settings.masterVolume * settings.sfxVolume;
+  }
+  const voice = new Audio(src);
+  voice.preload = 'auto';
+  voice.loop = false;
+  voice.playbackRate = SPECIAL_MISSILE_PLAYBACK_RATE;
+  voice.volume = vol;
+  specialMissileVoices.push(voice);
+  const cleanup = () => {
+    const idx = specialMissileVoices.indexOf(voice);
+    if (idx >= 0) specialMissileVoices.splice(idx, 1);
+  };
+  voice.addEventListener('ended', cleanup, { once: true });
+  voice.addEventListener('pause', cleanup, { once: true });
+  const p = voice.play();
+  if (p && typeof p.catch === 'function') p.catch(() => cleanup());
+};
+
+
 const raycaster = new THREE.Raycaster();
 const centerAim = new THREE.Vector2(0, 0);
 const tracerGeometry = new THREE.CylinderGeometry(0.028, 0.028, 1, 10, 1, true);
@@ -3571,21 +3610,25 @@ const activeTracers = [];
 const activeImpacts = [];
 const activeHitWaves = [];
 const activeHolyProjectiles = [];
+const maxActiveHolyProjectiles = 80;
 const activeHammerProjectiles = [];
+const maxActiveHammerProjectiles = 40;
 const activePoisonProjectiles = [];
+const maxActivePoisonProjectiles = 80;
 const activeLunarProjectiles = [];
+const maxActiveLunarProjectiles = 80;
 const activeNormalShotCollisionVisuals = [];
 const activePumoriOrbitSpecials = [];
-const maxSilentSpecialVisualRays = 24;
+const maxSilentSpecialVisualRays = 48;
 const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
 const hitWaveYOffset = 0.02;
-const hitWaveStartScale = 0.35;
+const hitWaveStartScale = 0.50;
 const hitWaveLife = 0.22;
-const hitWaveExpand = 7.4;
+const hitWaveExpand = 10.0;
 const vfxNearDistance = 35;
 const vfxFarDistance = 165;
 const tmpSegDir = new THREE.Vector3();
@@ -3705,11 +3748,11 @@ const healthPickupRespawnMs = 60_000;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
-const unifiedMagicHitboxRadius = 0.24;
+const unifiedMagicHitboxRadius = 0.30;
 const defaultHitboxProfile = Object.freeze({
-  headshotRadius: 0.31,
+  headshotRadius: 0.38,
   headCenterOffsetY: -0.3,
-  bodyCapsuleRadius: 0.33,
+  bodyCapsuleRadius: 0.40,
   bodyCapsuleTopOffsetY: -0.52,
   bodyCapsuleBottomOffsetY: -1.85,
 });
@@ -3801,6 +3844,9 @@ const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
 const move = new THREE.Vector3();
 const moveVelocity = new THREE.Vector3();
+
+// First-person head bob state (Quake 3 style)
+const fpBob = { phase: 0, intensity: 0 };
 const dir = new THREE.Vector3();
 const clock = new THREE.Clock();
 const remoteFacingYawOffset = Math.PI;
@@ -5791,6 +5837,16 @@ const clearRemotePlayers = () => {
     disposeRemotePlayer(entry);
   }
   state.remotePlayers.clear();
+  // Cancel pending missile wave timers so stale VFX don't fire after leaving the room
+  for (let i = 0; i < pendingMissileTimers.length; i += 1) {
+    clearTimeout(pendingMissileTimers[i]);
+  }
+  pendingMissileTimers.length = 0;
+  // Stop and release any playing special missile audio
+  for (let i = 0; i < specialMissileVoices.length; i += 1) {
+    specialMissileVoices[i].pause();
+  }
+  specialMissileVoices.length = 0;
 };
 
 const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
@@ -5855,9 +5911,17 @@ const createNormalShotCollisionVisual = (start, end, color = 0xf7ff80) => {
   line.userData.life = 0.12;
   scene.add(line);
   activeNormalShotCollisionVisuals.push(line);
+  if (activeNormalShotCollisionVisuals.length > 60) {
+    const old = activeNormalShotCollisionVisuals.shift();
+    if (old) {
+      scene.remove(old);
+      old.material.dispose();
+    }
+  }
 };
 
 const createHolyShotVisual = (start, end, options = {}) => {
+  if (activeHolyProjectiles.length >= maxActiveHolyProjectiles) return;
   const direction = end.clone().sub(start);
   const distance = direction.length();
   if (distance <= 0.0001) {
@@ -5945,6 +6009,7 @@ const createHammerMesh = (scale = 1, opacity = 1, team = null) => {
 };
 
 const createSacredHammerVisual = (start, end, options = {}) => {
+  if (activeHammerProjectiles.length >= maxActiveHammerProjectiles) return;
   const direction = end.clone().sub(start);
   const distance = direction.length();
   if (distance <= 0.0001) {
@@ -6105,10 +6170,12 @@ const disposePumoriOrbitHammer = (hammerEntry, impactPoint = null) => {
       impactB.scale.setScalar(1.45);
       impactB.userData.life = 0.24;
     }
+    createHitWave(impactPoint, 0xfff2c6);
   }
 };
 
 const createPoisonGasVisual = (start, end, options = {}) => {
+  if (activePoisonProjectiles.length >= maxActivePoisonProjectiles) return;
   const direction = end.clone().sub(start);
   const distance = direction.length();
   if (distance <= 0.0001) {
@@ -6158,6 +6225,7 @@ const createPoisonGasVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    isSpecialR: Boolean(options.isSpecialR),
     colors: {
       a: palette.impactA,
       b: palette.impactB,
@@ -6167,6 +6235,7 @@ const createPoisonGasVisual = (start, end, options = {}) => {
 };
 
 const createLunarFireVisual = (start, end, options = {}) => {
+  if (activeLunarProjectiles.length >= maxActiveLunarProjectiles) return;
   const direction = end.clone().sub(start);
   const distance = direction.length();
   if (distance <= 0.0001) {
@@ -6216,6 +6285,7 @@ const createLunarFireVisual = (start, end, options = {}) => {
     trailTimer: 0,
     source: options.source === 'remote' ? 'remote' : 'local',
     ownerId: String(options.ownerId || ''),
+    isSpecialR: Boolean(options.isSpecialR),
     colors: {
       a: palette.impactA,
       b: palette.impactB,
@@ -6955,6 +7025,12 @@ const connectWebSocket = () => {
       const ownerTeam = getTeamByPlayerId(ownerId);
       const ownerPalette = getAbilityPalette('lunar', ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
+      const lunarCharId = data.character
+        || (ownerId === state.self?.id ? activeCharacter : '')
+        || state.remotePlayers.get(ownerId)?.character
+        || '';
+      // Collect valid strikes
+      const validLunarStrikes = [];
       for (let i = 0; i < strikes.length; i += 1) {
         const strike = strikes[i] || {};
         const start = strike.start || {};
@@ -6969,11 +7045,36 @@ const connectWebSocket = () => {
         ) {
           continue;
         }
-        const startVec = new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z));
-        const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
-        createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam });
-        createImpact(impactVec, Math.random() > 0.5 ? ownerPalette.impactA : ownerPalette.impactB);
+        validLunarStrikes.push({
+          startVec: new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z)),
+          impactVec: new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z)),
+        });
       }
+      // Shuffle randomly (Fisher-Yates) so missiles don't always fire in the same order
+      for (let i = validLunarStrikes.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = validLunarStrikes[i];
+        validLunarStrikes[i] = validLunarStrikes[j];
+        validLunarStrikes[j] = tmp;
+      }
+      // Fire one missile at a time with random intervals (100–250 ms apart)
+      resolveCharacterAttackSoundUrl(lunarCharId).then((src) => {
+        const resolvedSrc = src || defaultAttackSoundUrl;
+        let accDelay = 0;
+        for (let i = 0; i < validLunarStrikes.length; i += 1) {
+          const { startVec, impactVec } = validLunarStrikes[i];
+          const delay = accDelay;
+          accDelay += 100 + Math.floor(Math.random() * 150);
+          const lunarTimerId = setTimeout(() => {
+            const idx = pendingMissileTimers.indexOf(lunarTimerId);
+            if (idx >= 0) pendingMissileTimers.splice(idx, 1);
+            createLunarFireVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam, isSpecialR: true });
+            createImpact(impactVec, Math.random() > 0.5 ? ownerPalette.impactA : ownerPalette.impactB);
+            playSpecialMissileSound(resolvedSrc, startVec, ownerId);
+          }, delay);
+          pendingMissileTimers.push(lunarTimerId);
+        }
+      });
       return;
     }
 
@@ -7029,7 +7130,12 @@ const connectWebSocket = () => {
       const ownerTeam = getTeamByPlayerId(ownerId);
       const ownerPalette = getAbilityPalette('poison', ownerTeam);
       const strikes = Array.isArray(data.strikes) ? data.strikes : [];
-      let firstImpact = null;
+      const meteorCharId = data.character
+        || (ownerId === state.self?.id ? activeCharacter : '')
+        || state.remotePlayers.get(ownerId)?.character
+        || '';
+      // Collect valid strikes
+      const validMeteorStrikes = [];
       for (let i = 0; i < strikes.length; i += 1) {
         const strike = strikes[i] || {};
         const start = strike.start || {};
@@ -7044,27 +7150,42 @@ const connectWebSocket = () => {
         ) {
           continue;
         }
-        const startVec = new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z));
-        const impactVec = new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z));
-        if (!firstImpact) {
-          firstImpact = impactVec.clone();
-        }
-        createPoisonGasVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam });
-        createTracer(startVec, impactVec, ownerPalette.tracer, { radiusScale: 1.6, life: 0.52, opacity: 0.98 });
-        const cloudA = createImpact(impactVec, ownerPalette.tracer);
-        const cloudB = createImpact(impactVec, ownerPalette.impactB);
-        if (cloudA) {
-          cloudA.scale.setScalar(2.6);
-          cloudA.userData.life = 0.48;
-        }
-        if (cloudB) {
-          cloudB.scale.setScalar(2.1);
-          cloudB.userData.life = 0.42;
-        }
+        validMeteorStrikes.push({
+          startVec: new THREE.Vector3(Number(start.x), Number(start.y), Number(start.z)),
+          impactVec: new THREE.Vector3(Number(impact.x), Number(impact.y), Number(impact.z)),
+        });
       }
-      if (firstImpact) {
-        triggerNaturePulse(firstImpact);
+      // Shuffle randomly (Fisher-Yates)
+      for (let i = validMeteorStrikes.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = validMeteorStrikes[i];
+        validMeteorStrikes[i] = validMeteorStrikes[j];
+        validMeteorStrikes[j] = tmp;
       }
+      // Fire one missile at a time with random intervals (100–250 ms apart)
+      resolveCharacterAttackSoundUrl(meteorCharId).then((src) => {
+        const resolvedSrc = src || defaultAttackSoundUrl;
+        let accDelay = 0;
+        for (let i = 0; i < validMeteorStrikes.length; i += 1) {
+          const { startVec, impactVec } = validMeteorStrikes[i];
+          const isFirst = i === 0;
+          const delay = accDelay;
+          accDelay += 100 + Math.floor(Math.random() * 150);
+          const meteorTimerId = setTimeout(() => {
+            const idx = pendingMissileTimers.indexOf(meteorTimerId);
+            if (idx >= 0) pendingMissileTimers.splice(idx, 1);
+            createPoisonGasVisual(startVec, impactVec, { source: 'local', ownerId, team: ownerTeam, isSpecialR: true });
+            createTracer(startVec, impactVec, ownerPalette.tracer, { radiusScale: 1.6, life: 0.52, opacity: 0.98 });
+            const cloudA = createImpact(impactVec, ownerPalette.tracer);
+            const cloudB = createImpact(impactVec, ownerPalette.impactB);
+            if (cloudA) { cloudA.scale.setScalar(2.6); cloudA.userData.life = 0.48; }
+            if (cloudB) { cloudB.scale.setScalar(2.1); cloudB.userData.life = 0.42; }
+            if (isFirst) triggerNaturePulse(impactVec);
+            playSpecialMissileSound(resolvedSrc, startVec, ownerId);
+          }, delay);
+          pendingMissileTimers.push(meteorTimerId);
+        }
+      });
       return;
     }
 
@@ -7780,6 +7901,19 @@ const updateThirdPersonCamera = () => {
 
 const getRenderCamera = () => {
   return isThirdPerson ? thirdPersonCamera : camera;
+};
+
+const FP_BOB_AMP = 0.035;    // vertical peak displacement in world units (~3.5 cm)
+const FP_BOB_SPEED = 9.5;    // radians/s — ~1.5 bob cycles/s at full speed (Quake-like)
+const FP_BOB_FADE = 8;       // blend rate (per second) for smooth ramp in/out
+
+const updateFpBob = (delta) => {
+  const moving = !isThirdPerson && canPlay() && !isJumping && moveVelocity.lengthSq() > 0.01;
+  const targetIntensity = moving ? 1 : 0;
+  fpBob.intensity += (targetIntensity - fpBob.intensity) * Math.min(1, delta * FP_BOB_FADE);
+  if (fpBob.intensity > 0.0005) {
+    fpBob.phase += delta * FP_BOB_SPEED * fpBob.intensity;
+  }
 };
 
 const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, options = {}) => {
@@ -10526,7 +10660,11 @@ const updatePoisonProjectiles = (delta) => {
         cloudB.scale.setScalar(1.9);
         cloudB.userData.life = 0.38;
       }
-      createHitWave(impactCenter, projectile.colors.tracer);
+      const neoWave = createHitWave(impactCenter, projectile.colors.tracer);
+      if (neoWave && projectile.isSpecialR) {
+        neoWave.scale.setScalar(hitWaveStartScale * 2);
+        neoWave.userData.expand = hitWaveExpand * 2;
+      }
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(0.95)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-0.95)),
@@ -10629,7 +10767,11 @@ const updateLunarProjectiles = (delta) => {
         blastAura.scale.setScalar(2.8);
         blastAura.userData.life = 0.46;
       }
-      createHitWave(impactCenter, projectile.colors.tracer);
+      const lunarWave = createHitWave(impactCenter, projectile.colors.tracer);
+      if (lunarWave && projectile.isSpecialR) {
+        lunarWave.scale.setScalar(hitWaveStartScale * 2);
+        lunarWave.userData.expand = hitWaveExpand * 2;
+      }
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.35)),
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(-1.35)),
@@ -10990,6 +11132,7 @@ const animate = () => {
     updateLocalAvatar(delta);
     updateLocalHitboxDebug();
     updateThirdPersonCamera();
+    updateFpBob(delta);
     updateAmmoPickups(delta);
     updateShieldPickups(delta);
     updateHealthPickups(delta);
@@ -11050,12 +11193,18 @@ const animate = () => {
         }
       }
     }
+    // Apply first-person head bob as a visual-only Y offset (removed after render)
+    const fpBobOffset = (!isThirdPerson && fpBob.intensity > 0.0005)
+      ? Math.sin(fpBob.phase) * FP_BOB_AMP * fpBob.intensity
+      : 0;
+    if (fpBobOffset !== 0) camera.position.y += fpBobOffset;
     try {
       renderer.render(scene, getRenderCamera());
     } catch {
       isMainWebglContextLost = true;
       return;
     }
+    if (fpBobOffset !== 0) camera.position.y -= fpBobOffset;
     renderPerfStats.drawCalls = renderer.info.render.calls || 0;
     renderPerfStats.triangles = renderer.info.render.triangles || 0;
     renderPerfStats.geometries = renderer.info.memory.geometries || 0;

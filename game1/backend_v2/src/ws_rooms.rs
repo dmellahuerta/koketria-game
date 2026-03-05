@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -86,7 +86,7 @@ struct ClientSession {
     latency_probe_seq: u64,
     latency_probe_sent_at: i64,
     latency_probe_id: u64,
-    state_history: Vec<StateSnapshot>,
+    state_history: VecDeque<StateSnapshot>,
     last_shoot_req_at_ms: i64,
     last_special_req_at_ms: i64,
     last_pickup_req_at_ms: i64,
@@ -180,11 +180,11 @@ const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
-const HEADSHOT_RADIUS: f64 = 0.31;
-const BODYSHOT_RADIUS: f64 = 0.33;
-const TORSO_RADIUS: f64 = 0.33;
-const TORSO_CAPSULE_RADIUS: f64 = 0.33;
-const LEGS_CAPSULE_RADIUS: f64 = 0.33;
+const HEADSHOT_RADIUS: f64 = 0.38;
+const BODYSHOT_RADIUS: f64 = 0.40;
+const TORSO_RADIUS: f64 = 0.40;
+const TORSO_CAPSULE_RADIUS: f64 = 0.40;
+const LEGS_CAPSULE_RADIUS: f64 = 0.40;
 const CAPSULE_SAMPLE_STEPS: usize = 7;
 // Player position is anchored around eye/camera height (y ~= 1.7).
 // Config tool offsets are feet-anchored, so these are converted to runtime anchor.
@@ -228,11 +228,11 @@ const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
 const MAX_ORIGIN_DRIFT: f64 = 2.8;
 const MAX_AIM_ANGLE_DELTA_DEG: f64 = 95.0;
-const LAG_COMP_BULLET_MS: i64 = 120;
-const LAG_COMP_MAGIC_MS: i64 = 150;
-const LAG_COMP_RTT_FACTOR: f64 = 0.35;
-const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
-const LAG_COMP_TOTAL_MAX_MS: i64 = 220;
+const LAG_COMP_BULLET_MS: i64 = 130;
+const LAG_COMP_MAGIC_MS: i64 = 160;
+const LAG_COMP_RTT_FACTOR: f64 = 0.40;
+const LAG_COMP_EXTRA_MAX_MS: i64 = 160;
+const LAG_COMP_TOTAL_MAX_MS: i64 = 300;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
 const SPECIAL_HIT_DAMAGE: f64 = HIT_DAMAGE * 0.5;
 const LUNAR_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
@@ -271,7 +271,7 @@ const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 200;
-const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
+const LATENCY_SMOOTH_ALPHA: f64 = 0.45;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.24;
 const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
 const MAGIC_IMPACT_REVALIDATION_SPEED_MAX: f64 = 0.16;
@@ -281,14 +281,14 @@ const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
 const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
 const RELOAD_REQ_MIN_INTERVAL_MS: i64 = 120;
 const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
-const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.018;
-const HITBOX_MOTION_INFLATE_MAX: f64 = 0.28;
-const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.06;
-const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.0007;
-const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.12;
-const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 36;
-const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 3.0;
-const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 84;
+const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.022;
+const HITBOX_MOTION_INFLATE_MAX: f64 = 0.40;
+const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.09;
+const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.0009;
+const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.20;
+const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 50;
+const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 3.5;
+const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 130;
 const MANA_PICKUP_COUNT: usize = 50;
 const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
@@ -710,10 +710,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 latency_probe_seq: 0,
                 latency_probe_sent_at: 0,
                 latency_probe_id: 0,
-                state_history: vec![StateSnapshot {
+                state_history: VecDeque::from([StateSnapshot {
                     ts: now_ms(),
                     position: initial_state.position.clone(),
-                }],
+                }]),
                 last_shoot_req_at_ms: 0,
                 last_special_req_at_ms: 0,
                 last_pickup_req_at_ms: 0,
@@ -1194,8 +1194,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 room.status = if event_type == "start_game" {
                     RoomStatus::InGame
                 } else {
-                    RoomStatus::Finished
+                    RoomStatus::Cooldown
                 };
+            }
+            if event_type == "end_game" {
+                tokio::spawn(schedule_match_reset(
+                    Arc::clone(state),
+                    room_id.clone(),
+                    ROUND_RESET_SECONDS as u64,
+                ));
             }
             if let Some(summary) = inner.room_summary_json(&room_id) {
                 inner.broadcast_room(
@@ -1690,8 +1697,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let mut rays = Vec::new();
-            for i in 0..50 {
-                let t = (i as f64) / 50.0;
+            for i in 0..100 {
+                let t = (i as f64) / 100.0;
                 let angle = t * std::f64::consts::TAU;
                 rays.push(json!({
                   "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
@@ -1920,7 +1927,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
                 entry.state_history.clear();
-                entry.state_history.push(StateSnapshot {
+                entry.state_history.push_back(StateSnapshot {
                     ts: entry.state_ts,
                     position: entry.state.position.clone(),
                 });
@@ -2698,7 +2705,7 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
         client.state.position = spawn;
         client.state_ts = now_ms();
         client.state_history.clear();
-        client.state_history.push(StateSnapshot {
+        client.state_history.push_back(StateSnapshot {
             ts: client.state_ts,
             position: client.state.position.clone(),
         });
@@ -2847,10 +2854,10 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             latency_probe_seq: 0,
             latency_probe_sent_at: 0,
             latency_probe_id: 0,
-            state_history: vec![StateSnapshot {
+            state_history: VecDeque::from([StateSnapshot {
                 ts: now_ms(),
                 position: initial_state.position.clone(),
-            }],
+            }]),
             last_shoot_req_at_ms: 0,
             last_special_req_at_ms: 0,
             last_pickup_req_at_ms: 0,
@@ -3061,7 +3068,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     bot.state_ts = now_ms();
                     bot.combat = default_combat_state();
                     bot.state_history.clear();
-                    bot.state_history.push(StateSnapshot {
+                    bot.state_history.push_back(StateSnapshot {
                         ts: bot.state_ts,
                         position: bot.state.position.clone(),
                     });
@@ -3097,6 +3104,15 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 inner.broadcast_room_state(&room_id);
             }
         }
+    }
+    // Cleanup de sesión del bot cuando el loop termina (por cualquier break).
+    // Evita que el ClientSession quede zombie en inner.clients.
+    let mut inner = state.inner.lock().await;
+    if inner.clients.contains_key(&bot_id) {
+        let _ = leave_room_internal(&mut inner, &bot_id, false);
+        inner.clients.remove(&bot_id);
+        inner.cleanup_removed_room_meta();
+        inner.broadcast_lobby_presence();
     }
 }
 
@@ -3322,8 +3338,8 @@ fn bot_try_cast_special(
     match character_key.as_str() {
         "silentman" | "silenmant" => {
             let mut rays = Vec::new();
-            for i in 0..50 {
-                let t = (i as f64) / 50.0;
+            for i in 0..100 {
+                let t = (i as f64) / 100.0;
                 let angle = t * std::f64::consts::TAU;
                 rays.push(json!({
                   "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
@@ -3657,6 +3673,16 @@ fn apply_hit_and_emit(
         None,
     );
 
+    let already_cooldown = inner
+        .rooms
+        .rooms
+        .get(room_id)
+        .map(|r| r.status == RoomStatus::Cooldown)
+        .unwrap_or(false);
+    if already_cooldown {
+        inner.broadcast_room_state(room_id);
+        return false;
+    }
     if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
         maybe_resolve_match_winner(inner, room_id, attacker_id, killer_kills)
     {
@@ -4474,7 +4500,7 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
             client.state.position = spawn;
             client.state_ts = now_ms();
             client.state_history.clear();
-            client.state_history.push(StateSnapshot {
+            client.state_history.push_back(StateSnapshot {
                 ts: client.state_ts,
                 position: client.state.position.clone(),
             });
@@ -4809,17 +4835,17 @@ fn normalize_character(character: Option<&str>) -> String {
 }
 
 fn push_state_snapshot(client: &mut ClientSession, ts: i64) {
-    client.state_history.push(StateSnapshot {
+    client.state_history.push_back(StateSnapshot {
         ts,
         position: client.state.position.clone(),
     });
     let cutoff = ts - STATE_HISTORY_WINDOW_MS;
     while client.state_history.len() > 2 {
-        let first_ts = client.state_history.first().map(|s| s.ts).unwrap_or(ts);
+        let first_ts = client.state_history.front().map(|s| s.ts).unwrap_or(ts);
         if first_ts >= cutoff {
             break;
         }
-        client.state_history.remove(0);
+        client.state_history.pop_front();
     }
 }
 
@@ -4830,7 +4856,7 @@ fn client_position_at(client: &ClientSession, target_ts: i64) -> Vec3 {
     if target_ts <= client.state_history[0].ts {
         return client.state_history[0].position.clone();
     }
-    if let Some(last) = client.state_history.last() {
+    if let Some(last) = client.state_history.back() {
         if target_ts >= last.ts {
             return last.position.clone();
         }
