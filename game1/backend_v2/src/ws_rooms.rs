@@ -232,6 +232,7 @@ const LAG_COMP_BULLET_MS: i64 = 120;
 const LAG_COMP_MAGIC_MS: i64 = 150;
 const LAG_COMP_RTT_FACTOR: f64 = 0.35;
 const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
+const LAG_COMP_TOTAL_MAX_MS: i64 = 220;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
 const SPECIAL_HIT_DAMAGE: f64 = HIT_DAMAGE * 0.5;
 const LUNAR_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
@@ -283,6 +284,8 @@ const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
 const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.018;
 const HITBOX_MOTION_INFLATE_MAX: f64 = 0.28;
 const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.06;
+const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.0007;
+const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.12;
 const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 36;
 const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 3.0;
 const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 84;
@@ -362,9 +365,11 @@ fn compute_rewind_timestamp(
     base_rewind_ms: i64,
     latency_ms: f64,
 ) -> i64 {
-    let dynamic_extra = ((latency_ms * LAG_COMP_RTT_FACTOR).round() as i64).clamp(0, LAG_COMP_EXTRA_MAX_MS);
+    let dynamic_extra = ((latency_ms * LAG_COMP_RTT_FACTOR).round() as i64)
+        .clamp(0, LAG_COMP_EXTRA_MAX_MS);
+    let rewind_total = (base_rewind_ms + dynamic_extra).clamp(0, LAG_COMP_TOTAL_MAX_MS);
     let rewind_floor = now_ms_v - STATE_HISTORY_WINDOW_MS;
-    let fallback = now_ms_v - (base_rewind_ms + dynamic_extra);
+    let fallback = now_ms_v - rewind_total;
     match client_shot_ts {
         Some(ts) => clamp_i64(ts, rewind_floor, now_ms_v),
         None => clamp_i64(fallback, rewind_floor, now_ms_v),
@@ -5069,8 +5074,11 @@ fn find_best_hit(
 
         let rewound = client_position_at(candidate, rewind_ts);
         let target_speed = client_speed_at_ts(candidate, rewind_ts);
-        let motion_inflate =
+        let speed_inflate =
             (target_speed * HITBOX_MOTION_INFLATE_FACTOR).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
+        let latency_inflate =
+            (candidate.latency_ms * HITBOX_LATENCY_INFLATE_PER_MS).clamp(0.0, HITBOX_LATENCY_INFLATE_MAX);
+        let motion_inflate = (speed_inflate + latency_inflate).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
         let sweep_window_ms = ((HITREG_SWEEP_BASE_WINDOW_MS as f64)
             + (target_speed * HITREG_SWEEP_SPEED_WINDOW_FACTOR))
             .round() as i64;
