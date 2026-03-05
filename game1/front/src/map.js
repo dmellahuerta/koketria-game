@@ -25,11 +25,6 @@ app.innerHTML = `
       <input id="strengthRange" type="range" min="0.1" max="4" step="0.1" value="1.2" />
     </div>
 
-    <div class="field">
-      <label for="fovRange">FOV <span id="fovValue" class="value"></span></label>
-      <input id="fovRange" type="range" min="60" max="100" step="1" value="75" />
-    </div>
-
     <div class="field actions">
       <button id="undoBtn" type="button">Deshacer</button>
       <button id="redoBtn" type="button">Rehacer</button>
@@ -54,10 +49,8 @@ app.innerHTML = `
 const modeSelect = document.querySelector('#modeSelect');
 const radiusRange = document.querySelector('#radiusRange');
 const strengthRange = document.querySelector('#strengthRange');
-const fovRange = document.querySelector('#fovRange');
 const radiusValue = document.querySelector('#radiusValue');
 const strengthValue = document.querySelector('#strengthValue');
-const fovValue = document.querySelector('#fovValue');
 const undoBtn = document.querySelector('#undoBtn');
 const redoBtn = document.querySelector('#redoBtn');
 const flattenBtn = document.querySelector('#flattenBtn');
@@ -82,9 +75,6 @@ canvasWrap.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 0, 0);
-controls.maxPolarAngle = Math.PI * 0.48;
-controls.minDistance = 20;
-controls.maxDistance = 420;
 
 scene.add(new THREE.AmbientLight(0xb5ffc8, 0.45));
 const dir = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -196,40 +186,7 @@ const pushHistoryEntry = (before, after) => {
 const updateLabels = () => {
   radiusValue.textContent = Number(radiusRange.value).toFixed(1);
   strengthValue.textContent = Number(strengthRange.value).toFixed(1);
-  fovValue.textContent = String(Math.round(Number(fovRange.value)));
   brushHelper.scale.setScalar(Number(radiusRange.value));
-};
-
-const applyFov = (fov, keepFraming = true) => {
-  const safeFov = Math.max(60, Math.min(100, Number(fov) || 75));
-  camera.fov = safeFov;
-  camera.updateProjectionMatrix();
-  if (keepFraming) {
-    const halfW = terrainSize * 0.5;
-    const halfH = terrainSize * 0.5;
-    const fovRad = THREE.MathUtils.degToRad(camera.fov);
-    const minDistByHeight = halfH / Math.tan(fovRad * 0.5);
-    const minDistByWidth = halfW / (Math.tan(fovRad * 0.5) * Math.max(0.2, camera.aspect));
-    const fitDistance = Math.max(minDistByHeight, minDistByWidth) * 1.16;
-    const viewDir = camera.position.clone().sub(controls.target).normalize();
-    camera.position.copy(controls.target.clone().addScaledVector(viewDir, fitDistance));
-    if (camera.position.y < 34) {
-      camera.position.y = 34;
-    }
-  }
-};
-
-const loadStoredGameFov = () => {
-  try {
-    const raw = localStorage.getItem('koketria_settings_v1');
-    if (!raw) return 75;
-    const parsed = JSON.parse(raw);
-    const fov = Number(parsed?.fov);
-    if (!Number.isFinite(fov)) return 75;
-    return Math.max(60, Math.min(100, fov));
-  } catch {
-    return 75;
-  }
 };
 
 const resize = () => {
@@ -238,7 +195,6 @@ const resize = () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h, false);
-  applyFov(camera.fov, true);
 };
 
 const getPointerHit = (event) => {
@@ -365,17 +321,10 @@ flattenBtn.addEventListener('click', flattenTerrain);
 exportBtn.addEventListener('click', exportTerrainHeights);
 radiusRange.addEventListener('input', updateLabels);
 strengthRange.addEventListener('input', updateLabels);
-fovRange.addEventListener('input', () => {
-  updateLabels();
-  applyFov(Number(fovRange.value), true);
-});
 window.addEventListener('resize', resize);
 
-const initialFov = loadStoredGameFov();
-fovRange.value = String(initialFov);
 updateLabels();
 updateHistoryButtons();
-applyFov(initialFov, true);
 resize();
 
 const clock = new THREE.Clock();
