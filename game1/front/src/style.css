@@ -219,7 +219,8 @@ canvas {
   grid-template-columns: minmax(260px, 32%) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
-  height: calc(96vh - 28px);
+  min-height: calc(96vh - 28px);
+  height: auto;
   max-height: calc(96vh - 28px);
 }
 
@@ -243,6 +244,8 @@ canvas {
   height: 100%;
   min-height: 0;
   max-height: none;
+  align-self: stretch;
+  justify-content: flex-start;
 }
 
 .versus-chat-side h3 {
@@ -442,8 +445,8 @@ canvas {
 }
 
 .versus-chat-log {
-  flex: 1;
-  min-height: 180px;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: none;
   overflow-y: auto;
   overflow-x: hidden;
@@ -544,6 +547,7 @@ canvas {
   flex-direction: column;
   gap: 8px;
   min-height: 280px;
+  height: calc(96vh - 56px);
   max-height: calc(96vh - 56px);
 }
 
@@ -563,10 +567,10 @@ canvas {
 }
 
 .lobby-right-side .room-list {
-  height: clamp(96px, 14vh, 140px);
-  max-height: clamp(96px, 14vh, 140px);
-  min-height: 96px;
-  flex: 0 0 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 .lobby-side h3 {
@@ -748,6 +752,7 @@ canvas {
   }
 
   .lobby-side {
+    height: auto;
     max-height: 34vh;
   }
 
