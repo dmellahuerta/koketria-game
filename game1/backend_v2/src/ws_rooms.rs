@@ -267,8 +267,8 @@ const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
 const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 1.4;
 const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.20;
 const PUMORI_SPECIAL_MAX_FACTOR: f64 = 1.0;
-const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
-const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
+const PUMORI_HAMMER_HEAD_RADIUS: f64 = 1.0;
+const PUMORI_HAMMER_BODY_RADIUS: f64 = 1.9;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 200;
@@ -5394,7 +5394,7 @@ fn find_pumori_hammer_hit(
             origin,
             direction_norm,
             &head_center,
-            PUMORI_HAMMER_HEAD_RADIUS.min(profile.head_radius + 0.18),
+            PUMORI_HAMMER_HEAD_RADIUS,
             max_distance,
         ) {
             hit_dist = Some(d);
@@ -5403,7 +5403,7 @@ fn find_pumori_hammer_hit(
             origin,
             direction_norm,
             &body_center,
-            PUMORI_HAMMER_BODY_RADIUS.min(profile.body_radius + 0.65),
+            PUMORI_HAMMER_BODY_RADIUS,
             max_distance,
         ) {
             match hit_dist {
@@ -5459,8 +5459,8 @@ fn find_pumori_hammer_overlap_hit(
         };
         let head_d2 = distance_sq(hammer_pos, &head_center);
         let body_d2 = distance_sq(hammer_pos, &body_center);
-        let head_radius = PUMORI_HAMMER_HEAD_RADIUS.min(profile.head_radius + 0.18);
-        let body_radius = PUMORI_HAMMER_BODY_RADIUS.min(profile.body_radius + 0.65);
+        let head_radius = PUMORI_HAMMER_HEAD_RADIUS;
+        let body_radius = PUMORI_HAMMER_BODY_RADIUS;
         let in_head = head_d2 <= (head_radius * head_radius);
         let in_body = body_d2 <= (body_radius * body_radius);
         if !in_head && !in_body {
