@@ -4116,6 +4116,9 @@ const localReconcileExpireMs = 320;
 const localInputHistoryLimit = 180;
 let serverTimeOffsetMs = 0;
 let hasServerTimeSync = false;
+let remoteUpgradeEpoch = 0;
+const serverTimeOffsetHardLimitMs = 140;
+const serverTimeOffsetStepLimitMs = 12;
 let remoteInterpolationDynamicMs = remoteInterpolationBaseMs;
 let remoteExtrapolationDynamicMs = remoteExtrapolationBaseMs;
 let localReconcileTarget = null;
@@ -4141,15 +4144,17 @@ const updateServerTimeOffset = (serverTs) => {
   if (!Number.isFinite(ts)) {
     return;
   }
-  const sample = ts - Date.now();
+  const sampleRaw = ts - Date.now();
+  const sample = Math.max(-serverTimeOffsetHardLimitMs, Math.min(serverTimeOffsetHardLimitMs, sampleRaw));
   if (!hasServerTimeSync) {
     serverTimeOffsetMs = sample;
     hasServerTimeSync = true;
     return;
   }
   const delta = sample - serverTimeOffsetMs;
-  const boundedDelta = Math.max(-30, Math.min(30, delta));
-  serverTimeOffsetMs += boundedDelta * 0.35;
+  const boundedDelta = Math.max(-serverTimeOffsetStepLimitMs, Math.min(serverTimeOffsetStepLimitMs, delta));
+  serverTimeOffsetMs += boundedDelta * 0.25;
+  serverTimeOffsetMs = Math.max(-serverTimeOffsetHardLimitMs, Math.min(serverTimeOffsetHardLimitMs, serverTimeOffsetMs));
 };
 
 const seedServerClockFromRoomState = (roomState) => {
@@ -5560,6 +5565,14 @@ const buildAnimatedRemoteModel = (resource) => {
 };
 
 const disposeLocalAvatar = () => {
+  if (localAvatar.mixer) {
+    localAvatar.mixer.stopAllAction();
+    if (localAvatar.avatarRoot) {
+      localAvatar.mixer.uncacheRoot(localAvatar.avatarRoot);
+    } else if (localAvatar.group) {
+      localAvatar.mixer.uncacheRoot(localAvatar.group);
+    }
+  }
   if (localAvatar.teamOutline) {
     disposeTeamMarker(localAvatar.teamOutline);
   }
@@ -5811,13 +5824,14 @@ const mountWeaponOnRemoteEntry = (entry, options = {}) => {
 };
 
 const upgradeRemotePlayerToCharacter = async (entry) => {
+  const upgradeEpoch = remoteUpgradeEpoch;
   const character = resolveCharacterForPlayer(entry.character);
   if (!character) {
     return;
   }
 
   const resource = await ensureCharacterResource(character);
-  if (!resource?.loaded || !state.remotePlayers.has(entry.id)) {
+  if (!resource?.loaded || !state.remotePlayers.has(entry.id) || upgradeEpoch !== remoteUpgradeEpoch) {
     return;
   }
 
@@ -6114,6 +6128,7 @@ const syncRemotePlayersFromRoom = (roomState) => {
 };
 
 const clearRemotePlayers = () => {
+  remoteUpgradeEpoch += 1;
   for (const entry of state.remotePlayers.values()) {
     disposeRemotePlayer(entry);
   }
@@ -6984,6 +6999,7 @@ const connectWebSocket = () => {
   ws.addEventListener('open', () => {
     connectionStatus.textContent = 'Conectado';
     setLobbyError();
+    clearLocalPredictionHistory();
     sendWs({ type: 'list_rooms' });
   });
 
@@ -7070,10 +7086,7 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'room_joined') {
-      if (!hasServerTimeSync && Number.isFinite(Number(payload.data?.serverTs))) {
-        serverTimeOffsetMs = Number(payload.data.serverTs) - Date.now();
-        hasServerTimeSync = true;
-      }
+      updateServerTimeOffset(payload.data?.serverTs);
       seedServerClockFromRoomState(payload.data);
       clearLocalPredictionHistory();
       applyRoomState(payload.data, { applyOwnState: true });
@@ -7892,9 +7905,12 @@ const connectWebSocket = () => {
 
   ws.addEventListener('close', () => {
     connectionStatus.textContent = 'Desconectado. Reintentando...';
+    clearLocalPredictionHistory();
     state.joinedRoom = null;
     state.showScoreboard = false;
     pendingLatencyProbe = null;
+    serverTimeOffsetMs = 0;
+    hasServerTimeSync = false;
     state.latencyMs = null;
     clearRemotePlayers();
     setInRoom(false);

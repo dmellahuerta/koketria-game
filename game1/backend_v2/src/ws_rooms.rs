@@ -1065,6 +1065,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                             + (sample_ms * LATENCY_SMOOTH_ALPHA)
                     };
                     entry.latency_ms = clamp(next_latency, 0.0, 450.0);
+                    // One-shot probe consume: evita pongs repetidos para el mismo probeId.
+                    entry.latency_probe_id = 0;
+                    entry.latency_probe_sent_at = 0;
                     measured = Some(entry.latency_ms);
                 }
             }
@@ -2029,10 +2032,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     if entry.combat.alive {
                         return false;
                     }
-                    // Fallback defensivo: si por desincronización no hay timestamp,
-                    // permitimos respawn inmediato en vez de quedar bloqueado.
                     if entry.combat.respawn_available_at_ms <= 0 {
-                        return true;
+                        return false;
                     }
                     now >= entry.combat.respawn_available_at_ms
                 })
@@ -2858,21 +2859,31 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     }
     inner.ensure_room_meta(room_id);
     let spawn = pick_spawn_position(inner, room_id, Some(client_id));
+    let now = now_ms();
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = Some(room_id.to_string());
         client.kills = 0;
         client.deaths = 0;
         client.combat = default_combat_state();
+        client.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
+        apply_special_cooldown_on_respawn(
+            &mut client.combat,
+            client.character.as_deref(),
+            now,
+        );
         client.state = default_player_state();
         client.state.position = spawn;
-        client.state_ts = now_ms();
+        client.state_ts = now;
         client.state_history.clear();
         client.state_history.push_back(StateSnapshot {
             ts: client.state_ts,
             position: client.state.position.clone(),
         });
     }
-    if let Some(state) = inner.room_state_json(room_id) {
+    if let Some(mut state) = inner.room_state_json(room_id) {
+        if let Some(obj) = state.as_object_mut() {
+            obj.insert("serverTs".to_string(), json!(now));
+        }
         inner.send_to(
             client_id,
             json!({ "type": "room_joined", "ok": true, "data": state }),
@@ -4751,12 +4762,19 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     for player_id in player_ids {
         let spawn = pick_spawn_position(&inner, &room_id, Some(&player_id));
         if let Some(client) = inner.clients.get_mut(&player_id) {
+            let now = now_ms();
             client.kills = 0;
             client.deaths = 0;
             client.combat = default_combat_state();
+            client.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
+            apply_special_cooldown_on_respawn(
+                &mut client.combat,
+                client.character.as_deref(),
+                now,
+            );
             client.state = default_player_state();
             client.state.position = spawn;
-            client.state_ts = now_ms();
+            client.state_ts = now;
             client.state_history.clear();
             client.state_history.push_back(StateSnapshot {
                 ts: client.state_ts,
@@ -6218,7 +6236,8 @@ fn consume_pickup(
     now: i64,
 ) -> Option<i64> {
     let pickup = pickups.get_mut(pickup_index)?;
-    if pickup.respawn_at_ms > now {
+    // Inclusive guard para evitar doble-take exacto en borde de respawn (mismo ms).
+    if pickup.respawn_at_ms >= now {
         return None;
     }
 
