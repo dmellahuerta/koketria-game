@@ -276,6 +276,8 @@ const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.24;
 const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
 const MAGIC_IMPACT_REVALIDATION_SPEED_MAX: f64 = 0.16;
 const MAGIC_IMPACT_REVALIDATION_WINDOW_MS: i64 = 90;
+const MAGIC_IMPACT_CLOSE_FALLBACK_EXTRA_RADIUS: f64 = 0.34;
+const RADIAL_LOS_BYPASS_CLOSE_RADIUS: f64 = 1.05;
 const SHOOT_REQ_MIN_INTERVAL_MS: i64 = 20;
 const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
 const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
@@ -3935,13 +3937,15 @@ async fn apply_delayed_authoritative_hit(
         if !inner.clients.contains_key(&attacker_id) {
             return;
         }
-        let Some(revalidated_headshot) = classify_point_hit_on_player_with_history(
+        let revalidated_headshot = classify_point_hit_on_player_with_history(
             victim,
             &impact_point,
             headshot,
             shot_ts,
             impact_delay_ms as i64,
-        ) else {
+        )
+        .or_else(|| classify_close_range_fallback_hit(victim, &impact_point));
+        let Some(revalidated_headshot) = revalidated_headshot else {
             if send_hit_confirm {
                 let mut data = json!({
                   "reason": "revalidation_failed",
@@ -4034,21 +4038,22 @@ fn apply_radial_falloff_damage(
             y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
             z: victim.state.position.z,
         };
-        if !has_line_of_sight_with_margin(
-            inner,
-            room_id,
-            impact,
-            &victim_aim,
-            RADIAL_LOS_CLEARANCE_UNITS,
-        ) {
-            continue;
-        }
         let dx = victim.state.position.x - impact.x;
         let dz = victim.state.position.z - impact.z;
         let dy_raw = (victim_aim.y - impact.y).abs();
         let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
         let dist = (dx * dx + dz * dz + dy * dy).sqrt();
         if dist > radius {
+            continue;
+        }
+        let has_los = has_line_of_sight_with_margin(
+            inner,
+            room_id,
+            impact,
+            &victim_aim,
+            RADIAL_LOS_CLEARANCE_UNITS,
+        );
+        if !has_los && dist > RADIAL_LOS_BYPASS_CLOSE_RADIUS {
             continue;
         }
         let t = (1.0 - (dist / radius.max(0.001))).clamp(0.0, 1.0);
@@ -4249,21 +4254,22 @@ async fn apply_delayed_area_wave_damage(
                     y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
                     z: victim.state.position.z,
                 };
-                if !has_line_of_sight_with_margin(
-                    &inner,
-                    &room_id,
-                    impact,
-                    &victim_aim,
-                    RADIAL_LOS_CLEARANCE_UNITS,
-                ) {
-                    continue;
-                }
                 let dx = victim.state.position.x - impact.x;
                 let dz = victim.state.position.z - impact.z;
                 let dy_raw = (victim_aim.y - impact.y).abs();
                 let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
                 let dist = (dx * dx + dz * dz + dy * dy).sqrt();
                 if dist > aoe_radius {
+                    continue;
+                }
+                let has_los = has_line_of_sight_with_margin(
+                    &inner,
+                    &room_id,
+                    impact,
+                    &victim_aim,
+                    RADIAL_LOS_CLEARANCE_UNITS,
+                );
+                if !has_los && dist > RADIAL_LOS_BYPASS_CLOSE_RADIUS {
                     continue;
                 }
                 hit_once.insert(victim_id.clone());
@@ -5634,6 +5640,20 @@ fn classify_point_hit_on_player_with_history(
     }
 
     fallback_body
+}
+
+fn classify_close_range_fallback_hit(victim: &ClientSession, impact_point: &Vec3) -> Option<bool> {
+    let profile = hitbox_profile_for_character(victim.character.as_deref());
+    let body_center = Vec3 {
+        x: victim.state.position.x,
+        y: victim.state.position.y + profile.body_center_offset_y,
+        z: victim.state.position.z,
+    };
+    let close_radius = profile.body_radius + MAGIC_IMPACT_CLOSE_FALLBACK_EXTRA_RADIUS;
+    if distance_sq(impact_point, &body_center) <= close_radius * close_radius {
+        return Some(false);
+    }
+    None
 }
 
 fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&str>) -> Vec3 {
