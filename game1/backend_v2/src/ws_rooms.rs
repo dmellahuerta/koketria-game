@@ -35,6 +35,7 @@ struct RoomMeta {
     map_collision_hash: String,
     map_profile: MapProfile,
     map_collision: Vec<MapBox>,
+    map_collision_grid: MapCollisionGrid,
     mana_pickups: Vec<PickupState>,
     shield_pickups: Vec<PickupState>,
     health_pickups: Vec<PickupState>,
@@ -63,6 +64,12 @@ struct MapBox {
     max_y: f64,
     min_z: f64,
     max_z: f64,
+}
+
+#[derive(Clone)]
+struct MapCollisionGrid {
+    cell_size: f64,
+    buckets: HashMap<(i32, i32), Vec<usize>>,
 }
 
 #[derive(Clone)]
@@ -218,6 +225,7 @@ const SPAWN_INNER_RADIUS: f64 = 22.0;
 const SPAWN_OUTER_RADIUS: f64 = 44.0;
 const SPAWN_POINT_COUNT: usize = 20;
 const MAP_PILLAR_COUNT: usize = 220;
+const MAP_COLLISION_GRID_CELL_SIZE: f64 = 8.0;
 const MAP_AXIS_X_BASE: f64 = 118.0;
 const MAP_AXIS_Z_BASE: f64 = 96.0;
 const MAP_PLAYABLE_HALF_EXTENT: f64 = 150.0;
@@ -435,6 +443,7 @@ impl RoomMeta {
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_grid = build_map_collision_grid(&map_collision, MAP_COLLISION_GRID_CELL_SIZE);
         let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
         let mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
         let shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
@@ -446,6 +455,7 @@ impl RoomMeta {
             map_collision_hash,
             map_profile,
             map_collision,
+            map_collision_grid,
             mana_pickups,
             shield_pickups,
             health_pickups,
@@ -457,6 +467,7 @@ impl RoomMeta {
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_grid = build_map_collision_grid(&map_collision, MAP_COLLISION_GRID_CELL_SIZE);
         let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
         self.weather = pick_from(WEATHER_TYPES, seed, Some(self.weather.as_str())).to_string();
         self.battle_theme = pick_from(
@@ -468,6 +479,7 @@ impl RoomMeta {
         self.map_seed = map_seed;
         self.map_profile = map_profile;
         self.map_collision = map_collision;
+        self.map_collision_grid = map_collision_grid;
         self.map_collision_hash = map_collision_hash;
         self.mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
         self.shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
@@ -5977,16 +5989,54 @@ fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64, collision_radius: f
 }
 
 fn collides_with_map_box(meta: &RoomMeta, x: f64, z: f64, radius: f64) -> bool {
-    for b in &meta.map_collision {
-        if x + radius > b.min_x
-            && x - radius < b.max_x
-            && z + radius > b.min_z
-            && z - radius < b.max_z
-        {
-            return true;
+    let cell_size = meta.map_collision_grid.cell_size;
+    if cell_size <= 0.0 {
+        return false;
+    }
+    let min_cx = ((x - radius) / cell_size).floor() as i32;
+    let max_cx = ((x + radius) / cell_size).floor() as i32;
+    let min_cz = ((z - radius) / cell_size).floor() as i32;
+    let max_cz = ((z + radius) / cell_size).floor() as i32;
+
+    for cx in min_cx..=max_cx {
+        for cz in min_cz..=max_cz {
+            let Some(indices) = meta.map_collision_grid.buckets.get(&(cx, cz)) else {
+                continue;
+            };
+            for &idx in indices {
+                let Some(b) = meta.map_collision.get(idx) else {
+                    continue;
+                };
+                if x + radius > b.min_x
+                    && x - radius < b.max_x
+                    && z + radius > b.min_z
+                    && z - radius < b.max_z
+                {
+                    return true;
+                }
+            }
         }
     }
     false
+}
+
+fn build_map_collision_grid(boxes: &[MapBox], cell_size: f64) -> MapCollisionGrid {
+    let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    if cell_size <= 0.0 {
+        return MapCollisionGrid { cell_size, buckets };
+    }
+    for (index, b) in boxes.iter().enumerate() {
+        let min_cx = (b.min_x / cell_size).floor() as i32;
+        let max_cx = (b.max_x / cell_size).floor() as i32;
+        let min_cz = (b.min_z / cell_size).floor() as i32;
+        let max_cz = (b.max_z / cell_size).floor() as i32;
+        for cx in min_cx..=max_cx {
+            for cz in min_cz..=max_cz {
+                buckets.entry((cx, cz)).or_default().push(index);
+            }
+        }
+    }
+    MapCollisionGrid { cell_size, buckets }
 }
 
 fn create_map_profile(seed: u64) -> MapProfile {
