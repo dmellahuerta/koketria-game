@@ -3028,9 +3028,9 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
     let bot_name = format!("{}-{}", names[name_idx], num);
     let character = characters[character_idx].to_string();
     let bot_orbit_phase = rng.next_f64() * std::f64::consts::TAU;
-    let bot_orbit_radius = 18.0 + (rng.next_f64() * 30.0);
-    let bot_orbit_speed = 0.55 + (rng.next_f64() * 0.75);
-    let bot_move_speed = 6.8 + (rng.next_f64() * 3.6);
+    let bot_orbit_radius = 8.0 + (rng.next_f64() * 14.0);
+    let bot_orbit_speed = 0.30 + (rng.next_f64() * 0.45);
+    let bot_move_speed = 3.5 + (rng.next_f64() * 2.5);
 
     let (tx_critical, mut rx_critical) = mpsc::unbounded_channel::<String>();
     let (tx_regular, mut rx_regular) = mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
