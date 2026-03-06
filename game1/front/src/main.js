@@ -1909,9 +1909,9 @@ scene.background = new THREE.Color(0x010501);
 scene.fog = new THREE.Fog(0x010501, 18, 160);
 let currentWeather = 'night';
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.2, 500);
 camera.position.set(0, 1.7, 10);
-const thirdPersonCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+const thirdPersonCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.2, 500);
 let isThirdPerson = false;
 const thirdPersonDistance = 4.6;
 const thirdPersonHeight = 1.25;
@@ -7226,7 +7226,12 @@ const connectWebSocket = () => {
         if (error >= localReconcileHardSnapDistance) {
           reconcileStats.correctionsInWindow += 1;
           registerCorrectionEvent('hard');
-          camera.position.copy(correctedTarget);
+          const safeSnap = applyWorldCollisions(correctedTarget.x, correctedTarget.z);
+          camera.position.set(
+            Number.isFinite(Number(safeSnap?.x)) ? Number(safeSnap.x) : correctedTarget.x,
+            correctedTarget.y,
+            Number.isFinite(Number(safeSnap?.z)) ? Number(safeSnap.z) : correctedTarget.z,
+          );
           constrainPlayerToWorld();
           localReconcileTarget = null;
           localReconcileExpiresAt = 0;
@@ -11486,13 +11491,33 @@ const shouldRenderVersusPreviews = () => {
     && !versusLobby.classList.contains('hidden');
 };
 
+const updateProjectileSystems = (delta) => {
+  const safeDelta = Math.max(0, Number(delta) || 0);
+  if (safeDelta <= 0) {
+    return;
+  }
+  const substepMax = 0.04;
+  let remaining = Math.min(safeDelta, 0.12);
+  while (remaining > 0) {
+    const step = Math.min(substepMax, remaining);
+    updateHolyProjectiles(step);
+    updateHammerProjectiles(step);
+    updatePoisonProjectiles(step);
+    updateLunarProjectiles(step);
+    updatePumoriOrbitSpecials(step);
+    remaining -= step;
+  }
+};
+
 const animate = () => {
   requestAnimationFrame(animate);
   if (isMainWebglContextLost) {
     return;
   }
   try {
-    const delta = Math.min(clock.getDelta(), 0.05);
+    const rawDelta = Math.max(0, clock.getDelta());
+    const delta = Math.min(rawDelta, 0.05);
+    const projectileDelta = Math.min(rawDelta, 0.12);
     syncMobileControlsVisibility();
     updatePerfMetrics();
     applyMobileMoveKeys();
@@ -11512,11 +11537,7 @@ const animate = () => {
     updateSnow(delta);
     updateKoketriaNature(delta);
     updateRemotePlayers(delta);
-    updateHolyProjectiles(delta);
-    updateHammerProjectiles(delta);
-    updatePoisonProjectiles(delta);
-    updateLunarProjectiles(delta);
-    updatePumoriOrbitSpecials(delta);
+    updateProjectileSystems(projectileDelta);
     sweepProjectileCollisionDebug();
     updateShooting(delta);
     updateResourceSync();

@@ -5179,6 +5179,24 @@ fn client_speed_at_ts(client: &ClientSession, target_ts: i64) -> f64 {
     if client.state_history.len() < 2 {
         return 0.0;
     }
+    if target_ts <= client.state_history[0].ts {
+        let first = &client.state_history[0];
+        let second = &client.state_history[1];
+        let dt_s = ((second.ts - first.ts).max(1) as f64) / 1000.0;
+        let dx = second.position.x - first.position.x;
+        let dz = second.position.z - first.position.z;
+        return ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35);
+    }
+    if let Some(last) = client.state_history.back() {
+        if target_ts >= last.ts {
+            let len = client.state_history.len();
+            let prev = &client.state_history[len - 2];
+            let dt_s = ((last.ts - prev.ts).max(1) as f64) / 1000.0;
+            let dx = last.position.x - prev.position.x;
+            let dz = last.position.z - prev.position.z;
+            return ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35);
+        }
+    }
     let mut prev_opt: Option<&StateSnapshot> = None;
     let mut next_opt: Option<&StateSnapshot> = None;
     for i in 1..client.state_history.len() {
