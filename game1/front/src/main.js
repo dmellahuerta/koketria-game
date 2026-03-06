@@ -4098,6 +4098,28 @@ const updateServerTimeOffset = (serverTs) => {
   serverTimeOffsetMs += boundedDelta * 0.35;
 };
 
+const seedServerClockFromRoomState = (roomState) => {
+  if (!roomState || !Array.isArray(roomState.players)) {
+    return;
+  }
+  let candidateTs = null;
+  if (state.self?.id) {
+    const selfPlayer = roomState.players.find((player) => player.id === state.self.id);
+    if (selfPlayer && Number.isFinite(Number(selfPlayer.ts))) {
+      candidateTs = Number(selfPlayer.ts);
+    }
+  }
+  if (!Number.isFinite(candidateTs)) {
+    const firstWithTs = roomState.players.find((player) => Number.isFinite(Number(player?.ts)));
+    if (firstWithTs) {
+      candidateTs = Number(firstWithTs.ts);
+    }
+  }
+  if (Number.isFinite(candidateTs)) {
+    updateServerTimeOffset(candidateTs);
+  }
+};
+
 const updateRemoteNetTimings = (delta) => {
   const rtt = Number.isFinite(state.latencyMs) ? Math.max(0, state.latencyMs) : 0;
   const corrections = Number.isFinite(reconcileStats.correctionsPerSec)
@@ -6916,6 +6938,7 @@ const connectWebSocket = () => {
 
     if (payload.type === 'connected') {
       state.self = payload.data.player;
+      updateServerTimeOffset(payload.data?.player?.ts);
       const storedName = getStoredPlayerName();
       const preferredName = storedName || sanitizePlayerName(state.self.name || '');
       playerNameInput.value = preferredName;
@@ -6981,12 +7004,14 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'room_joined') {
+      seedServerClockFromRoomState(payload.data);
       clearLocalPredictionHistory();
       applyRoomState(payload.data, { applyOwnState: true });
       return;
     }
 
     if (payload.type === 'room_state') {
+      seedServerClockFromRoomState(payload.data);
       applyRoomState(payload.data);
       return;
     }
