@@ -2835,7 +2835,7 @@ const bootLobbyLoader = async () => {
   const charList = [...availableCharacters];
   const totalTasks = 1
     + 1
-    + (charList.length * 2)
+    + (charList.length * 3)
     + 1
     + battleThemeIds.length
     + 2
@@ -2880,6 +2880,18 @@ const bootLobbyLoader = async () => {
       markWarning(`attack_sound: ${character}`);
     }
     tick(`Audio ataque: ${getCharacterLabel(character)}`);
+  }
+
+  for (let i = 0; i < charList.length; i += 1) {
+    const character = charList[i];
+    // eslint-disable-next-line no-await-in-loop
+    await preloadCharacterHitSound(character);
+    // eslint-disable-next-line no-await-in-loop
+    const hitSrc = await resolveCharacterHitSoundUrl(character);
+    if (!hitSrc || !preloadedAudioSources.has(hitSrc)) {
+      markWarning(`hit_sound: ${character}`);
+    }
+    tick(`Audio hit: ${getCharacterLabel(character)}`);
   }
 
   if (!(await preloadAudioSource(defaultAttackSoundUrl, 6000))) {
@@ -3084,11 +3096,16 @@ const attackSoundExtensions = ['.ogg', '.mp3', '.wav', '.m4a', ''];
 const attackSoundUrlCache = new Map();
 const attackSoundRetryAtMs = new Map();
 const attackSoundResolveRetryDelayMs = 15_000;
+const hitSoundUrlCache = new Map();
+const hitSoundRetryAtMs = new Map();
+const hitSoundResolveRetryDelayMs = 15_000;
 let localAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
+const localHitVoices = [];
+const maxLocalHitVoices = 10;
 const lunarSpecialCooldownMs = 30_000;
 const silentSpecialCooldownMs = 5_000;
 let lunarRainCooldownEndsAt = 0;
@@ -3335,6 +3352,16 @@ const buildAttackSoundCandidates = (characterId) => {
   });
 };
 
+const buildHitSoundCandidates = (characterId) => {
+  const normalized = getCharacterAssetKey(characterId);
+  if (!normalized) {
+    return [];
+  }
+  return attackSoundExtensions.map((ext) => {
+    return `/characters/${encodeURIComponent(normalized)}/hit_sound${ext}`;
+  });
+};
+
 const canPlayAudioUrl = (url) => {
   return new Promise((resolve) => {
     const probe = new Audio();
@@ -3396,6 +3423,44 @@ const resolveCharacterAttackSoundUrl = async (characterId) => {
 
   attackSoundRetryAtMs.set(normalized, Date.now() + attackSoundResolveRetryDelayMs);
   return defaultAttackSoundUrl;
+};
+
+const resolveCharacterHitSoundUrl = async (characterId) => {
+  const normalized = getCharacterAssetKey(characterId);
+  if (!normalized) {
+    return '';
+  }
+  if (hitSoundUrlCache.has(normalized)) {
+    return hitSoundUrlCache.get(normalized) || '';
+  }
+  const retryAt = Number(hitSoundRetryAtMs.get(normalized) || 0);
+  if (retryAt > Date.now()) {
+    return '';
+  }
+  const candidates = buildHitSoundCandidates(normalized);
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      hitSoundUrlCache.set(normalized, candidate);
+      hitSoundRetryAtMs.delete(normalized);
+      return candidate;
+    }
+  }
+  hitSoundRetryAtMs.set(normalized, Date.now() + hitSoundResolveRetryDelayMs);
+  return '';
+};
+
+const preloadCharacterHitSound = async (character) => {
+  const src = await resolveCharacterHitSoundUrl(character);
+  if (!src) {
+    return false;
+  }
+  const firstTry = await preloadAudioSource(src, 6000);
+  if (firstTry) {
+    return true;
+  }
+  return preloadAudioSource(src, 10000);
 };
 
 const applyAudioSource = (audio, src) => {
@@ -3476,6 +3541,38 @@ const startShootSound = () => {
     maybePromise.catch(() => {
       cleanup();
     });
+  }
+};
+
+const playHitSound = async (characterId, headshot = false) => {
+  const src = await resolveCharacterHitSoundUrl(characterId);
+  if (!src) {
+    return;
+  }
+  const voice = new Audio(src);
+  voice.preload = 'auto';
+  voice.loop = false;
+  const baseVol = 0.33 * settings.masterVolume * settings.sfxVolume;
+  voice.volume = Math.max(0.02, Math.min(1, headshot ? baseVol * 1.2 : baseVol));
+  if (localHitVoices.length >= maxLocalHitVoices) {
+    const oldVoice = localHitVoices.shift();
+    if (oldVoice) {
+      oldVoice.pause();
+      oldVoice.currentTime = 0;
+    }
+  }
+  localHitVoices.push(voice);
+  const cleanup = () => {
+    const idx = localHitVoices.indexOf(voice);
+    if (idx >= 0) {
+      localHitVoices.splice(idx, 1);
+    }
+  };
+  voice.addEventListener('ended', cleanup, { once: true });
+  voice.addEventListener('pause', cleanup, { once: true });
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => cleanup());
   }
 };
 
@@ -7237,7 +7334,12 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'hit_confirm') {
-      triggerHitConfirm(Boolean(payload.data?.headshot));
+      const headshot = Boolean(payload.data?.headshot);
+      triggerHitConfirm(headshot);
+      const hitterCharacter = state.self?.character || activeCharacter;
+      if (hitterCharacter) {
+        void playHitSound(hitterCharacter, headshot);
+      }
       return;
     }
 
