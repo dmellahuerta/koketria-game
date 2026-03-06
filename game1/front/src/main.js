@@ -9588,7 +9588,8 @@ const shoot = () => {
 
   camera.getWorldDirection(dir);
   const baseDirection = dir.clone().normalize();
-  const origin = camera.position.clone().add(baseDirection.clone().multiplyScalar(0.55));
+  // Align projectile trajectory with the crosshair ray to avoid close-range parallax misses.
+  const origin = camera.position.clone();
   const movingSpeed = Math.sqrt((moveVelocity.x * moveVelocity.x) + (moveVelocity.z * moveVelocity.z));
   const moveFactor = Math.min(1, movingSpeed / Math.max(0.001, speed));
   const isBulletWeapon = !usingMana;
