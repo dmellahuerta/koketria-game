@@ -7288,7 +7288,8 @@ const connectWebSocket = () => {
 
     if (payload.type === 'special_pumori_orbit_start') {
       const ownerId = String(payload.data?.playerId || '');
-      const durationMs = Number(payload.data?.durationMs || 10_000);
+      const durationMsRaw = Number(payload.data?.durationMs || 10_000);
+      const durationMs = Math.max(500, durationMsRaw);
       const castTs = Number(payload.data?.ts);
       const originData = payload.data?.origin || {};
       if (!ownerId) {
@@ -7307,7 +7308,10 @@ const connectWebSocket = () => {
         );
       }
       const elapsedMs = Number.isFinite(castTs)
-        ? Math.max(0, getEstimatedServerNowMs() - castTs)
+        ? Math.min(
+          Math.max(0, getEstimatedServerNowMs() - castTs),
+          Math.max(0, durationMs - 120),
+        )
         : 0;
       startPumoriOrbitSpecialVisual(ownerId, durationMs, elapsedMs, fallbackCenter);
       return;

@@ -1945,6 +1945,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 entry.state.position = spawn;
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
+                apply_special_cooldown_on_respawn(
+                    &mut entry.combat,
+                    entry.character.as_deref(),
+                    now,
+                );
                 entry.state_history.clear();
                 entry.state_history.push_back(StateSnapshot {
                     ts: entry.state_ts,
@@ -3086,6 +3091,12 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     bot.state.position = spawn;
                     bot.state_ts = now_ms();
                     bot.combat = default_combat_state();
+                    let now_respawn = now_ms();
+                    apply_special_cooldown_on_respawn(
+                        &mut bot.combat,
+                        bot.character.as_deref(),
+                        now_respawn,
+                    );
                     bot.state_history.clear();
                     bot.state_history.push_back(StateSnapshot {
                         ts: bot.state_ts,
@@ -4810,6 +4821,24 @@ fn default_combat_state() -> CombatState {
         silent_cd_until_ms: 0,
         neoorphen_cd_until_ms: 0,
         pumori_cd_until_ms: 0,
+    }
+}
+
+fn apply_special_cooldown_on_respawn(
+    combat: &mut CombatState,
+    character: Option<&str>,
+    now_ms_v: i64,
+) {
+    combat.lunar_cd_until_ms = 0;
+    combat.silent_cd_until_ms = 0;
+    match normalize_character(character).as_str() {
+        "silentman" | "silenmant" => {
+            combat.silent_cd_until_ms = now_ms_v + SILENT_SPECIAL_COOLDOWN_MS;
+        }
+        "pumori" | "neoorphen" | "pezunalunar" | "pezuanalunar" => {
+            combat.lunar_cd_until_ms = now_ms_v + LUNAR_SPECIAL_COOLDOWN_MS;
+        }
+        _ => {}
     }
 }
 
