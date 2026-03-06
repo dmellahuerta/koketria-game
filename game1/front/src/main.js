@@ -3845,11 +3845,11 @@ const healthPickupRespawnMs = 60_000;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 18;
 const hitDamage = Math.ceil(maxHealth / 3);
-const unifiedMagicHitboxRadius = 0.30;
+const unifiedMagicHitboxRadius = 0.36;
 const defaultHitboxProfile = Object.freeze({
-  headshotRadius: 0.38,
+  headshotRadius: 0.42,
   headCenterOffsetY: -0.3,
-  bodyCapsuleRadius: 0.40,
+  bodyCapsuleRadius: 0.46,
   bodyCapsuleTopOffsetY: -0.52,
   bodyCapsuleBottomOffsetY: -1.85,
 });
@@ -6059,7 +6059,7 @@ const createHolyShotVisual = (start, end, options = {}) => {
     up: upAxis,
     distance,
     traveled: 0,
-    speed: 85,
+    speed: 110,
     hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 15) + (Math.random() * Math.PI * 6),
@@ -6131,7 +6131,7 @@ const createSacredHammerVisual = (start, end, options = {}) => {
     mesh: hammer,
     prevPos: start.clone(),
     pos: start.clone(),
-    velocity: dirNorm.clone().multiplyScalar(34).add(upAxis.clone().multiplyScalar(7.2)),
+    velocity: dirNorm.clone().multiplyScalar(44).add(upAxis.clone().multiplyScalar(8.2)),
     origin: start.clone(),
     right: rightAxis,
     up: upAxis,
@@ -6313,7 +6313,7 @@ const createPoisonGasVisual = (start, end, options = {}) => {
     up: upAxis,
     distance,
     traveled: 0,
-    speed: 60,
+    speed: 85,
     hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 9) + (Math.random() * Math.PI * 3),
@@ -6373,7 +6373,7 @@ const createLunarFireVisual = (start, end, options = {}) => {
     up: upAxis,
     distance,
     traveled: 0,
-    speed: 80,
+    speed: 105,
     hitRadius: unifiedMagicHitboxRadius,
     phase: Math.random() * Math.PI * 2,
     spin: (Math.PI * 10) + (Math.random() * Math.PI * 4),

@@ -180,11 +180,11 @@ const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
-const HEADSHOT_RADIUS: f64 = 0.38;
-const BODYSHOT_RADIUS: f64 = 0.40;
-const TORSO_RADIUS: f64 = 0.40;
-const TORSO_CAPSULE_RADIUS: f64 = 0.40;
-const LEGS_CAPSULE_RADIUS: f64 = 0.40;
+const HEADSHOT_RADIUS: f64 = 0.42;
+const BODYSHOT_RADIUS: f64 = 0.46;
+const TORSO_RADIUS: f64 = 0.46;
+const TORSO_CAPSULE_RADIUS: f64 = 0.46;
+const LEGS_CAPSULE_RADIUS: f64 = 0.46;
 const CAPSULE_SAMPLE_STEPS: usize = 7;
 // Player position is anchored around eye/camera height (y ~= 1.7).
 // Config tool offsets are feet-anchored, so these are converted to runtime anchor.
@@ -239,19 +239,19 @@ const LUNAR_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
 const NEOORPHEN_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
 const PUMORI_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
 const NORMAL_SHOCKWAVE_RADIUS: f64 = 2.1;
-const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.18;
+const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.10;
 const NORMAL_SHOCKWAVE_MAX_FACTOR: f64 = 0.9;
 const SILENT_SPECIAL_EXPLOSION_RADIUS: f64 = 2.0;
-const SILENT_SPECIAL_MIN_FACTOR: f64 = 0.22;
+const SILENT_SPECIAL_MIN_FACTOR: f64 = 0.12;
 const SILENT_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const LUNAR_STRIKE_AOE_RADIUS: f64 = 2.1;
-const LUNAR_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const LUNAR_SPECIAL_MIN_FACTOR: f64 = 0.16;
 const LUNAR_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 2.1;
-const NEO_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const NEO_SPECIAL_MIN_FACTOR: f64 = 0.16;
 const NEO_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
-const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 85.0;
+const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 110.0;
 const LUNAR_SPECIAL_IMPACT_DELAY_MS: u64 = 460;
 const NEOORPHEN_SPECIAL_IMPACT_DELAY_MS: u64 = 620;
 const LUNAR_SPECIAL_MIN_RADIUS: f64 = 6.0;
@@ -264,7 +264,7 @@ const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
 const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 1.4;
-const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.35;
+const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.20;
 const PUMORI_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
 const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
@@ -281,11 +281,11 @@ const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
 const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
 const RELOAD_REQ_MIN_INTERVAL_MS: i64 = 120;
 const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
-const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.022;
-const HITBOX_MOTION_INFLATE_MAX: f64 = 0.40;
-const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.09;
-const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.0009;
-const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.20;
+const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.024;
+const HITBOX_MOTION_INFLATE_MAX: f64 = 0.44;
+const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.11;
+const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.0010;
+const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.24;
 const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 50;
 const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 3.5;
 const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 130;
@@ -4070,8 +4070,23 @@ fn apply_radial_falloff_damage(
             splash_damage,
             ts,
         ) {
+            inner.send_to(
+                attacker_id,
+                json!({
+                  "type":"hit_confirm",
+                  "data": { "victimId": victim_id, "headshot": false }
+                }),
+            );
             winner = true;
             break;
+        } else {
+            inner.send_to(
+                attacker_id,
+                json!({
+                  "type":"hit_confirm",
+                  "data": { "victimId": victim_id, "headshot": false }
+                }),
+            );
         }
     }
     winner
@@ -4271,8 +4286,23 @@ async fn apply_delayed_area_wave_damage(
                     damage,
                     now_hit,
                 ) {
+                    inner.send_to(
+                        &caster_id,
+                        json!({
+                          "type":"hit_confirm",
+                          "data": { "victimId": victim_id, "headshot": false }
+                        }),
+                    );
                     winner = true;
                     break;
+                } else {
+                    inner.send_to(
+                        &caster_id,
+                        json!({
+                          "type":"hit_confirm",
+                          "data": { "victimId": victim_id, "headshot": false }
+                        }),
+                    );
                 }
             }
             if winner {
@@ -4924,10 +4954,10 @@ fn get_shot_interval_ms(character: Option<&str>) -> i64 {
 fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
     let key = normalize_character(character);
     match key.as_str() {
-        "silentman" | "silenmant" => 85.0,
-        "neoorphen" => 60.0,
-        "pezunalunar" | "pezuanalunar" => 80.0,
-        "pumori" => 36.0,
+        "silentman" | "silenmant" => 110.0,
+        "neoorphen" => 85.0,
+        "pezunalunar" | "pezuanalunar" => 105.0,
+        "pumori" => 44.0,
         _ => 120.0,
     }
 }
