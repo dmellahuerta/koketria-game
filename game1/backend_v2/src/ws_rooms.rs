@@ -304,7 +304,7 @@ const SHIELD_PICKUP_COUNT: usize = 30;
 const HEALTH_PICKUP_COUNT: usize = 20;
 const PICKUP_RESPAWN_MS: i64 = 60_000;
 const PICKUP_TAKE_RADIUS: f64 = 1.35;
-const PICKUP_CLIENT_POS_MAX_DRIFT: f64 = 3.0;
+const PICKUP_CLIENT_POS_MAX_DRIFT: f64 = 2.0;
 
 fn pickup_trace_enabled() -> bool {
     match std::env::var("WS_PICKUP_TRACE") {
