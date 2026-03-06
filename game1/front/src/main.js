@@ -7910,6 +7910,8 @@ const connectWebSocket = () => {
 
   ws.addEventListener('close', () => {
     connectionStatus.textContent = 'Desconectado. Reintentando...';
+    pendingShotAcks.clear();
+    remoteUpgradeEpoch += 1;
     clearLocalPredictionHistory();
     state.joinedRoom = null;
     state.showScoreboard = false;
@@ -9915,7 +9917,7 @@ const shoot = () => {
   pendingShotAcks.set(shotId, performance.now());
   startShootSound();
 
-  sendWs({
+  const shootPayload = {
     type: 'player_shoot',
     shotId,
     origin: { x: origin.x, y: origin.y, z: origin.z },
@@ -9925,8 +9927,11 @@ const shoot = () => {
       z: shotDirection.z,
     },
     distance,
-    shotTs: Math.round(getEstimatedServerNowMs()),
-  });
+  };
+  if (hasServerTimeSync) {
+    shootPayload.shotTs = Math.round(getEstimatedServerNowMs());
+  }
+  sendWs(shootPayload);
 
   muzzleFlash.intensity = 2.3;
   recoilKick = Math.min(1.3, recoilKick + 0.52 + (moveFactor * 0.14) + (isJumping ? 0.18 : 0));

@@ -105,6 +105,8 @@ struct ClientSession {
     last_join_room_req_at_ms: i64,
     last_leave_room_req_at_ms: i64,
     last_ping_req_at_ms: i64,
+    global_msg_window_start_ms: i64,
+    global_msg_count_in_window: u32,
     is_bot: bool,
     bot_orbit_phase: f64,
     bot_orbit_radius: f64,
@@ -311,6 +313,8 @@ const LIST_ROOMS_REQ_MIN_INTERVAL_MS: i64 = 200;
 const JOIN_ROOM_REQ_MIN_INTERVAL_MS: i64 = 250;
 const LEAVE_ROOM_REQ_MIN_INTERVAL_MS: i64 = 200;
 const PING_REQ_MIN_INTERVAL_MS: i64 = 80;
+const GLOBAL_MSG_RATE_WINDOW_MS: i64 = 1_000;
+const GLOBAL_MSG_RATE_MAX_PER_WINDOW: u32 = 100;
 const CLIENT_SHOT_TS_MAX_AGE_MS: i64 = 260;
 const CLIENT_SHOT_TS_FUTURE_LEEWAY_MS: i64 = 40;
 const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.024;
@@ -447,6 +451,15 @@ fn compute_rewind_timestamp(
         }
         None => clamp_i64(fallback, rewind_floor, now_ms_v),
     }
+}
+
+fn sanitize_client_shot_ts(now_ms_v: i64, client_shot_ts: Option<i64>) -> Option<i64> {
+    let ts = client_shot_ts?;
+    let delta = (ts - now_ms_v).abs();
+    if delta > CLIENT_SHOT_TS_MAX_AGE_MS {
+        return None;
+    }
+    Some(ts)
 }
 
 #[derive(Clone)]
@@ -815,6 +828,8 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 last_join_room_req_at_ms: 0,
                 last_leave_room_req_at_ms: 0,
                 last_ping_req_at_ms: 0,
+                global_msg_window_start_ms: 0,
+                global_msg_count_in_window: 0,
                 is_bot: false,
                 bot_orbit_phase: 0.0,
                 bot_orbit_radius: 0.0,
@@ -1479,7 +1494,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             };
             let maybe_resources_payload: Option<Value>;
             let mut shot_blocked = false;
-            let client_shot_ts = message.get("shotTs").and_then(Value::as_i64);
+            let client_shot_ts =
+                sanitize_client_shot_ts(now, message.get("shotTs").and_then(Value::as_i64));
             let client_shot_id = message.get("shotId").and_then(Value::as_u64);
             let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
             {
@@ -2046,6 +2062,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
+                if entry.combat.alive {
+                    return;
+                }
                 entry.state = default_player_state();
                 entry.state.position = spawn;
                 entry.state_ts = now_ms();
@@ -2747,6 +2766,14 @@ fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &st
     let Some(client) = inner.clients.get_mut(client_id) else {
         return false;
     };
+    if now - client.global_msg_window_start_ms >= GLOBAL_MSG_RATE_WINDOW_MS {
+        client.global_msg_window_start_ms = now;
+        client.global_msg_count_in_window = 0;
+    }
+    client.global_msg_count_in_window = client.global_msg_count_in_window.saturating_add(1);
+    if client.global_msg_count_in_window > GLOBAL_MSG_RATE_MAX_PER_WINDOW {
+        return false;
+    }
     match event_type {
         "player_shoot" => {
             if now - client.last_shoot_req_at_ms < SHOOT_REQ_MIN_INTERVAL_MS {
@@ -3051,6 +3078,8 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             last_join_room_req_at_ms: 0,
             last_leave_room_req_at_ms: 0,
             last_ping_req_at_ms: 0,
+            global_msg_window_start_ms: 0,
+            global_msg_count_in_window: 0,
             is_bot: true,
             bot_orbit_phase,
             bot_orbit_radius,
