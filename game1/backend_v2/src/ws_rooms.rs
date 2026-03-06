@@ -4992,10 +4992,10 @@ fn get_shot_interval_ms(character: Option<&str>) -> i64 {
 fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
     let key = normalize_character(character);
     match key.as_str() {
-        "silentman" | "silenmant" => 120.0,
-        "neoorphen" => 95.0,
-        "pezunalunar" | "pezuanalunar" => 115.0,
-        "pumori" => 50.0,
+        "silentman" | "silenmant" => 240.0,
+        "neoorphen" => 190.0,
+        "pezunalunar" | "pezuanalunar" => 230.0,
+        "pumori" => 100.0,
         _ => 120.0,
     }
 }
