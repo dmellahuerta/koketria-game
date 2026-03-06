@@ -3727,7 +3727,9 @@ fn apply_hit_and_emit(
         if !victim.combat.alive {
             return false;
         }
-        if victim.combat.shield > 0.0 {
+        if headshot {
+            victim.combat.health = 0.0;
+        } else if victim.combat.shield > 0.0 {
             let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
             victim.combat.shield = (victim.combat.shield - SHIELD_HIT_COST_PER_HIT).max(0.0);
             victim.combat.health = (victim.combat.health - reduced).max(0.0);

@@ -2837,6 +2837,7 @@ const bootLobbyLoader = async () => {
     + 1
     + (charList.length * 3)
     + 1
+    + 1
     + battleThemeIds.length
     + 2
     + 3
@@ -2898,6 +2899,11 @@ const bootLobbyLoader = async () => {
     markWarning(`audio: ${defaultAttackSoundUrl}`);
   }
   tick('Audio base cargado');
+  const headshotSrc = await resolveHeadshotSoundUrl();
+  if (!headshotSrc || !(await preloadAudioSource(headshotSrc, 6000))) {
+    markWarning('audio: headshot');
+  }
+  tick('Audio headshot cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3099,6 +3105,11 @@ const attackSoundResolveRetryDelayMs = 15_000;
 const hitSoundUrlCache = new Map();
 const hitSoundRetryAtMs = new Map();
 const hitSoundResolveRetryDelayMs = 15_000;
+const headshotSoundCandidates = [
+  '/sound_effects/headshot.mp3',
+  '/sound_effecs/headshot.mp3',
+];
+let headshotSoundUrl = '';
 let localAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
@@ -3463,6 +3474,21 @@ const preloadCharacterHitSound = async (character) => {
   return preloadAudioSource(src, 10000);
 };
 
+const resolveHeadshotSoundUrl = async () => {
+  if (headshotSoundUrl) {
+    return headshotSoundUrl;
+  }
+  for (let i = 0; i < headshotSoundCandidates.length; i += 1) {
+    const candidate = headshotSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      headshotSoundUrl = candidate;
+      return candidate;
+    }
+  }
+  return '';
+};
+
 const applyAudioSource = (audio, src) => {
   const current = audio.getAttribute('data-attack-src') || '';
   if (current === src) {
@@ -3573,6 +3599,21 @@ const playHitSound = async (characterId, headshot = false) => {
   const maybePromise = voice.play();
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => cleanup());
+  }
+};
+
+const playHeadshotSound = async () => {
+  const src = await resolveHeadshotSoundUrl();
+  if (!src) {
+    return;
+  }
+  const voice = new Audio(src);
+  voice.preload = 'auto';
+  voice.loop = false;
+  voice.volume = Math.max(0.02, Math.min(1, 0.52 * settings.masterVolume * settings.sfxVolume));
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {});
   }
 };
 
@@ -7344,6 +7385,9 @@ const connectWebSocket = () => {
       const hitterCharacter = state.self?.character || activeCharacter;
       if (hitterCharacter) {
         void playHitSound(hitterCharacter, headshot);
+      }
+      if (headshot) {
+        void playHeadshotSound();
       }
       return;
     }
