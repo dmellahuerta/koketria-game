@@ -3804,6 +3804,7 @@ let isLocked = false;
 let yaw = 0;
 let pitch = 0;
 const speed = 9;
+const backwardSpeedFactor = 0.5;
 const moveAcceleration = 38;
 const moveDeceleration = 30;
 const airControlFactor = 0.45;
@@ -9920,6 +9921,10 @@ const updateMovement = (delta) => {
   const hasInput = move.lengthSq() > 0;
   if (hasInput) {
     move.normalize().multiplyScalar(speed);
+    const backwardOnly = keys.KeyS && !keys.KeyW;
+    if (backwardOnly) {
+      move.multiplyScalar(backwardSpeedFactor);
+    }
     const strafeOnly = (keys.KeyA || keys.KeyD) && !(keys.KeyW || keys.KeyS);
     if (strafeOnly) {
       move.multiplyScalar(strafeOnlySpeedFactor);

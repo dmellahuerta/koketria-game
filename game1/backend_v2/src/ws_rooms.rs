@@ -219,6 +219,7 @@ const MAP_PLAYABLE_HALF_EXTENT: f64 = 150.0;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
 const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
+const PLAYER_BACKWARD_SPEED_FACTOR: f64 = 0.5;
 const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
 const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
@@ -2518,6 +2519,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     clamp(px, -200.0, 200.0),
                     clamp(pz, -200.0, 200.0),
                     dt_ms,
+                    yaw,
                 );
                 resolve_player_position(
                     &inner,
@@ -5083,6 +5085,7 @@ fn clamp_move_step(
     desired_x: f64,
     desired_z: f64,
     dt_ms: i64,
+    yaw: f64,
 ) -> (f64, f64) {
     let dx = desired_x - prev_x;
     let dz = desired_z - prev_z;
@@ -5091,7 +5094,16 @@ fn clamp_move_step(
         return (desired_x, desired_z);
     }
     let dt_s = (clamp_i64(dt_ms, 1, PLAYER_MAX_MOVE_DT_MS) as f64) / 1000.0;
-    let max_step = (PLAYER_MAX_SPEED_UNITS_PER_SECOND * dt_s) + PLAYER_MOVE_TOLERANCE_UNITS;
+    let forward_x = -yaw.sin();
+    let forward_z = -yaw.cos();
+    let alignment = ((dx * forward_x) + (dz * forward_z)) / step_len.max(1e-8);
+    let directional_factor = if alignment < -0.05 {
+        PLAYER_BACKWARD_SPEED_FACTOR
+    } else {
+        1.0
+    };
+    let max_step = (PLAYER_MAX_SPEED_UNITS_PER_SECOND * directional_factor * dt_s)
+        + PLAYER_MOVE_TOLERANCE_UNITS;
     if step_len <= max_step {
         return (desired_x, desired_z);
     }
