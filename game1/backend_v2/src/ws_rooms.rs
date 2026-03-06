@@ -8,6 +8,7 @@ use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 use tracing::{debug, info, warn};
 
@@ -97,7 +98,8 @@ struct ClientSession {
     bot_orbit_radius: f64,
     bot_orbit_speed: f64,
     bot_move_speed: f64,
-    tx: mpsc::UnboundedSender<String>,
+    tx_critical: mpsc::UnboundedSender<String>,
+    tx_regular: mpsc::Sender<String>,
 }
 
 #[derive(Clone)]
@@ -273,6 +275,7 @@ const PUMORI_HAMMER_BODY_RADIUS: f64 = 1.9;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
 const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 200;
+const CLIENT_REGULAR_QUEUE_CAPACITY: usize = 256;
 const LATENCY_SMOOTH_ALPHA: f64 = 0.45;
 const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.67;
 const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
@@ -469,7 +472,32 @@ impl RoomMeta {
     }
 }
 
+fn is_regular_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "game_state"
+            | "player_move"
+            | "ping"
+            | "latency_update"
+            | "pickup_state"
+            | "player_resources"
+            | "player_resources_public"
+    )
+}
+
 impl Inner {
+    fn enqueue_client_message(client: &ClientSession, event_type: Option<&str>, data: String) {
+        if event_type.is_some_and(is_regular_event_type) {
+            match client.tx_regular.try_send(data) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Closed(_)) => {}
+            }
+            return;
+        }
+        let _ = client.tx_critical.send(data);
+    }
+
     fn ensure_room_meta(&mut self, room_id: &str) {
         if self.room_meta.contains_key(room_id) {
             return;
@@ -485,7 +513,11 @@ impl Inner {
 
     fn send_to(&self, client_id: &str, payload: Value) {
         if let Some(client) = self.clients.get(client_id) {
-            let _ = client.tx.send(payload.to_string());
+            let event_type = payload
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Self::enqueue_client_message(client, event_type.as_deref(), payload.to_string());
         }
     }
 
@@ -493,13 +525,17 @@ impl Inner {
         let Some(room) = self.rooms.rooms.get(room_id) else {
             return;
         };
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let data = payload.to_string();
         for player_id in &room.players {
             if exclude_client_id == Some(player_id.as_str()) {
                 continue;
             }
             if let Some(client) = self.clients.get(player_id) {
-                let _ = client.tx.send(data.clone());
+                Self::enqueue_client_message(client, event_type.as_deref(), data.clone());
             }
         }
     }
@@ -534,12 +570,16 @@ impl Inner {
     }
 
     fn broadcast_lobby_waiting_clients(&self, payload: Value) {
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let text = payload.to_string();
         for client in self.clients.values() {
             if client.is_bot || client.room_id.is_some() {
                 continue;
             }
-            let _ = client.tx.send(text.clone());
+            Self::enqueue_client_message(client, event_type.as_deref(), text.clone());
         }
     }
 
@@ -665,7 +705,7 @@ impl Inner {
         });
         let text = payload.to_string();
         for client in self.clients.values() {
-            let _ = client.tx.send(text.clone());
+            Self::enqueue_client_message(client, Some("rooms_list"), text.clone());
         }
     }
 
@@ -682,10 +722,21 @@ impl Inner {
 
 pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let (out_critical_tx, mut out_critical_rx) = mpsc::unbounded_channel::<String>();
+    let (out_regular_tx, mut out_regular_rx) =
+        mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
 
     let write_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
+        loop {
+            let next_msg = tokio::select! {
+                biased;
+                Some(msg) = out_critical_rx.recv() => Some(msg),
+                Some(msg) = out_regular_rx.recv() => Some(msg),
+                else => None,
+            };
+            let Some(msg) = next_msg else {
+                break;
+            };
             if ws_tx.send(AxumWsMessage::Text(msg.into())).await.is_err() {
                 break;
             }
@@ -728,7 +779,8 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 bot_orbit_radius: 0.0,
                 bot_orbit_speed: 0.0,
                 bot_move_speed: 0.0,
-                tx: out_tx.clone(),
+                tx_critical: out_critical_tx.clone(),
+                tx_regular: out_regular_tx.clone(),
             },
         );
         let connected_payload = json!({
@@ -751,7 +803,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         (client_id, connected_payload)
     };
     info!("[ws_rooms] connected client_id={}", client_id);
-    let _ = out_tx.send(connected_payload.to_string());
+    let _ = out_critical_tx.send(connected_payload.to_string());
     {
         let inner = state.inner.lock().await;
         inner.broadcast_lobby_presence();
@@ -780,10 +832,14 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 "serverTs": now
               }
             });
-            let _ = entry.tx.send(payload.to_string());
+            Inner::enqueue_client_message(entry, Some("ping"), payload.to_string());
             let resources_payload =
                 player_resources_payload(&entry.combat, entry.character.as_deref(), now);
-            let _ = entry.tx.send(resources_payload.to_string());
+            Inner::enqueue_client_message(
+                entry,
+                Some("player_resources"),
+                resources_payload.to_string(),
+            );
             let room_id_for_public = entry.room_id.clone();
             let public_resources = Some((
                 entry.combat.health.round() as i64,
@@ -834,7 +890,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         let parsed = match serde_json::from_str::<Value>(&text) {
             Ok(v) => v,
             Err(_) => {
-                let _ = out_tx.send(
+                let _ = out_critical_tx.send(
                     json!({
                       "type": "error",
                       "ok": false,
@@ -2858,9 +2914,20 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
     let bot_orbit_speed = 0.55 + (rng.next_f64() * 0.75);
     let bot_move_speed = 6.8 + (rng.next_f64() * 3.6);
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx_critical, mut rx_critical) = mpsc::unbounded_channel::<String>();
+    let (tx_regular, mut rx_regular) = mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
     tokio::spawn(async move {
-        while rx.recv().await.is_some() {}
+        loop {
+            let next_msg = tokio::select! {
+                biased;
+                Some(msg) = rx_critical.recv() => Some(msg),
+                Some(msg) = rx_regular.recv() => Some(msg),
+                else => None,
+            };
+            if next_msg.is_none() {
+                break;
+            }
+        }
     });
 
     let initial_state = default_player_state();
@@ -2894,7 +2961,8 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             bot_orbit_radius,
             bot_orbit_speed,
             bot_move_speed,
-            tx,
+            tx_critical,
+            tx_regular,
         },
     );
     join_room_internal(inner, &bot_id, room_id);
