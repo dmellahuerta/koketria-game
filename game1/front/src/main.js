@@ -3981,7 +3981,7 @@ const healthPickupRespawnMs = 60_000;
 const healthPickupRegenAmount = maxHealth / 3;
 const healthRegenPerSecond = 10;
 const hitDamage = Math.ceil(maxHealth / 3);
-const unifiedMagicHitboxRadius = 1.00;
+const unifiedMagicHitboxRadius = 0.50;
 const defaultHitboxProfile = Object.freeze({
   headshotRadius: 0.42,
   headCenterOffsetY: -0.3,
