@@ -7,7 +7,7 @@ use std::{
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{RwLock, mpsc};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 use tracing::{debug, info, warn};
@@ -17,7 +17,7 @@ use crate::rooms::{
 };
 
 pub struct WsRoomsState {
-    inner: Mutex<Inner>,
+    inner: RwLock<Inner>,
 }
 
 struct Inner {
@@ -157,7 +157,7 @@ impl WsRoomsState {
         let mut room_meta = HashMap::new();
         room_meta.insert("main".to_string(), RoomMeta::random_for("main"));
         Arc::new(Self {
-            inner: Mutex::new(Inner {
+            inner: RwLock::new(Inner {
                 rooms,
                 clients: HashMap::new(),
                 room_meta,
@@ -748,7 +748,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     });
 
     let (client_id, connected_payload) = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         inner.client_seq += 1;
         let client_id = format!("p-{}", inner.client_seq);
         let name = format!("Player-{:04}", inner.client_seq % 10000);
@@ -809,7 +809,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     info!("[ws_rooms] connected client_id={}", client_id);
     let _ = out_critical_tx.send(connected_payload.to_string());
     {
-        let inner = state.inner.lock().await;
+        let inner = state.inner.read().await;
         inner.broadcast_lobby_presence();
     }
     let ping_state = Arc::clone(&state);
@@ -819,7 +819,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let mut inner = ping_state.inner.lock().await;
+            let mut inner = ping_state.inner.write().await;
             let now = now_ms();
             let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
                 break;
@@ -915,7 +915,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     }
 
     let maybe_versus_countdown = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let countdown = leave_room_internal(&mut inner, &client_id, false);
         inner.clients.remove(&client_id);
         inner.broadcast_lobby_presence();
@@ -935,7 +935,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
 
 async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Value) {
     let event_type = message.get("type").and_then(Value::as_str).unwrap_or("");
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
 
     let Some(client) = inner.clients.get(client_id).cloned() else {
         return;
@@ -3015,7 +3015,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
     loop {
         tokio::select! {
             _ = move_ticker.tick() => {
-                let mut inner = state.inner.lock().await;
+                let mut inner = state.inner.write().await;
                 let (room_id, payload) = {
                     let Some(bot) = inner.clients.get(&bot_id) else {
                         break;
@@ -3101,7 +3101,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 inner.broadcast_room(&room_id, payload, Some(&bot_id));
             }
             _ = shoot_ticker.tick() => {
-                let mut inner = state.inner.lock().await;
+                let mut inner = state.inner.write().await;
                 let room_id = {
                     let Some(bot) = inner.clients.get(&bot_id) else {
                         break;
@@ -3117,7 +3117,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 bot_apply_authoritative_shot(&mut inner, &state, &room_id, &bot_id);
             }
             _ = special_ticker.tick() => {
-                let mut inner = state.inner.lock().await;
+                let mut inner = state.inner.write().await;
                 let room_id = {
                     let Some(bot) = inner.clients.get(&bot_id) else {
                         break;
@@ -3136,7 +3136,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                 bot_try_cast_special(&mut inner, &state, &room_id, &bot_id);
             }
             _ = respawn_ticker.tick() => {
-                let mut inner = state.inner.lock().await;
+                let mut inner = state.inner.write().await;
                 let can_respawn = {
                     let Some(bot) = inner.clients.get(&bot_id) else {
                         break;
@@ -3216,7 +3216,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
     }
     // Cleanup de sesión del bot cuando el loop termina (por cualquier break).
     // Evita que el ClientSession quede zombie en inner.clients.
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
     if inner.clients.contains_key(&bot_id) {
         let _ = leave_room_internal(&mut inner, &bot_id, false);
         inner.clients.remove(&bot_id);
@@ -3871,7 +3871,7 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
         ticker.tick().await;
 
         let winner = {
-            let mut inner = state.inner.lock().await;
+            let mut inner = state.inner.write().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -4046,7 +4046,7 @@ async fn apply_delayed_authoritative_hit(
     sleep(Duration::from_millis(impact_delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -4259,7 +4259,7 @@ async fn apply_delayed_normal_shockwave_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -4303,7 +4303,7 @@ async fn apply_delayed_radial_falloff_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -4352,7 +4352,7 @@ async fn apply_delayed_area_wave_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -4493,7 +4493,7 @@ async fn run_lunar_rain_special(
         ticker.tick().await;
 
         let impacts = {
-            let inner = state.inner.lock().await;
+            let inner = state.inner.read().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -4570,7 +4570,7 @@ async fn run_neoorphen_meteor_special(
         ticker.tick().await;
 
         let impacts = {
-            let inner = state.inner.lock().await;
+            let inner = state.inner.read().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -4636,7 +4636,7 @@ async fn run_neoorphen_meteor_special(
 async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
     sleep(Duration::from_secs(seconds)).await;
 
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
     let Some(status) = inner.rooms.rooms.get(&room_id).map(|r| r.status) else {
         return;
     };
@@ -4769,7 +4769,7 @@ async fn start_versus_room_deletion_countdown(
     winner_team: Team,
 ) {
     {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -4844,7 +4844,7 @@ async fn start_versus_room_deletion_countdown(
 
     sleep(Duration::from_secs(ROUND_RESET_SECONDS as u64)).await;
 
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
     let Some(room) = inner.rooms.rooms.get(&room_id) else {
         return;
     };
