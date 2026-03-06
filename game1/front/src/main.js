@@ -784,11 +784,12 @@ const renderKillFeed = () => {
   killFeed.innerHTML = killFeedMessages.map((entry) => {
     const killerSelf = entry.killerId && state.self && entry.killerId === state.self.id ? ' (Tú)' : '';
     const victimSelf = entry.victimId && state.self && entry.victimId === state.self.id ? ' (Tú)' : '';
-    return `<p><strong>${entry.killerName}${killerSelf}</strong> eliminó a <strong>${entry.victimName}${victimSelf}</strong></p>`;
+    const headshotTag = entry.headshot ? ' <em>[HEADSHOT]</em>' : '';
+    return `<p><strong>${entry.killerName}${killerSelf}</strong> eliminó a <strong>${entry.victimName}${victimSelf}</strong>${headshotTag}</p>`;
   }).join('');
 };
 
-const pushKillFeedMessage = (killerId, victimId) => {
+const pushKillFeedMessage = (killerId, victimId, headshot = false) => {
   const normalizedKillerId = String(killerId || '').trim();
   const normalizedVictimId = String(victimId || '').trim();
   if (!normalizedVictimId) {
@@ -801,6 +802,7 @@ const pushKillFeedMessage = (killerId, victimId) => {
     victimId: normalizedVictimId,
     killerName,
     victimName,
+    headshot: Boolean(headshot),
     ts: Date.now(),
   });
   if (killFeedMessages.length > maxKillFeedMessages) {
@@ -7693,7 +7695,7 @@ const connectWebSocket = () => {
       if (!playerId) {
         return;
       }
-      pushKillFeedMessage(payload.data?.killerId, playerId);
+      pushKillFeedMessage(payload.data?.killerId, playerId, payload.data?.headshot);
       clearPumoriOrbitSpecialByOwner(playerId);
       if (state.self && payload.data?.killerId === state.self.id && playerId !== state.self.id) {
         triggerKillConfirm();
