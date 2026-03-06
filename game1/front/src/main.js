@@ -2879,6 +2879,7 @@ const bootLobbyLoader = async () => {
     + (charList.length * 3)
     + 1
     + 1
+    + 1
     + battleThemeIds.length
     + 2
     + 3
@@ -2945,6 +2946,11 @@ const bootLobbyLoader = async () => {
     markWarning('audio: headshot');
   }
   tick('Audio headshot cargado');
+  const killConfirmSrc = await resolveKillConfirmSoundUrl();
+  if (!killConfirmSrc || !(await preloadAudioSource(killConfirmSrc, 6000))) {
+    markWarning('audio: kill_confirm');
+  }
+  tick('Audio kill confirm cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3151,6 +3157,13 @@ const headshotSoundCandidates = [
   '/sound_effecs/headshot.mp3',
 ];
 let headshotSoundUrl = '';
+const killConfirmSoundCandidates = [
+  '/sound_effects/kill_confirm.mp3',
+  '/sound_effects/kill_confirmation.mp3',
+  '/sound_effecs/kill_confirm.mp3',
+  '/sound_effecs/kill_confirmation.mp3',
+];
+let killConfirmSoundUrl = '';
 let localAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
@@ -3530,6 +3543,21 @@ const resolveHeadshotSoundUrl = async () => {
   return '';
 };
 
+const resolveKillConfirmSoundUrl = async () => {
+  if (killConfirmSoundUrl) {
+    return killConfirmSoundUrl;
+  }
+  for (let i = 0; i < killConfirmSoundCandidates.length; i += 1) {
+    const candidate = killConfirmSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      killConfirmSoundUrl = candidate;
+      return candidate;
+    }
+  }
+  return '';
+};
+
 const applyAudioSource = (audio, src) => {
   const current = audio.getAttribute('data-attack-src') || '';
   if (current === src) {
@@ -3652,6 +3680,21 @@ const playHeadshotSound = async () => {
   voice.preload = 'auto';
   voice.loop = false;
   voice.volume = Math.max(0.02, Math.min(1, 0.52 * settings.masterVolume * settings.sfxVolume));
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {});
+  }
+};
+
+const playKillConfirmSound = async () => {
+  const src = await resolveKillConfirmSoundUrl();
+  if (!src) {
+    return;
+  }
+  const voice = new Audio(src);
+  voice.preload = 'auto';
+  voice.loop = false;
+  voice.volume = Math.max(0.02, Math.min(1, 0.55 * settings.masterVolume * settings.sfxVolume));
   const maybePromise = voice.play();
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => {});
@@ -5049,6 +5092,7 @@ const triggerHitConfirm = (headshot = false) => {
 
 const triggerKillConfirm = () => {
   crosshairKillUntil = performance.now() + 320;
+  void playKillConfirmSound();
 };
 
 const triggerDamageIndicator = (fromPlayerId) => {
