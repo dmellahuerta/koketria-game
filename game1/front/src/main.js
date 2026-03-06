@@ -7282,8 +7282,6 @@ const connectWebSocket = () => {
           createNormalShotCollisionVisual(origin, visualEnd, shooterPalette.tracer);
         } else {
           createTracer(origin, visualEnd, shooterPalette.tracer);
-          createImpact(visualEnd, shooterPalette.impactB);
-          createHitWave(visualEnd, shooterPalette.impactA);
         }
       }
       registerRemoteShootSound(origin, shooterCharacter);
@@ -9846,8 +9844,6 @@ const shoot = () => {
       createNormalShotCollisionVisual(origin, hitPoint, myPalette.tracer);
     } else {
       createTracer(origin, hitPoint, myPalette.tracer);
-      createImpact(hitPoint, myPalette.impactB);
-      createHitWave(hitPoint, myPalette.impactA);
     }
   }
 

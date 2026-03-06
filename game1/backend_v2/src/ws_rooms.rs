@@ -234,7 +234,7 @@ const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
 const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 9.0;
 const PLAYER_BACKWARD_SPEED_FACTOR: f64 = 0.5;
 const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
-const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
+const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.22;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
 const GROUND_HIT_Y: f64 = 0.2;
 const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
@@ -242,7 +242,8 @@ const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
 const MAX_ORIGIN_DRIFT: f64 = 2.5;
 const MAX_AIM_ANGLE_DELTA_DEG: f64 = 55.0;
-const WALL_HIT_PLAYER_TOLERANCE_UNITS: f64 = 0.45;
+const WALL_HIT_PLAYER_TOLERANCE_UNITS: f64 = 0.16;
+const JUMPING_MIN_HEIGHT_Y: f64 = SPAWN_BASE_Y + 0.08;
 const LAG_COMP_BULLET_MS: i64 = 85;
 const LAG_COMP_MAGIC_MS: i64 = 105;
 const LAG_COMP_RTT_FACTOR: f64 = 0.50;
@@ -2574,7 +2575,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
 
-            let jumping = message
+            let requested_jumping = message
                 .get("jumping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
@@ -2607,10 +2608,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 (clamp(px, -200.0, 200.0), clamp(pz, -200.0, 200.0))
             };
 
+            let next_y = clamp(py, 0.5, 4.0);
+            let jumping = requested_jumping && next_y > JUMPING_MIN_HEIGHT_Y;
+
             let next_state = PlayerState {
                 position: Vec3 {
                     x: next_x,
-                    y: clamp(py, 0.5, 4.0),
+                    y: next_y,
                     z: next_z,
                 },
                 rotation: Rotation {
