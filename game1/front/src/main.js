@@ -3952,16 +3952,16 @@ const debugHitboxColors = {
   head: 0xff4d4d,
   body: 0x4de2ff,
 };
-const remoteInterpolationBaseMs = 155;
-const remoteInterpolationMinMs = 115;
-const remoteInterpolationMaxMs = 250;
-const remoteInterpolationLatencyFactor = 0.22;
-const remoteInterpolationCorrectionBoostMs = 48;
-const remoteExtrapolationBaseMs = 92;
-const remoteExtrapolationMinMs = 55;
-const remoteExtrapolationMaxMs = 145;
-const remoteExtrapolationLatencyFactor = 0.12;
-const remoteExtrapolationCorrectionCutMs = 28;
+const remoteInterpolationBaseMs = 120;
+const remoteInterpolationMinMs = 85;
+const remoteInterpolationMaxMs = 215;
+const remoteInterpolationLatencyFactor = 0.16;
+const remoteInterpolationCorrectionBoostMs = 44;
+const remoteExtrapolationBaseMs = 74;
+const remoteExtrapolationMinMs = 45;
+const remoteExtrapolationMaxMs = 130;
+const remoteExtrapolationLatencyFactor = 0.10;
+const remoteExtrapolationCorrectionCutMs = 24;
 const remoteExtrapolationMaxSpeed = 10.8;
 const remoteExtrapolationDamping = 0.72;
 const remoteNetSmoothingPerSecond = 2.4;
