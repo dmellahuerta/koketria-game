@@ -226,8 +226,9 @@ const GROUND_HIT_Y: f64 = 0.2;
 const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
 const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
-const MAX_ORIGIN_DRIFT: f64 = 2.8;
+const MAX_ORIGIN_DRIFT: f64 = 4.5;
 const MAX_AIM_ANGLE_DELTA_DEG: f64 = 95.0;
+const WALL_HIT_PLAYER_TOLERANCE_UNITS: f64 = 0.45;
 const LAG_COMP_BULLET_MS: i64 = 130;
 const LAG_COMP_MAGIC_MS: i64 = 160;
 const LAG_COMP_RTT_FACTOR: f64 = 0.40;
@@ -1527,6 +1528,22 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 effective_distance,
                 rewind_ts,
             );
+            let hit = match hit {
+                Some((victim_id, headshot, hit_dist)) => {
+                    let wall_blocked = wall_hit_distance
+                        .map(|w| hit_dist > (w + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                        .unwrap_or(false);
+                    let ground_blocked = ground_hit_distance
+                        .map(|g| hit_dist > (g + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                        .unwrap_or(false);
+                    if wall_blocked || ground_blocked {
+                        None
+                    } else {
+                        Some((victim_id, headshot, hit_dist))
+                    }
+                }
+                None => None,
+            };
             if let Some((victim_id, headshot, hit_dist)) = hit {
                 if is_mana {
                     let projectile_speed =
@@ -3193,6 +3210,22 @@ fn bot_apply_authoritative_shot(
         effective_distance,
         rewind_ts,
     );
+    let hit = match hit {
+        Some((victim_id, headshot, hit_dist)) => {
+            let wall_blocked = wall_hit_distance
+                .map(|w| hit_dist > (w + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                .unwrap_or(false);
+            let ground_blocked = ground_hit_distance
+                .map(|g| hit_dist > (g + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                .unwrap_or(false);
+            if wall_blocked || ground_blocked {
+                None
+            } else {
+                Some((victim_id, headshot, hit_dist))
+            }
+        }
+        None => None,
+    };
     if let Some((victim_id, headshot, hit_dist)) = hit {
         let projectile_speed =
             projectile_speed_units_per_second(character_for_shot.as_deref());
