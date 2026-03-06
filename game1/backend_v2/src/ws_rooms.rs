@@ -697,7 +697,7 @@ impl Inner {
                 players.push(player);
             }
         }
-        Some(json!({ "room": room_json, "players": players }))
+        Some(json!({ "room": room_json, "players": players, "serverTs": now_ms() }))
     }
 
     fn public_rooms_json(&self) -> Value {

@@ -7004,6 +7004,10 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'room_joined') {
+      if (!hasServerTimeSync && Number.isFinite(Number(payload.data?.serverTs))) {
+        serverTimeOffsetMs = Number(payload.data.serverTs) - Date.now();
+        hasServerTimeSync = true;
+      }
       seedServerClockFromRoomState(payload.data);
       clearLocalPredictionHistory();
       applyRoomState(payload.data, { applyOwnState: true });
