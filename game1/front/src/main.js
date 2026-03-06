@@ -2145,6 +2145,47 @@ const localAvatar = {
   funnyUntil: 0,
   team: null,
   teamOutline: null,
+  visualOpacity: 1,
+};
+const spawnProtectionVisualOpacity = 0.46;
+
+const applyAvatarVisualOpacity = (root, opacity) => {
+  if (!root) {
+    return;
+  }
+  const clamped = Math.max(0.08, Math.min(1, Number(opacity) || 1));
+  root.traverse((node) => {
+    if (!node?.isMesh || !node.material) {
+      return;
+    }
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    for (let i = 0; i < materials.length; i += 1) {
+      const mat = materials[i];
+      if (!mat) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      if (typeof mat.opacity !== 'number') {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      if (!mat.userData) {
+        mat.userData = {};
+      }
+      if (!Number.isFinite(Number(mat.userData.baseOpacity))) {
+        mat.userData.baseOpacity = mat.opacity;
+      }
+      if (typeof mat.userData.baseTransparent !== 'boolean') {
+        mat.userData.baseTransparent = Boolean(mat.transparent);
+      }
+      const baseOpacity = Math.max(0.02, Math.min(1, Number(mat.userData.baseOpacity)));
+      const nextOpacity = baseOpacity * clamped;
+      mat.opacity = nextOpacity;
+      mat.transparent = Boolean(mat.userData.baseTransparent) || nextOpacity < 0.999;
+      mat.depthWrite = nextOpacity >= 0.999;
+      mat.needsUpdate = true;
+    }
+  });
 };
 
 const getCharacterAssetKey = (characterId) => {
@@ -3963,6 +4004,7 @@ let respawnEndsAt = 0;
 let respawnSecondsLeft = getRespawnDurationSeconds();
 let respawnRequestPending = false;
 let lastRespawnRequestAt = 0;
+let localSpawnProtectedUntilMs = 0;
 const respawnRequestRetryMs = 700;
 let isMatchEnding = false;
 let matchWinnerEndsAt = 0;
@@ -5143,6 +5185,7 @@ const resetCombatStats = () => {
   isRespawning = false;
   respawnRequestPending = false;
   lastRespawnRequestAt = 0;
+  localSpawnProtectedUntilMs = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
   respawnEndsAt = 0;
   hideWinnerOverlay();
@@ -5453,6 +5496,7 @@ const disposeLocalAvatar = () => {
   localAvatar.currentAnimation = '';
   localAvatar.funnyUntil = 0;
   localAvatar.teamOutline = null;
+  localAvatar.visualOpacity = 1;
 };
 
 const ensureLocalAvatar = async () => {
@@ -5477,6 +5521,8 @@ const ensureLocalAvatar = async () => {
   localAvatar.currentAnimation = '';
   localAvatar.shootUntil = 0;
   localAvatar.funnyUntil = 0;
+  localAvatar.visualOpacity = 1;
+  applyAvatarVisualOpacity(localAvatar.avatarRoot || localAvatar.group, 1);
   ensureLocalTeamOutline();
   setLocalAvatarAnimation('idle');
 };
@@ -5484,6 +5530,12 @@ const ensureLocalAvatar = async () => {
 const updateLocalAvatar = (delta) => {
   if (!localAvatar.group) {
     return;
+  }
+  const localProtected = getEstimatedServerNowMs() < Number(localSpawnProtectedUntilMs || 0);
+  const localTargetOpacity = localProtected ? spawnProtectionVisualOpacity : 1;
+  if (Math.abs(localAvatar.visualOpacity - localTargetOpacity) > 0.001) {
+    applyAvatarVisualOpacity(localAvatar.avatarRoot || localAvatar.group, localTargetOpacity);
+    localAvatar.visualOpacity = localTargetOpacity;
   }
   if (localAvatar.teamOutline) {
     localAvatar.teamOutline.visible = shouldShowTeamMarkers() && !isRespawning;
@@ -5801,6 +5853,8 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     mana: maxMana,
     isJumping: false,
     deadAt: 0,
+    spawnProtectedUntilMs: 0,
+    visualOpacity: 1,
     targetPosition: new THREE.Vector3(0, 0, 0),
     targetYaw: 0,
     targetPitch: 0,
@@ -5899,6 +5953,9 @@ const syncRemotePlayer = (player) => {
   }
   if (resourcesChanged) {
     updateRemoteHealthBar(entry);
+  }
+  if (Number.isFinite(Number(player.spawnProtectedUntilMs))) {
+    entry.spawnProtectedUntilMs = Number(player.spawnProtectedUntilMs);
   }
   const hasAliveFlag = typeof player.alive === 'boolean';
   if (hasAliveFlag) {
@@ -6757,6 +6814,9 @@ const applyOwnStateFromRoom = (roomState) => {
   if (Number.isFinite(Number(selfPlayer.pendingHealthRegen))) {
     pendingHealthRegen = Math.max(0, Number(selfPlayer.pendingHealthRegen));
   }
+  if (Number.isFinite(Number(selfPlayer.spawnProtectedUntilMs))) {
+    localSpawnProtectedUntilMs = Number(selfPlayer.spawnProtectedUntilMs);
+  }
   if (Number.isFinite(Number(selfPlayer.lunarRainCooldownMs))) {
     setLunarRainCooldownRemainingMs(Number(selfPlayer.lunarRainCooldownMs));
   }
@@ -7399,6 +7459,7 @@ const connectWebSocket = () => {
       const nextAmmoInMag = Number(payload.data?.ammoInMag);
       const nextAmmoReserve = Number(payload.data?.ammoReserve);
       const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
+      const nextSpawnProtectedUntilMs = Number(payload.data?.spawnProtectedUntilMs);
       const nextLunarRainCooldownMs = Number(payload.data?.lunarRainCooldownMs);
       const nextIsReloading = payload.data?.isReloading;
       const nextReloadRemainingMs = Number(payload.data?.reloadRemainingMs);
@@ -7426,6 +7487,9 @@ const connectWebSocket = () => {
       }
       if (Number.isFinite(nextPendingHealthRegen)) {
         pendingHealthRegen = Math.max(0, nextPendingHealthRegen);
+      }
+      if (Number.isFinite(nextSpawnProtectedUntilMs)) {
+        localSpawnProtectedUntilMs = nextSpawnProtectedUntilMs;
       }
       if (Number.isFinite(nextLunarRainCooldownMs)) {
         setLunarRainCooldownRemainingMs(nextLunarRainCooldownMs);
@@ -7558,6 +7622,9 @@ const connectWebSocket = () => {
         if (Number.isFinite(Number(payload.data?.ammoReserve))) {
           ammoReserve = Math.max(0, Math.min(maxAmmoTotal, Math.round(Number(payload.data.ammoReserve))));
         }
+        if (Number.isFinite(Number(payload.data?.spawnProtectedUntilMs))) {
+          localSpawnProtectedUntilMs = Number(payload.data.spawnProtectedUntilMs);
+        }
         isReloading = Boolean(payload.data?.isReloading);
         reloadCooldown = Number.isFinite(Number(payload.data?.reloadRemainingMs))
           ? Math.max(0, Number(payload.data.reloadRemainingMs) / 1000)
@@ -7587,6 +7654,9 @@ const connectWebSocket = () => {
       }
       if (Number.isFinite(Number(payload.data?.mana))) {
         remote.mana = Math.max(0, Math.min(maxMana, Math.round(Number(payload.data.mana))));
+      }
+      if (Number.isFinite(Number(payload.data?.spawnProtectedUntilMs))) {
+        remote.spawnProtectedUntilMs = Number(payload.data.spawnProtectedUntilMs);
       }
       remote.animationUntil = 0;
       setRemoteIdle(remote);
@@ -10272,6 +10342,12 @@ const updateRemotePlayers = (delta) => {
   const renderTs = getEstimatedServerNowMs() - remoteInterpolationDynamicMs;
 
   for (const entry of state.remotePlayers.values()) {
+    const remoteProtected = getEstimatedServerNowMs() < Number(entry.spawnProtectedUntilMs || 0);
+    const remoteTargetOpacity = remoteProtected ? spawnProtectionVisualOpacity : 1;
+    if (Math.abs(Number(entry.visualOpacity ?? 1) - remoteTargetOpacity) > 0.001) {
+      applyAvatarVisualOpacity(entry.avatarRoot || entry.group, remoteTargetOpacity);
+      entry.visualOpacity = remoteTargetOpacity;
+    }
     const snapshots = entry.netSnapshots || [];
     if (snapshots.length > 0) {
       const pruneBefore = renderTs - 1000;

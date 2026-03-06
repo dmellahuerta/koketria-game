@@ -143,6 +143,7 @@ struct CombatState {
     last_shot_at: i64,
     alive: bool,
     respawn_available_at_ms: i64,
+    spawn_protected_until_ms: i64,
     lunar_cd_until_ms: i64,
     silent_cd_until_ms: i64,
     neoorphen_cd_until_ms: i64,
@@ -209,6 +210,7 @@ const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
 const FFA_RESPAWN_MS: i64 = 5_000;
 const VERSUS_RESPAWN_MS: i64 = 3_000;
+const RESPAWN_SPAWN_PROTECTION_MS: i64 = 2_500;
 const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
 const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
 const SPAWN_BASE_Y: f64 = 1.7;
@@ -654,6 +656,7 @@ impl Inner {
         "ammoInMag": client.combat.ammo_in_mag,
         "ammoReserve": client.combat.ammo_reserve,
         "respawnAvailableAtMs": client.combat.respawn_available_at_ms,
+        "spawnProtectedUntilMs": client.combat.spawn_protected_until_ms,
         "isReloading": is_reloading,
           "reloadRemainingMs": reload_remaining_ms,
           "alive": client.combat.alive,
@@ -2003,6 +2006,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 entry.state.position = spawn;
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
+                entry.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
                 apply_special_cooldown_on_respawn(
                     &mut entry.combat,
                     entry.character.as_deref(),
@@ -2039,6 +2043,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "mana": mana,
                     "ammoInMag": ammo_in_mag,
                     "ammoReserve": ammo_reserve,
+                    "spawnProtectedUntilMs": now + RESPAWN_SPAWN_PROTECTION_MS,
                     "isReloading": false,
                     "reloadRemainingMs": 0,
                     "ts": now_ms()
@@ -3154,7 +3159,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     None => break,
                 };
                 let spawn = pick_spawn_position(&inner, &room_id, Some(&bot_id));
-                let (position, health, shield, mana, ammo_in_mag, ammo_reserve) = {
+                let (position, health, shield, mana, ammo_in_mag, ammo_reserve, spawn_protected_until_ms) = {
                     let Some(bot) = inner.clients.get_mut(&bot_id) else {
                         break;
                     };
@@ -3163,6 +3168,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                     bot.state_ts = now_ms();
                     bot.combat = default_combat_state();
                     let now_respawn = now_ms();
+                    bot.combat.spawn_protected_until_ms = now_respawn + RESPAWN_SPAWN_PROTECTION_MS;
                     apply_special_cooldown_on_respawn(
                         &mut bot.combat,
                         bot.character.as_deref(),
@@ -3180,6 +3186,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                         bot.combat.mana.round() as i64,
                         bot.combat.ammo_in_mag,
                         bot.combat.ammo_reserve,
+                        bot.combat.spawn_protected_until_ms,
                     )
                 };
                 inner.broadcast_room(
@@ -3195,6 +3202,7 @@ async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
                         "mana": mana,
                         "ammoInMag": ammo_in_mag,
                         "ammoReserve": ammo_reserve,
+                        "spawnProtectedUntilMs": spawn_protected_until_ms,
                         "isReloading": false,
                         "reloadRemainingMs": 0,
                         "ts": now_ms()
@@ -3731,6 +3739,9 @@ fn apply_hit_and_emit(
             return false;
         };
         if !victim.combat.alive {
+            return false;
+        }
+        if ts < victim.combat.spawn_protected_until_ms {
             return false;
         }
         if victim.combat.shield > 0.0 {
@@ -4888,6 +4899,7 @@ fn default_combat_state() -> CombatState {
         ammo_reserve: (MAX_AMMO_TOTAL - MAX_AMMO_IN_MAG).max(0),
         reload_ends_at_ms: 0,
         respawn_available_at_ms: 0,
+        spawn_protected_until_ms: 0,
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
@@ -4975,6 +4987,7 @@ fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_m
         "mana": combat.mana.round() as i64,
         "ammoInMag": combat.ammo_in_mag,
         "ammoReserve": combat.ammo_reserve,
+        "spawnProtectedUntilMs": combat.spawn_protected_until_ms,
         "isReloading": is_reloading,
         "reloadRemainingMs": reload_remaining_ms,
         "pendingHealthRegen": combat.pending_health_regen,
