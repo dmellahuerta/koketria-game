@@ -4123,6 +4123,7 @@ let localReconcileExpiresAt = 0;
 let localCollisionBypassUntil = 0;
 let localInputSeq = 0;
 const pendingMoveInputs = [];
+let lastAckedMoveInputSeq = 0;
 let localShotSeq = 0;
 const pendingShotAcks = new Map();
 const reconcileStats = {
@@ -5854,6 +5855,14 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
 };
 
 const disposeRemotePlayer = (entry) => {
+  if (entry?.mixer) {
+    entry.mixer.stopAllAction();
+    if (entry.avatarRoot) {
+      entry.mixer.uncacheRoot(entry.avatarRoot);
+    } else if (entry.group) {
+      entry.mixer.uncacheRoot(entry.group);
+    }
+  }
   disposeRemoteHitboxDebug(entry);
   if (entry.teamOutline) {
     disposeTeamMarker(entry.teamOutline);
@@ -7154,6 +7163,10 @@ const connectWebSocket = () => {
         let errorBaseY = camera.position.y;
         let errorBaseZ = camera.position.z;
         if (Number.isFinite(ackSeq) && ackSeq > 0) {
+          if (ackSeq <= lastAckedMoveInputSeq) {
+            return;
+          }
+          lastAckedMoveInputSeq = ackSeq;
           const idx = pendingMoveInputs.findIndex((entry) => entry.seq === ackSeq);
           if (idx >= 0) {
             const predicted = pendingMoveInputs[idx].predictedPosition;
@@ -7167,11 +7180,27 @@ const connectWebSocket = () => {
               errorBaseZ = predicted.z;
             }
             pendingMoveInputs.splice(0, idx + 1);
-          } else if (pendingMoveInputs.length > 0) {
-            reconcileStats.lateAcksInWindow += 1;
-            const pruneUntil = pendingMoveInputs.findIndex((entry) => entry.seq > ackSeq);
-            if (pruneUntil > 0) {
-              pendingMoveInputs.splice(0, pruneUntil);
+          } else {
+            if (pendingMoveInputs.length > 0) {
+              reconcileStats.lateAcksInWindow += 1;
+            }
+            let newestPredicted = null;
+            for (let i = pendingMoveInputs.length - 1; i >= 0; i -= 1) {
+              const entry = pendingMoveInputs[i];
+              if (Number(entry.seq) <= ackSeq && entry.predictedPosition) {
+                newestPredicted = entry.predictedPosition;
+                break;
+              }
+            }
+            if (newestPredicted) {
+              errorBaseX = newestPredicted.x;
+              errorBaseY = newestPredicted.y;
+              errorBaseZ = newestPredicted.z;
+            }
+            for (let i = pendingMoveInputs.length - 1; i >= 0; i -= 1) {
+              if (Number(pendingMoveInputs[i]?.seq || 0) <= ackSeq) {
+                pendingMoveInputs.splice(i, 1);
+              }
             }
           }
         }
@@ -8805,6 +8834,7 @@ const clearLocalPredictionHistory = () => {
   pendingMoveInputs.length = 0;
   pendingShotAcks.clear();
   localInputSeq = 0;
+  lastAckedMoveInputSeq = 0;
   localShotSeq = 0;
   localReconcileTarget = null;
   localReconcileExpiresAt = 0;
@@ -9019,6 +9049,18 @@ const sendLocalPlayerState = (force = false) => {
   }
 
   state.lastStateSentAt = now;
+  for (let i = pendingMoveInputs.length - 1; i >= 0; i -= 1) {
+    const entry = pendingMoveInputs[i];
+    if (!entry) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const sentAt = Number(entry.sentAt || 0);
+    const seq = Number(entry.seq || 0);
+    if ((seq > 0 && seq <= lastAckedMoveInputSeq) || (sentAt > 0 && now - sentAt > 2000)) {
+      pendingMoveInputs.splice(i, 1);
+    }
+  }
   localInputSeq += 1;
   const moving = (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD)
     || moveVelocity.lengthSq() > 0.5;

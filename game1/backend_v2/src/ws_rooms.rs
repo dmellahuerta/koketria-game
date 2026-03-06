@@ -9,6 +9,7 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{RwLock, mpsc};
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::task::AbortHandle;
 use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 use tracing::{debug, info, warn};
 
@@ -100,6 +101,10 @@ struct ClientSession {
     last_pickup_req_at_ms: i64,
     last_reload_req_at_ms: i64,
     last_respawn_req_at_ms: i64,
+    last_list_rooms_req_at_ms: i64,
+    last_join_room_req_at_ms: i64,
+    last_leave_room_req_at_ms: i64,
+    last_ping_req_at_ms: i64,
     is_bot: bool,
     bot_orbit_phase: f64,
     bot_orbit_radius: f64,
@@ -107,6 +112,7 @@ struct ClientSession {
     bot_move_speed: f64,
     tx_critical: mpsc::UnboundedSender<String>,
     tx_regular: mpsc::Sender<String>,
+    bot_task_abort: Option<AbortHandle>,
 }
 
 #[derive(Clone)]
@@ -151,6 +157,7 @@ struct CombatState {
     alive: bool,
     respawn_available_at_ms: i64,
     spawn_protected_until_ms: i64,
+    last_death_award_at_ms: i64,
     lunar_cd_until_ms: i64,
     silent_cd_until_ms: i64,
     neoorphen_cd_until_ms: i64,
@@ -300,6 +307,12 @@ const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
 const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
 const RELOAD_REQ_MIN_INTERVAL_MS: i64 = 120;
 const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
+const LIST_ROOMS_REQ_MIN_INTERVAL_MS: i64 = 200;
+const JOIN_ROOM_REQ_MIN_INTERVAL_MS: i64 = 250;
+const LEAVE_ROOM_REQ_MIN_INTERVAL_MS: i64 = 200;
+const PING_REQ_MIN_INTERVAL_MS: i64 = 80;
+const CLIENT_SHOT_TS_MAX_AGE_MS: i64 = 260;
+const CLIENT_SHOT_TS_FUTURE_LEEWAY_MS: i64 = 40;
 const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.024;
 const HITBOX_MOTION_INFLATE_MAX: f64 = 0.44;
 const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.11;
@@ -424,7 +437,14 @@ fn compute_rewind_timestamp(
     let rewind_floor = now_ms_v - STATE_HISTORY_WINDOW_MS;
     let fallback = now_ms_v - rewind_total;
     match client_shot_ts {
-        Some(ts) => clamp_i64(ts, rewind_floor, now_ms_v),
+        Some(ts) => {
+            let bounded_client_ts = clamp_i64(
+                ts,
+                now_ms_v - CLIENT_SHOT_TS_MAX_AGE_MS,
+                now_ms_v + CLIENT_SHOT_TS_FUTURE_LEEWAY_MS,
+            );
+            clamp_i64(bounded_client_ts, rewind_floor, now_ms_v)
+        }
         None => clamp_i64(fallback, rewind_floor, now_ms_v),
     }
 }
@@ -791,6 +811,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 last_pickup_req_at_ms: 0,
                 last_reload_req_at_ms: 0,
                 last_respawn_req_at_ms: 0,
+                last_list_rooms_req_at_ms: 0,
+                last_join_room_req_at_ms: 0,
+                last_leave_room_req_at_ms: 0,
+                last_ping_req_at_ms: 0,
                 is_bot: false,
                 bot_orbit_phase: 0.0,
                 bot_orbit_radius: 0.0,
@@ -798,6 +822,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 bot_move_speed: 0.0,
                 tx_critical: out_critical_tx.clone(),
                 tx_regular: out_regular_tx.clone(),
+                bot_task_abort: None,
             },
         );
         let connected_payload = json!({
@@ -1363,10 +1388,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         None,
                     );
                     for bot_id in added_ids {
+                        let bot_id_for_task = bot_id.clone();
                         let state_cloned = Arc::clone(state);
-                        tokio::spawn(async move {
-                            run_room_bot(state_cloned, bot_id).await;
+                        let handle = tokio::spawn(async move {
+                            run_room_bot(state_cloned, bot_id_for_task).await;
                         });
+                        let abort = handle.abort_handle();
+                        if let Some(bot_entry) = inner.clients.get_mut(&bot_id) {
+                            bot_entry.bot_task_abort = Some(abort);
+                        }
                     }
                 }
                 return;
@@ -2766,6 +2796,34 @@ fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &st
             client.last_respawn_req_at_ms = now;
             true
         }
+        "list_rooms" => {
+            if now - client.last_list_rooms_req_at_ms < LIST_ROOMS_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_list_rooms_req_at_ms = now;
+            true
+        }
+        "join_room" | "join_server_room" => {
+            if now - client.last_join_room_req_at_ms < JOIN_ROOM_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_join_room_req_at_ms = now;
+            true
+        }
+        "leave_room" => {
+            if now - client.last_leave_room_req_at_ms < LEAVE_ROOM_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_leave_room_req_at_ms = now;
+            true
+        }
+        "ping" => {
+            if now - client.last_ping_req_at_ms < PING_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_ping_req_at_ms = now;
+            true
+        }
         _ => true,
     }
 }
@@ -2978,6 +3036,10 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             last_pickup_req_at_ms: 0,
             last_reload_req_at_ms: 0,
             last_respawn_req_at_ms: 0,
+            last_list_rooms_req_at_ms: 0,
+            last_join_room_req_at_ms: 0,
+            last_leave_room_req_at_ms: 0,
+            last_ping_req_at_ms: 0,
             is_bot: true,
             bot_orbit_phase,
             bot_orbit_radius,
@@ -2985,6 +3047,7 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
             bot_move_speed,
             tx_critical,
             tx_regular,
+            bot_task_abort: None,
         },
     );
     join_room_internal(inner, &bot_id, room_id);
@@ -3011,6 +3074,11 @@ fn handle_clear_bots_command(inner: &mut Inner, room_id: &str) -> usize {
     }
 
     for bot_id in &bot_ids {
+        if let Some(bot) = inner.clients.get(bot_id) {
+            if let Some(abort) = &bot.bot_task_abort {
+                abort.abort();
+            }
+        }
         let _ = leave_room_internal(inner, bot_id, false);
         inner.clients.remove(bot_id);
     }
@@ -3743,8 +3811,12 @@ fn apply_hit_and_emit(
     base_damage: f64,
     ts: i64,
 ) -> bool {
+    if attacker_id == victim_id {
+        return false;
+    }
     let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
+    let mut death_award_eligible = false;
     let applied_damage = if headshot {
         base_damage * HEADSHOT_DAMAGE_MULTIPLIER
     } else {
@@ -3771,6 +3843,10 @@ fn apply_hit_and_emit(
         if victim.combat.health <= 0.0 {
             victim.combat.alive = false;
             victim.combat.respawn_available_at_ms = ts + respawn_delay_ms;
+            if ts > victim.combat.last_death_award_at_ms {
+                victim.combat.last_death_award_at_ms = ts;
+                death_award_eligible = true;
+            }
             died = true;
         }
         (victim.combat.health, victim.combat.shield)
@@ -3791,7 +3867,7 @@ fn apply_hit_and_emit(
         }),
     );
 
-    if !died {
+    if !died || !death_award_eligible {
         inner.broadcast_room_state(room_id);
         return false;
     }
@@ -4916,6 +4992,7 @@ fn default_combat_state() -> CombatState {
         reload_ends_at_ms: 0,
         respawn_available_at_ms: 0,
         spawn_protected_until_ms: 0,
+        last_death_award_at_ms: 0,
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
