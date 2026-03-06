@@ -3775,6 +3775,16 @@ const tracerMaterial = new THREE.MeshBasicMaterial({
   blending: THREE.AdditiveBlending,
   depthWrite: false,
 });
+const tracerMaterialCache = new Map();
+const getTracerMaterial = (color) => {
+  const key = color instanceof THREE.Color ? `c:${color.getHexString()}` : `n:${String(color)}`;
+  if (!tracerMaterialCache.has(key)) {
+    const mat = tracerMaterial.clone();
+    mat.color.set(color);
+    tracerMaterialCache.set(key, mat);
+  }
+  return tracerMaterialCache.get(key);
+};
 const impactGeometry = new THREE.SphereGeometry(0.11, 8, 8);
 const impactMaterial = new THREE.MeshBasicMaterial({ color: 0x7dff92, transparent: true, opacity: 0.9 });
 const hitWaveGeometry = new THREE.SphereGeometry(0.22, 14, 12);
@@ -6086,21 +6096,24 @@ const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
   const life = Number.isFinite(options.life) ? options.life : 0.14;
   const opacity = Number.isFinite(options.opacity) ? options.opacity : 1;
 
-  const material = tracerMaterial.clone();
-  material.color = new THREE.Color(color);
-  material.opacity = opacity;
+  const material = getTracerMaterial(color);
   const tracer = new THREE.Mesh(tracerGeometry, material);
   tracer.position.copy(mid);
   tracer.quaternion.setFromUnitVectors(tracerUpAxis, tmpTravelVec.multiplyScalar(1 / distance));
   tracer.scale.set(radiusScale, distance, radiusScale);
   tracer.userData.life = life;
+  tracer.userData.opacityScale = Math.max(0, Math.min(1, opacity));
+  tracer.onBeforeRender = () => {
+    const nextOpacity = Math.max(0, Math.min(1, tracer.userData.life * 7.5 * tracer.userData.opacityScale));
+    material.opacity = nextOpacity;
+  };
   scene.add(tracer);
   activeTracers.push(tracer);
   if (activeTracers.length > getDynamicMaxTracers()) {
     const old = activeTracers.shift();
     if (old) {
       scene.remove(old);
-      old.material.dispose();
+      old.onBeforeRender = null;
     }
   }
 };
@@ -10575,10 +10588,9 @@ const updateEffects = (delta) => {
   for (let i = activeTracers.length - 1; i >= 0; i -= 1) {
     const tracer = activeTracers[i];
     tracer.userData.life -= delta;
-    tracer.material.opacity = Math.max(0, tracer.userData.life * 7.5);
     if (tracer.userData.life <= 0) {
       scene.remove(tracer);
-      tracer.material.dispose();
+      tracer.onBeforeRender = null;
       activeTracers.splice(i, 1);
     }
   }
