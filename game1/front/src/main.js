@@ -10765,8 +10765,8 @@ const updatePoisonProjectiles = (delta) => {
       }
       const neoWave = createHitWave(impactCenter, projectile.colors.tracer);
       if (neoWave && projectile.isSpecialR) {
-        neoWave.scale.setScalar(hitWaveStartScale * 2);
-        neoWave.userData.expand = hitWaveExpand * 2;
+        neoWave.scale.setScalar(hitWaveStartScale);
+        neoWave.userData.expand = hitWaveExpand;
       }
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(0.95)),
@@ -10872,8 +10872,8 @@ const updateLunarProjectiles = (delta) => {
       }
       const lunarWave = createHitWave(impactCenter, projectile.colors.tracer);
       if (lunarWave && projectile.isSpecialR) {
-        lunarWave.scale.setScalar(hitWaveStartScale * 2);
-        lunarWave.userData.expand = hitWaveExpand * 2;
+        lunarWave.scale.setScalar(hitWaveStartScale);
+        lunarWave.userData.expand = hitWaveExpand;
       }
       createTracer(
         impactCenter.clone().add(projectile.up.clone().multiplyScalar(1.35)),
