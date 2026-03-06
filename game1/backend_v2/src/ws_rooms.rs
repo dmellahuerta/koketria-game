@@ -252,7 +252,7 @@ const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 1.05;
 const NEO_SPECIAL_MIN_FACTOR: f64 = 0.16;
 const NEO_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
-const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 110.0;
+const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 120.0;
 const LUNAR_SPECIAL_IMPACT_DELAY_MS: u64 = 460;
 const NEOORPHEN_SPECIAL_IMPACT_DELAY_MS: u64 = 620;
 const LUNAR_SPECIAL_MIN_RADIUS: f64 = 6.0;
@@ -4992,10 +4992,10 @@ fn get_shot_interval_ms(character: Option<&str>) -> i64 {
 fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
     let key = normalize_character(character);
     match key.as_str() {
-        "silentman" | "silenmant" => 110.0,
-        "neoorphen" => 85.0,
-        "pezunalunar" | "pezuanalunar" => 105.0,
-        "pumori" => 44.0,
+        "silentman" | "silenmant" => 120.0,
+        "neoorphen" => 95.0,
+        "pezunalunar" | "pezuanalunar" => 115.0,
+        "pumori" => 50.0,
         _ => 120.0,
     }
 }
