@@ -110,20 +110,11 @@ canvas {
       transparent 1px,
       transparent 5px
     );
-  animation: matrix-rain 14s linear infinite;
+  animation: none;
 }
 
 #app:not(.in-room) #lobbyMatrixBackdrop {
   display: block;
-}
-
-@keyframes matrix-rain {
-  0% {
-    transform: translateY(-8%);
-  }
-  100% {
-    transform: translateY(8%);
-  }
 }
 
 .boot-card {
