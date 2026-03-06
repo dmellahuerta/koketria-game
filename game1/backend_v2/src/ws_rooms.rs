@@ -180,6 +180,7 @@ const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
 const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
+const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
 const HEADSHOT_RADIUS: f64 = 0.42;
@@ -3720,6 +3721,11 @@ fn apply_hit_and_emit(
 ) -> bool {
     let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
+    let applied_damage = if headshot {
+        base_damage * HEADSHOT_DAMAGE_MULTIPLIER
+    } else {
+        base_damage
+    };
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
             return false;
@@ -3727,14 +3733,12 @@ fn apply_hit_and_emit(
         if !victim.combat.alive {
             return false;
         }
-        if headshot {
-            victim.combat.health = 0.0;
-        } else if victim.combat.shield > 0.0 {
-            let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
+        if victim.combat.shield > 0.0 {
+            let reduced = (applied_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
             victim.combat.shield = (victim.combat.shield - SHIELD_HIT_COST_PER_HIT).max(0.0);
             victim.combat.health = (victim.combat.health - reduced).max(0.0);
         } else {
-            victim.combat.health = (victim.combat.health - base_damage).max(0.0);
+            victim.combat.health = (victim.combat.health - applied_damage).max(0.0);
         }
         victim.combat.pending_health_regen = 0.0;
         if victim.combat.health <= 0.0 {
