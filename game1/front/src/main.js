@@ -3157,7 +3157,7 @@ const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
 const maxRemoteAttackVoices = 24;
 const localHitVoices = [];
-const maxLocalHitVoices = 10;
+const maxLocalHitVoices = 24;
 const lunarSpecialCooldownMs = 30_000;
 const silentSpecialCooldownMs = 5_000;
 let lunarRainCooldownEndsAt = 0;
@@ -7256,7 +7256,6 @@ const connectWebSocket = () => {
         }
       }
       localAvatar.shootUntil = performance.now() + 420;
-      startShootSound();
       return;
     }
 
@@ -9811,6 +9810,7 @@ const shoot = () => {
   localShotSeq += 1;
   const shotId = localShotSeq;
   pendingShotAcks.set(shotId, performance.now());
+  startShootSound();
 
   sendWs({
     type: 'player_shoot',
