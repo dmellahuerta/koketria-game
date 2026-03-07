@@ -3985,7 +3985,7 @@ const healthRegenPerSecond = 10;
 const hitDamage = Math.ceil(maxHealth / 3);
 const unifiedMagicHitboxRadius = 0.50;
 const defaultHitboxProfile = Object.freeze({
-  headshotRadius: 0.18,
+  headshotRadius: 0.26,
   headCenterOffsetY: -0.3,
   bodyCapsuleRadius: 0.46,
   bodyCapsuleTopOffsetY: -0.52,
@@ -4091,7 +4091,7 @@ const debugHitboxColors = {
   head: 0xff4d4d,
   body: 0x4de2ff,
 };
-const remoteInterpolationBaseMs = 120;
+const remoteInterpolationBaseMs = 100;
 const remoteInterpolationMinMs = 85;
 const remoteInterpolationMaxMs = 215;
 const remoteInterpolationLatencyFactor = 0.16;
@@ -4432,6 +4432,29 @@ const registerShootableMesh = (mesh) => {
   }
 };
 
+const registerRaycastOnlyShootable = (mesh) => {
+  if (!mesh) {
+    return;
+  }
+  scene.add(mesh);
+  if (!shootables.includes(mesh)) {
+    shootables.push(mesh);
+  }
+};
+
+const unregisterShootableMesh = (mesh) => {
+  if (!mesh) {
+    return;
+  }
+  const idx = shootables.indexOf(mesh);
+  if (idx >= 0) {
+    shootables.splice(idx, 1);
+  }
+  if (mesh.parent) {
+    mesh.parent.remove(mesh);
+  }
+};
+
 const clearKoketriaDecor = () => {
   for (let i = koketriaDecor.length - 1; i >= 0; i -= 1) {
     const obj = koketriaDecor[i];
@@ -4454,6 +4477,44 @@ const clearKoketriaDecor = () => {
   }
   koketriaDecor.length = 0;
   reactiveNatureMaterials.length = 0;
+};
+
+const remoteShootableHeight = Math.abs(bodyCapsuleTopOffsetY - bodyCapsuleBottomOffsetY);
+const remoteShootableGeometry = new THREE.CylinderGeometry(
+  bodyCapsuleRadius,
+  bodyCapsuleRadius,
+  Math.max(0.2, remoteShootableHeight),
+  12,
+  1,
+  false,
+);
+const remoteShootableMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+});
+
+const createRemoteShootableMesh = (entry) => {
+  const mesh = new THREE.Mesh(remoteShootableGeometry, remoteShootableMaterial);
+  mesh.userData.remotePlayerShootable = true;
+  mesh.userData.remotePlayerId = entry?.id || '';
+  mesh.visible = true;
+  mesh.frustumCulled = false;
+  return mesh;
+};
+
+const updateRemoteShootableMesh = (entry) => {
+  if (!entry?.shootableMesh || !entry?.group) {
+    return;
+  }
+  entry.shootableMesh.position.set(
+    entry.group.position.x,
+    entry.group.position.y + ((bodyCapsuleTopOffsetY + bodyCapsuleBottomOffsetY) * 0.5),
+    entry.group.position.z,
+  );
+  entry.shootableMesh.visible = !entry.isDead;
+  entry.shootableMesh.updateMatrixWorld(true);
 };
 
 const registerReactiveMaterial = (material, baseEmissive = 0.08) => {
@@ -4676,12 +4737,20 @@ const rebuildMapFromSeed = (seed, force = false) => {
     if (mesh === floor) {
       continue;
     }
+    if (mesh.userData?.remotePlayerShootable) {
+      continue;
+    }
     scene.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
   }
   shootables.length = 0;
   shootables.push(floor);
+  for (const entry of state.remotePlayers.values()) {
+    if (entry?.shootableMesh) {
+      shootables.push(entry.shootableMesh);
+    }
+  }
   pillarBounds.length = 0;
   clearKoketriaDecor();
 
@@ -5871,6 +5940,10 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
 };
 
 const disposeRemotePlayer = (entry) => {
+  if (entry?.shootableMesh) {
+    unregisterShootableMesh(entry.shootableMesh);
+    entry.shootableMesh = null;
+  }
   if (entry?.mixer) {
     entry.mixer.stopAllAction();
     if (entry.avatarRoot) {
@@ -5968,9 +6041,13 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     team: null,
     teamOutline: null,
     hitboxDebug: null,
+    shootableMesh: null,
   });
 
   const entry = state.remotePlayers.get(id);
+  entry.shootableMesh = createRemoteShootableMesh(entry);
+  registerRaycastOnlyShootable(entry.shootableMesh);
+  updateRemoteShootableMesh(entry);
   const hpBar = createRemoteHealthBar();
   entry.group.add(hpBar.holder);
   entry.healthBar = hpBar;
@@ -10591,6 +10668,7 @@ const updateRemotePlayers = (delta) => {
     } else {
       entry.group.position.lerp(entry.targetPosition, factor);
     }
+    updateRemoteShootableMesh(entry);
     entry.group.rotation.y = lerpAngle(
       entry.group.rotation.y,
       entry.targetYaw + remoteFacingYawOffset,
