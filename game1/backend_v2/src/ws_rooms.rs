@@ -288,7 +288,7 @@ const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
-const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 1.4;
+const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 2.0;
 const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.20;
 const PUMORI_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const PUMORI_HAMMER_HEAD_RADIUS: f64 = 1.0;
@@ -5271,7 +5271,7 @@ fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
         "silentman" | "silenmant" => 240.0,
         "neoorphen" => 190.0,
         "pezunalunar" | "pezuanalunar" => 230.0,
-        "pumori" => 100.0,
+        "pumori" => 190.0,
         _ => 120.0,
     }
 }
