@@ -7795,6 +7795,9 @@ const connectWebSocket = () => {
       player.health = 0;
       player.isJumping = false;
       player.deadAt = performance.now();
+      if (player.shootableMesh) {
+        unregisterShootableMesh(player.shootableMesh);
+      }
       setRemoteAnimation(player, 'death');
       player.animationUntil = 0;
       updateRemoteHealthBar(player);
@@ -7882,6 +7885,10 @@ const connectWebSocket = () => {
         remote.group.position.set(rx, ry, rz);
         remote.targetPosition.set(rx, ry, rz);
       }
+      if (remote.shootableMesh && !shootables.includes(remote.shootableMesh)) {
+        registerRaycastOnlyShootable(remote.shootableMesh);
+      }
+      updateRemoteShootableMesh(remote);
       updateRemoteHealthBar(remote);
       return;
     }
