@@ -200,7 +200,7 @@ const HIT_DAMAGE: f64 = 50.0;
 const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
-const HEADSHOT_RADIUS: f64 = 0.26;
+const HEADSHOT_RADIUS: f64 = 0.18;
 const BODYSHOT_RADIUS: f64 = 0.46;
 const TORSO_RADIUS: f64 = 0.46;
 const TORSO_CAPSULE_RADIUS: f64 = 0.46;
@@ -5529,16 +5529,14 @@ fn find_best_hit(
             z: rewound.z,
         };
 
-        let mut candidate_hit: Option<(bool, f64)> = None;
-        if let Some(head_dist) = ray_hit_sphere(
+        let head_hit = ray_hit_sphere(
             origin,
             direction_norm,
             &head_center,
             head_radius,
             max_distance,
-        ) {
-            candidate_hit = Some((true, head_dist));
-        }
+        );
+        let mut best_body_hit: Option<f64> = None;
         for sample in &sample_positions {
             if let Some(body_dist) = ray_hit_sphere(
                 origin,
@@ -5551,15 +5549,10 @@ fn find_best_hit(
                 body_radius,
                 max_distance,
             ) {
-                match candidate_hit {
-                    Some((_is_head, cur)) if body_dist < cur => {
-                        candidate_hit = Some((false, body_dist));
-                    }
-                    None => {
-                        candidate_hit = Some((false, body_dist));
-                    }
-                    _ => {}
-                }
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(body_dist),
+                    None => body_dist,
+                });
             }
             if let Some(torso_dist) = ray_hit_sphere(
                 origin,
@@ -5572,15 +5565,10 @@ fn find_best_hit(
                 torso_radius,
                 max_distance,
             ) {
-                match candidate_hit {
-                    Some((_is_head, cur)) if torso_dist < cur => {
-                        candidate_hit = Some((false, torso_dist));
-                    }
-                    None => {
-                        candidate_hit = Some((false, torso_dist));
-                    }
-                    _ => {}
-                }
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(torso_dist),
+                    None => torso_dist,
+                });
             }
             let torso_min_y = sample.y - 0.28;
             let torso_max_y = sample.y + 0.58;
@@ -5596,15 +5584,10 @@ fn find_best_hit(
                 torso_capsule_radius,
                 max_distance,
             ) {
-                match candidate_hit {
-                    Some((_is_head, cur)) if torso_capsule_dist < cur => {
-                        candidate_hit = Some((false, torso_capsule_dist));
-                    }
-                    None => {
-                        candidate_hit = Some((false, torso_capsule_dist));
-                    }
-                    _ => {}
-                }
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(torso_capsule_dist),
+                    None => torso_capsule_dist,
+                });
             }
             if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
                 origin,
@@ -5616,17 +5599,19 @@ fn find_best_hit(
                 legs_capsule_radius,
                 max_distance,
             ) {
-                match candidate_hit {
-                    Some((_is_head, cur)) if legs_capsule_dist < cur => {
-                        candidate_hit = Some((false, legs_capsule_dist));
-                    }
-                    None => {
-                        candidate_hit = Some((false, legs_capsule_dist));
-                    }
-                    _ => {}
-                }
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(legs_capsule_dist),
+                    None => legs_capsule_dist,
+                });
             }
         }
+
+        let candidate_hit = match (head_hit, best_body_hit) {
+            (Some(head_dist), Some(body_dist)) => Some((false, body_dist.min(head_dist))),
+            (Some(head_dist), None) => Some((true, head_dist)),
+            (None, Some(body_dist)) => Some((false, body_dist)),
+            (None, None) => None,
+        };
 
         if let Some((is_headshot, dist)) = candidate_hit {
             match &best {
@@ -5893,21 +5878,21 @@ fn classify_point_hit_on_player(
         z: base_position.z,
     };
     let head_radius = profile.head_radius + margin;
-    if distance_sq(impact_point, &head_center) <= head_radius * head_radius {
-        return Some(true);
-    }
     let body_radius = profile.body_radius + margin;
-    if distance_sq(impact_point, &body_center) <= body_radius * body_radius {
-        return Some(false);
-    }
+    let hits_head = distance_sq(impact_point, &head_center) <= head_radius * head_radius;
+    let hits_body = distance_sq(impact_point, &body_center) <= body_radius * body_radius;
     let torso_center = Vec3 {
         x: base_position.x,
         y: base_position.y + (profile.body_center_offset_y * 0.45),
         z: base_position.z,
     };
     let torso_radius = profile.torso_radius + margin;
-    if distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius {
+    let hits_torso = distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius;
+    if hits_body || hits_torso {
         return Some(false);
+    }
+    if hits_head {
+        return Some(true);
     }
     if prefer_headshot {
         return None;

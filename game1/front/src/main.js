@@ -3985,7 +3985,7 @@ const healthRegenPerSecond = 10;
 const hitDamage = Math.ceil(maxHealth / 3);
 const unifiedMagicHitboxRadius = 0.50;
 const defaultHitboxProfile = Object.freeze({
-  headshotRadius: 0.42,
+  headshotRadius: 0.18,
   headCenterOffsetY: -0.3,
   bodyCapsuleRadius: 0.46,
   bodyCapsuleTopOffsetY: -0.52,
@@ -6788,9 +6788,6 @@ const getLocalSegmentCharacterImpact = (segStart, segEnd, extraRadius = 0) => {
     camera.position.z,
   );
   const head = testSegmentSphereHit(segStart, segEnd, tmpLocalHead, profile.headshotRadius + extra);
-  if (head) {
-    return { point: head, headshot: true };
-  }
   tmpCapsuleA.set(
     camera.position.x,
     camera.position.y + profile.bodyCapsuleTopOffsetY,
@@ -6810,6 +6807,9 @@ const getLocalSegmentCharacterImpact = (segStart, segEnd, extraRadius = 0) => {
   );
   if (body) {
     return { point: body, headshot: false };
+  }
+  if (head) {
+    return { point: head, headshot: true };
   }
   return null;
 };
@@ -6835,8 +6835,8 @@ const getRemoteSegmentCharacterImpact = (entry, segStart, segEnd, extraRadius = 
     entry.group.position.y + profile.bodyCapsuleBottomOffsetY,
     entry.group.position.z,
   );
-  return testSegmentSphereHit(segStart, segEnd, headCenter, profile.headshotRadius + extra)
-    || testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, profile.bodyCapsuleRadius + extra);
+  return testSegmentCapsuleHit(segStart, segEnd, tmpCapsuleA, tmpCapsuleB, profile.bodyCapsuleRadius + extra)
+    || testSegmentSphereHit(segStart, segEnd, headCenter, profile.headshotRadius + extra);
 };
 
 const getRemotePlayersSegmentImpact = (segStart, segEnd, ownerId = '', extraRadius = 0) => {
