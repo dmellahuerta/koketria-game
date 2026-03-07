@@ -4479,7 +4479,14 @@ const clearKoketriaDecor = () => {
   reactiveNatureMaterials.length = 0;
 };
 
-const remoteShootableHeight = Math.abs(bodyCapsuleTopOffsetY - bodyCapsuleBottomOffsetY);
+const remoteShootableHeight = Math.abs(
+  (defaultHitboxProfile.headCenterOffsetY + defaultHitboxProfile.headshotRadius)
+  - defaultHitboxProfile.bodyCapsuleBottomOffsetY,
+);
+const shootableCenterOffsetY = (
+  (defaultHitboxProfile.headCenterOffsetY + defaultHitboxProfile.headshotRadius)
+  + defaultHitboxProfile.bodyCapsuleBottomOffsetY
+) * 0.5;
 const remoteShootableGeometry = new THREE.CylinderGeometry(
   bodyCapsuleRadius,
   bodyCapsuleRadius,
@@ -4510,7 +4517,7 @@ const updateRemoteShootableMesh = (entry) => {
   }
   entry.shootableMesh.position.set(
     entry.group.position.x,
-    entry.group.position.y + ((bodyCapsuleTopOffsetY + bodyCapsuleBottomOffsetY) * 0.5),
+    entry.group.position.y + shootableCenterOffsetY,
     entry.group.position.z,
   );
   entry.shootableMesh.visible = !entry.isDead;
