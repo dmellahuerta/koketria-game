@@ -2778,7 +2778,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 if let Some((x, z)) = selected {
                     meta.quad_damage_position = Some((x, z));
                     meta.quad_damage_active = false;
-                    meta.quad_damage_land_at_ms = now + 1_200;
+                    meta.quad_damage_land_at_ms = now + QUAD_DAMAGE_FALL_MS;
                     meta.quad_damage_spawn_at_ms = now + QUAD_DAMAGE_INTERVAL_MS;
                     spawned_payload = Some(json!({
                       "type":"quad_damage_incoming",
@@ -6451,6 +6451,7 @@ fn pickup_state_payload(meta: &RoomMeta, now: i64) -> Value {
 fn quad_damage_state_payload(meta: &RoomMeta, now: i64) -> Value {
     if let Some((x, z)) = meta.quad_damage_position {
         return json!({
+          "present": true,
           "active": meta.quad_damage_active && meta.quad_damage_land_at_ms <= now,
           "x": x,
           "z": z,
@@ -6460,6 +6461,7 @@ fn quad_damage_state_payload(meta: &RoomMeta, now: i64) -> Value {
         });
     }
     json!({
+      "present": false,
       "active": false,
       "x": Value::Null,
       "z": Value::Null,
