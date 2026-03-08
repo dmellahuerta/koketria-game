@@ -6694,7 +6694,9 @@ const getPlayerPositionById = (playerId) => {
   }
   const entry = state.remotePlayers.get(id);
   if (entry?.group) {
-    return entry.group.position.clone();
+    const pos = entry.group.position.clone();
+    pos.y += remoteBodyCenterOffsetY;
+    return pos;
   }
   return null;
 };
