@@ -6519,6 +6519,7 @@ const startPumoriOrbitSpecialVisual = (playerId, durationMs, elapsedMs = 0, fall
     maxOrbitRadius: 22,
     maxActiveHammers: 28,
     phase: Math.random() * Math.PI * 2,
+    lastCenter: center ? center.clone() : null,
     waitingOwnerUntil: center ? 0 : now + 10000,
   });
 };
@@ -11272,13 +11273,15 @@ const updatePumoriOrbitSpecials = (delta) => {
       clearPumoriOrbitSpecialByOwner(special?.ownerId);
       continue;
     }
-    const center = getPlayerPositionById(special.ownerId);
+    const ownerCenter = getPlayerPositionById(special.ownerId);
+    const center = ownerCenter || (special.lastCenter ? special.lastCenter.clone() : null);
     if (!center) {
       if (now > (special.waitingOwnerUntil || 0)) {
         clearPumoriOrbitSpecialByOwner(special.ownerId);
       }
       continue;
     }
+    special.lastCenter = center.clone();
     // Compact disposed entries in place to avoid per-frame array allocations.
     if (special.hammers.length > 0) {
       let write = 0;
