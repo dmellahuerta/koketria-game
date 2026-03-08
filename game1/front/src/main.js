@@ -10653,10 +10653,7 @@ function triggerQuadDamageLandingShake(position) {
     return;
   }
   const distance = position.distanceTo(camera.position);
-  if (distance > 10) {
-    return;
-  }
-  const strength = Math.max(0, 1 - (distance / 10));
+  const strength = Math.max(0.18, 1 - Math.min(1, distance / 28));
   quadDamageLandingShakeStrength = Math.max(quadDamageLandingShakeStrength, 0.12 + (strength * 0.28));
   quadDamageLandingShakeUntil = performance.now() + 280;
 }
