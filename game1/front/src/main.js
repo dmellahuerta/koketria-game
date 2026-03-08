@@ -7822,17 +7822,7 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'quad_damage_incoming') {
-      const quadData = payload.data || {};
-      ensureQuadDamagePickupVisual(quadData);
-      if (Number.isFinite(Number(quadData.x)) && Number.isFinite(Number(quadData.z))) {
-        const start = new THREE.Vector3(Number(quadData.x), quadDamagePickupFallStartY, Number(quadData.z));
-        const end = new THREE.Vector3(Number(quadData.x), 0.68, Number(quadData.z));
-        createTracer(start, end, 0x67f6ff, { radiusScale: 2.8, life: 0.9, opacity: 0.95 });
-        if (import.meta.env.DEV) {
-          console.debug('[quad][incoming]', quadData);
-          pushKillFeedAnnouncement('QUAD incoming', 'quad', 3500);
-        }
-      }
+      ensureQuadDamagePickupVisual(payload.data || {});
       return;
     }
 
@@ -10609,6 +10599,33 @@ function spawnQuadDamageLandingEffect(position) {
   triggerQuadDamageLandingShake(position);
 }
 
+const quadDamageApproachDirections = [
+  new THREE.Vector2(1, 0),
+  new THREE.Vector2(-1, 0),
+  new THREE.Vector2(0, 1),
+  new THREE.Vector2(0, -1),
+  new THREE.Vector2(1, 1).normalize(),
+  new THREE.Vector2(1, -1).normalize(),
+  new THREE.Vector2(-1, 1).normalize(),
+  new THREE.Vector2(-1, -1).normalize(),
+];
+
+const createQuadDamageApproach = (x, z) => {
+  const direction = quadDamageApproachDirections[
+    Math.floor(Math.random() * quadDamageApproachDirections.length)
+  ].clone();
+  const distance = 38 + (Math.random() * 22);
+  const startXZ = clampPointToMapBounds(
+    x - (direction.x * distance),
+    z - (direction.y * distance),
+    4,
+  );
+  return {
+    direction,
+    startPosition: new THREE.Vector3(startXZ.x, quadDamagePickupFallStartY, startXZ.z),
+  };
+};
+
 function ensureQuadDamagePickupVisual(data = {}) {
   const x = Number(data.x);
   const z = Number(data.z);
@@ -10651,6 +10668,8 @@ function ensureQuadDamagePickupVisual(data = {}) {
       x,
       z,
       baseY: 1.05,
+      startPosition: new THREE.Vector3(x, quadDamagePickupFallStartY, z),
+      approachDirection: new THREE.Vector2(0, -1),
       phase: Math.random() * Math.PI * 2,
       active: false,
       incoming: true,
@@ -10663,6 +10682,9 @@ function ensureQuadDamagePickupVisual(data = {}) {
   quadDamagePickup.x = x;
   quadDamagePickup.z = z;
   quadDamagePickup.baseY = 1.05;
+  const approach = createQuadDamageApproach(x, z);
+  quadDamagePickup.startPosition.copy(approach.startPosition);
+  quadDamagePickup.approachDirection.copy(approach.direction);
   quadDamagePickup.incoming = true;
   quadDamagePickup.active = false;
   quadDamagePickup.landed = false;
@@ -10671,7 +10693,7 @@ function ensureQuadDamagePickupVisual(data = {}) {
     ? Number(data.landAtMs)
     : (Date.now() + 3000);
   quadDamagePickup.pendingRequestUntil = 0;
-  quadDamagePickup.mesh.position.set(x, quadDamagePickupFallStartY, z);
+  quadDamagePickup.mesh.position.copy(quadDamagePickup.startPosition);
   quadDamagePickup.mesh.visible = true;
 }
 
@@ -10762,9 +10784,9 @@ function updateQuadDamagePickup(delta) {
       halo.scale.setScalar(1.05 + ((1 - progress) * 0.35));
     }
     quadDamagePickup.mesh.position.set(
-      quadDamagePickup.x,
-      quadDamagePickupFallStartY + ((quadDamagePickup.baseY - quadDamagePickupFallStartY) * eased),
-      quadDamagePickup.z,
+      THREE.MathUtils.lerp(quadDamagePickup.startPosition.x, quadDamagePickup.x, eased),
+      THREE.MathUtils.lerp(quadDamagePickup.startPosition.y, quadDamagePickup.baseY, eased),
+      THREE.MathUtils.lerp(quadDamagePickup.startPosition.z, quadDamagePickup.z, eased),
     );
     quadDamagePickup.mesh.rotation.y += delta * 2.4;
     const currentPosition = quadDamagePickup.mesh.position.clone();
