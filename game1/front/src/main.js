@@ -7819,7 +7819,17 @@ const connectWebSocket = () => {
     }
 
     if (payload.type === 'quad_damage_incoming') {
-      ensureQuadDamagePickupVisual(payload.data || {});
+      const quadData = payload.data || {};
+      ensureQuadDamagePickupVisual(quadData);
+      if (Number.isFinite(Number(quadData.x)) && Number.isFinite(Number(quadData.z))) {
+        const start = new THREE.Vector3(Number(quadData.x), quadDamagePickupFallStartY, Number(quadData.z));
+        const end = new THREE.Vector3(Number(quadData.x), 0.68, Number(quadData.z));
+        createTracer(start, end, 0x67f6ff, { radiusScale: 2.8, life: 0.9, opacity: 0.95 });
+        if (import.meta.env.DEV) {
+          console.debug('[quad][incoming]', quadData);
+          pushKillFeedAnnouncement('QUAD incoming', 'quad', 3500);
+        }
+      }
       return;
     }
 
