@@ -20,7 +20,6 @@ pub enum RoomStatus {
     Waiting,
     InGame,
     Cooldown,
-    Finished,
 }
 
 impl RoomStatus {
@@ -29,7 +28,6 @@ impl RoomStatus {
             Self::Waiting => "waiting",
             Self::InGame => "in_game",
             Self::Cooldown => "cooldown",
-            Self::Finished => "finished",
         }
     }
 }

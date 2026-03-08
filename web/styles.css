@@ -35,7 +35,7 @@ body {
       transparent 1px,
       transparent 5px
     );
-  animation: rain 14s linear infinite;
+  animation: none;
   pointer-events: none;
 }
 
@@ -173,13 +173,4 @@ body {
 
 .hidden-link {
   display: none;
-}
-
-@keyframes rain {
-  0% {
-    transform: translateY(-10%);
-  }
-  100% {
-    transform: translateY(10%);
-  }
 }

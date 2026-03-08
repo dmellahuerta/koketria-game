@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -7,7 +7,9 @@ use std::{
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::task::AbortHandle;
 use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 use tracing::{debug, info, warn};
 
@@ -16,7 +18,7 @@ use crate::rooms::{
 };
 
 pub struct WsRoomsState {
-    inner: Mutex<Inner>,
+    inner: RwLock<Inner>,
 }
 
 struct Inner {
@@ -31,8 +33,13 @@ struct RoomMeta {
     weather: String,
     battle_theme: String,
     map_seed: i64,
+    map_collision_hash: String,
     map_profile: MapProfile,
     map_collision: Vec<MapBox>,
+    map_collision_grid: MapCollisionGrid,
+    mana_pickups: Vec<PickupState>,
+    shield_pickups: Vec<PickupState>,
+    health_pickups: Vec<PickupState>,
 }
 
 #[derive(Clone)]
@@ -61,6 +68,19 @@ struct MapBox {
 }
 
 #[derive(Clone)]
+struct MapCollisionGrid {
+    cell_size: f64,
+    buckets: HashMap<(i32, i32), Vec<usize>>,
+}
+
+#[derive(Clone)]
+struct PickupState {
+    x: f64,
+    z: f64,
+    respawn_at_ms: i64,
+}
+
+#[derive(Clone)]
 struct ClientSession {
     id: String,
     name: String,
@@ -75,8 +95,26 @@ struct ClientSession {
     latency_probe_seq: u64,
     latency_probe_sent_at: i64,
     latency_probe_id: u64,
-    state_history: Vec<StateSnapshot>,
-    tx: mpsc::UnboundedSender<String>,
+    state_history: VecDeque<StateSnapshot>,
+    last_shoot_req_at_ms: i64,
+    last_special_req_at_ms: i64,
+    last_pickup_req_at_ms: i64,
+    last_reload_req_at_ms: i64,
+    last_respawn_req_at_ms: i64,
+    last_list_rooms_req_at_ms: i64,
+    last_join_room_req_at_ms: i64,
+    last_leave_room_req_at_ms: i64,
+    last_ping_req_at_ms: i64,
+    global_msg_window_start_ms: i64,
+    global_msg_count_in_window: u32,
+    is_bot: bool,
+    bot_orbit_phase: f64,
+    bot_orbit_radius: f64,
+    bot_orbit_speed: f64,
+    bot_move_speed: f64,
+    tx_critical: mpsc::UnboundedSender<String>,
+    tx_regular: mpsc::Sender<String>,
+    bot_task_abort: Option<AbortHandle>,
 }
 
 #[derive(Clone)]
@@ -111,11 +149,17 @@ struct CombatState {
     health: f64,
     shield: f64,
     mana: f64,
+    ammo_in_mag: i64,
+    ammo_reserve: i64,
+    reload_ends_at_ms: i64,
     pending_health_regen: f64,
     last_health_regen_at: i64,
     last_mana_regen_at: i64,
     last_shot_at: i64,
     alive: bool,
+    respawn_available_at_ms: i64,
+    spawn_protected_until_ms: i64,
+    last_death_award_at_ms: i64,
     lunar_cd_until_ms: i64,
     silent_cd_until_ms: i64,
     neoorphen_cd_until_ms: i64,
@@ -129,7 +173,7 @@ impl WsRoomsState {
         let mut room_meta = HashMap::new();
         room_meta.insert("main".to_string(), RoomMeta::random_for("main"));
         Arc::new(Self {
-            inner: Mutex::new(Inner {
+            inner: RwLock::new(Inner {
                 rooms,
                 clients: HashMap::new(),
                 room_meta,
@@ -140,25 +184,32 @@ impl WsRoomsState {
 }
 
 const MAX_HEALTH: f64 = 100.0;
-const MAX_SHIELD: f64 = 100.0;
+const MAX_SHIELD: f64 = 25.0;
 const START_SHIELD: f64 = 0.0;
 const MAX_MANA: f64 = 100.0;
+const MAX_AMMO_IN_MAG: i64 = 30;
+const MAX_AMMO_TOTAL: i64 = 120;
+const AMMO_PICKUP_AMOUNT: i64 = 12;
+const RELOAD_TIME_MS: i64 = 1_200;
 const MANA_PICKUP_AMOUNT: f64 = 20.0;
 const SHIELD_PICKUP_AMOUNT: f64 = 25.0;
 const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
-const HEALTH_REGEN_PER_SECOND: f64 = 18.0;
+const HEALTH_REGEN_PER_SECOND: f64 = 10.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
-const HIT_DAMAGE: f64 = 34.0;
+const HIT_DAMAGE: f64 = 50.0;
+const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
-const SHIELD_DAMAGE_COST_FACTOR: f64 = 0.85;
-const HEADSHOT_RADIUS: f64 = 0.62;
-const BODYSHOT_RADIUS: f64 = 1.15;
-const TORSO_RADIUS: f64 = 1.02;
-const TORSO_CAPSULE_RADIUS: f64 = 0.78;
-const LEGS_CAPSULE_RADIUS: f64 = 0.66;
+const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
+const HEADSHOT_RADIUS: f64 = 0.26;
+const BODYSHOT_RADIUS: f64 = 0.46;
+const TORSO_RADIUS: f64 = 0.46;
+const TORSO_CAPSULE_RADIUS: f64 = 0.46;
+const LEGS_CAPSULE_RADIUS: f64 = 0.46;
 const CAPSULE_SAMPLE_STEPS: usize = 7;
-const HEAD_CENTER_OFFSET_Y: f64 = 0.18;
-const BODY_CENTER_OFFSET_Y: f64 = -0.45;
+// Player position is anchored around eye/camera height (y ~= 1.7).
+// Config tool offsets are feet-anchored, so these are converted to runtime anchor.
+const HEAD_CENTER_OFFSET_Y: f64 = -0.3;
+const BODY_CENTER_OFFSET_Y: f64 = -1.185;
 const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const SILENT_SPECIAL_COOLDOWN_MS: i64 = 5_000;
 const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
@@ -173,6 +224,9 @@ const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 5;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
+const FFA_RESPAWN_MS: i64 = 5_000;
+const VERSUS_RESPAWN_MS: i64 = 3_000;
+const RESPAWN_SPAWN_PROTECTION_MS: i64 = 2_500;
 const WEATHER_TYPES: &[&str] = &["rainy", "sunny", "night", "snow"];
 const BATTLE_THEMES: &[&str] = &["battle1", "battle2", "battle3"];
 const SPAWN_BASE_Y: f64 = 1.7;
@@ -180,45 +234,49 @@ const SPAWN_INNER_RADIUS: f64 = 22.0;
 const SPAWN_OUTER_RADIUS: f64 = 44.0;
 const SPAWN_POINT_COUNT: usize = 20;
 const MAP_PILLAR_COUNT: usize = 220;
+const MAP_COLLISION_GRID_CELL_SIZE: f64 = 2.5;
 const MAP_AXIS_X_BASE: f64 = 118.0;
 const MAP_AXIS_Z_BASE: f64 = 96.0;
-const MAP_BOUNDARY_MIN_RADIUS: f64 = 0.74;
-const MAP_BOUNDARY_MAX_RADIUS: f64 = 1.24;
+const MAP_PLAYABLE_HALF_EXTENT: f64 = 150.0;
 const PLAYER_COLLISION_RADIUS: f64 = 0.55;
-const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.9;
-const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 13.5;
+const PLAYER_PILLAR_COLLISION_FACTOR: f64 = 0.82;
+const PLAYER_MAX_SPEED_UNITS_PER_SECOND: f64 = 9.0;
+const PLAYER_BACKWARD_SPEED_FACTOR: f64 = 0.5;
 const PLAYER_MAX_MOVE_DT_MS: i64 = 220;
-const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.85;
+const PLAYER_MOVE_TOLERANCE_UNITS: f64 = 0.22;
 const MIN_WALL_HIT_DISTANCE: f64 = 0.12;
 const GROUND_HIT_Y: f64 = 0.2;
 const MAGIC_ATTACK_INTERVAL_MS: i64 = 1000;
 const BULLET_ATTACK_INTERVAL_MS: i64 = 125;
 const MANA_COST_PER_SHOT: f64 = 34.0;
-const MAX_ORIGIN_DRIFT: f64 = 2.8;
-const MAX_AIM_ANGLE_DELTA_DEG: f64 = 95.0;
-const LAG_COMP_BULLET_MS: i64 = 120;
-const LAG_COMP_MAGIC_MS: i64 = 150;
-const LAG_COMP_RTT_FACTOR: f64 = 0.35;
-const LAG_COMP_EXTRA_MAX_MS: i64 = 120;
+const MAX_ORIGIN_DRIFT: f64 = 2.5;
+const MAX_AIM_ANGLE_DELTA_DEG: f64 = 55.0;
+const WALL_HIT_PLAYER_TOLERANCE_UNITS: f64 = 0.16;
+const JUMPING_MIN_HEIGHT_Y: f64 = SPAWN_BASE_Y + 0.08;
+const LAG_COMP_BULLET_MS: i64 = 85;
+const LAG_COMP_MAGIC_MS: i64 = 105;
+const LAG_COMP_RTT_FACTOR: f64 = 0.50;
+const LAG_COMP_EXTRA_MAX_MS: i64 = 90;
+const LAG_COMP_TOTAL_MAX_MS: i64 = 200;
 const STATE_HISTORY_WINDOW_MS: i64 = 1500;
-const SPECIAL_HIT_DAMAGE: f64 = 17.0;
-const LUNAR_SPECIAL_HIT_DAMAGE: f64 = HIT_DAMAGE * 0.5;
-const NEOORPHEN_SPECIAL_HIT_DAMAGE: f64 = HIT_DAMAGE * 0.5;
-const PUMORI_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE * 0.5;
+const SPECIAL_HIT_DAMAGE: f64 = HIT_DAMAGE * 0.5;
+const LUNAR_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
+const NEOORPHEN_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
+const PUMORI_SPECIAL_HIT_DAMAGE: f64 = SPECIAL_HIT_DAMAGE;
 const NORMAL_SHOCKWAVE_RADIUS: f64 = 2.1;
-const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.18;
+const NORMAL_SHOCKWAVE_MIN_FACTOR: f64 = 0.10;
 const NORMAL_SHOCKWAVE_MAX_FACTOR: f64 = 0.9;
 const SILENT_SPECIAL_EXPLOSION_RADIUS: f64 = 2.0;
-const SILENT_SPECIAL_MIN_FACTOR: f64 = 0.22;
+const SILENT_SPECIAL_MIN_FACTOR: f64 = 0.12;
 const SILENT_SPECIAL_MAX_FACTOR: f64 = 1.0;
-const LUNAR_STRIKE_AOE_RADIUS: f64 = 2.1;
-const LUNAR_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const LUNAR_STRIKE_AOE_RADIUS: f64 = 1.05;
+const LUNAR_SPECIAL_MIN_FACTOR: f64 = 0.16;
 const LUNAR_SPECIAL_MAX_FACTOR: f64 = 1.0;
-const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 2.1;
-const NEO_SPECIAL_MIN_FACTOR: f64 = 0.28;
+const NEOORPHEN_STRIKE_AOE_RADIUS: f64 = 1.05;
+const NEO_SPECIAL_MIN_FACTOR: f64 = 0.16;
 const NEO_SPECIAL_MAX_FACTOR: f64 = 1.0;
 const SILENT_SPECIAL_MAX_DISTANCE: f64 = 90.0;
-const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 85.0;
+const SILENT_SPECIAL_PROJECTILE_SPEED: f64 = 120.0;
 const LUNAR_SPECIAL_IMPACT_DELAY_MS: u64 = 460;
 const NEOORPHEN_SPECIAL_IMPACT_DELAY_MS: u64 = 620;
 const LUNAR_SPECIAL_MIN_RADIUS: f64 = 6.0;
@@ -230,16 +288,146 @@ const PUMORI_ORBIT_DAMAGE_TICK_MS: i64 = 110;
 const PUMORI_ORBIT_DAMAGE_RADIUS: f64 = 22.0;
 const PUMORI_ORBIT_SPAWN_INTERVAL_MS: i64 = 220;
 const PUMORI_ORBIT_MAX_ACTIVE_HAMMERS: usize = 28;
-const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 1.4;
-const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.35;
+const PUMORI_SPECIAL_EXPLOSION_RADIUS: f64 = 2.0;
+const PUMORI_SPECIAL_MIN_FACTOR: f64 = 0.20;
 const PUMORI_SPECIAL_MAX_FACTOR: f64 = 1.0;
-const PUMORI_HAMMER_HEAD_RADIUS: f64 = 0.5;
-const PUMORI_HAMMER_BODY_RADIUS: f64 = 0.95;
+const PUMORI_HAMMER_HEAD_RADIUS: f64 = 1.0;
+const PUMORI_HAMMER_BODY_RADIUS: f64 = 1.9;
 const PUMORI_ORBIT_CENTER_HEIGHT: f64 = 0.25;
 const PUMORI_ORBIT_HEIGHT_WAVE: f64 = 0.18;
-const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 2_000;
-const LATENCY_SMOOTH_ALPHA: f64 = 0.28;
-const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.16;
+const SERVER_LATENCY_PING_INTERVAL_MS: u64 = 100;
+const CLIENT_REGULAR_QUEUE_CAPACITY: usize = 256;
+const LATENCY_SMOOTH_ALPHA: f64 = 0.25;
+const MAGIC_IMPACT_REVALIDATION_MARGIN: f64 = 0.335;
+const MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR: f64 = 0.012;
+const MAGIC_IMPACT_REVALIDATION_SPEED_MAX: f64 = 0.16;
+const MAGIC_IMPACT_REVALIDATION_WINDOW_MS: i64 = 90;
+const MAGIC_IMPACT_CLOSE_FALLBACK_EXTRA_RADIUS: f64 = 0.475;
+const RADIAL_LOS_BYPASS_CLOSE_RADIUS: f64 = 1.05;
+const SHOOT_REQ_MIN_INTERVAL_MS: i64 = 20;
+const SPECIAL_REQ_MIN_INTERVAL_MS: i64 = 140;
+const PICKUP_REQ_MIN_INTERVAL_MS: i64 = 90;
+const RELOAD_REQ_MIN_INTERVAL_MS: i64 = 120;
+const RESPAWN_REQ_MIN_INTERVAL_MS: i64 = 220;
+const LIST_ROOMS_REQ_MIN_INTERVAL_MS: i64 = 200;
+const JOIN_ROOM_REQ_MIN_INTERVAL_MS: i64 = 250;
+const LEAVE_ROOM_REQ_MIN_INTERVAL_MS: i64 = 200;
+const PING_REQ_MIN_INTERVAL_MS: i64 = 80;
+const GLOBAL_MSG_RATE_WINDOW_MS: i64 = 1_000;
+const GLOBAL_MSG_RATE_MAX_PER_WINDOW: u32 = 100;
+const CLIENT_SHOT_TS_MAX_AGE_MS: i64 = 260;
+const CLIENT_SHOT_TS_FUTURE_LEEWAY_MS: i64 = 40;
+const HITBOX_MOTION_INFLATE_FACTOR: f64 = 0.024;
+const HITBOX_MOTION_INFLATE_MAX: f64 = 0.44;
+const HITBOX_MOTION_INFLATE_HEAD_MAX: f64 = 0.11;
+const HITBOX_LATENCY_INFLATE_PER_MS: f64 = 0.00050;
+const HITBOX_LATENCY_INFLATE_MAX: f64 = 0.10;
+const HITREG_SWEEP_BASE_WINDOW_MS: i64 = 30;
+const HITREG_SWEEP_SPEED_WINDOW_FACTOR: f64 = 2.8;
+const HITREG_SWEEP_MAX_WINDOW_MS: i64 = 95;
+const MANA_PICKUP_COUNT: usize = 50;
+const SHIELD_PICKUP_COUNT: usize = 30;
+const HEALTH_PICKUP_COUNT: usize = 20;
+const PICKUP_RESPAWN_MS: i64 = 60_000;
+const PICKUP_TAKE_RADIUS: f64 = 1.35;
+const PICKUP_CLIENT_POS_MAX_DRIFT: f64 = 2.0;
+
+fn pickup_trace_enabled() -> bool {
+    match std::env::var("WS_PICKUP_TRACE") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn log_pickup_trace(
+    event: &str,
+    client_id: &str,
+    room_id: &str,
+    index: usize,
+    accepted: bool,
+    reason: &str,
+    player_pos: (f64, f64),
+    client_pos: Option<(f64, f64)>,
+) {
+    if !pickup_trace_enabled() {
+        return;
+    }
+    debug!(
+        "[ws_rooms][pickup] event={} client_id={} room_id={} index={} accepted={} reason={} player=({:.3},{:.3}) client_pos={:?}",
+        event,
+        client_id,
+        room_id,
+        index,
+        accepted,
+        reason,
+        player_pos.0,
+        player_pos.1,
+        client_pos
+    );
+}
+const BOT_MAX_PER_ROOM: usize = 8;
+const BOT_MOVE_TICK_MS: u64 = 60;
+const BOT_SHOOT_TICK_MS: u64 = 1250;
+const BOT_RESPAWN_TICK_MS: u64 = 700;
+const BOT_SPECIAL_TICK_MS: u64 = 650;
+const BOT_PILLAR_COLLISION_RADIUS_FACTOR: f64 = 1.2;
+const RADIAL_LOS_CLEARANCE_UNITS: f64 = 0.24;
+const RADIAL_VERTICAL_FACTOR: f64 = 0.35;
+const RADIAL_VERTICAL_MAX_DELTA: f64 = 1.6;
+const HITREG_TEMPORAL_SUBSTEPS_MIN: usize = 3;
+const HITREG_TEMPORAL_SUBSTEPS_MAX: usize = 7;
+
+#[derive(Clone, Copy)]
+struct HitboxProfile {
+    head_radius: f64,
+    body_radius: f64,
+    torso_radius: f64,
+    torso_capsule_radius: f64,
+    legs_capsule_radius: f64,
+    head_center_offset_y: f64,
+    body_center_offset_y: f64,
+}
+
+const HITBOX_PROFILE_DEFAULT: HitboxProfile = HitboxProfile {
+    head_radius: HEADSHOT_RADIUS,
+    body_radius: BODYSHOT_RADIUS,
+    torso_radius: TORSO_RADIUS,
+    torso_capsule_radius: TORSO_CAPSULE_RADIUS,
+    legs_capsule_radius: LEGS_CAPSULE_RADIUS,
+    head_center_offset_y: HEAD_CENTER_OFFSET_Y,
+    body_center_offset_y: BODY_CENTER_OFFSET_Y,
+};
+
+fn hitbox_profile_for_character(character: Option<&str>) -> HitboxProfile {
+    match normalize_character(character).as_str() {
+        // mismos valores por ahora; definido por personaje para habilitar ajuste independiente.
+        "silentman" | "silenmant" => HITBOX_PROFILE_DEFAULT,
+        "pumori" => HITBOX_PROFILE_DEFAULT,
+        "neoorphen" => HITBOX_PROFILE_DEFAULT,
+        "pezunalunar" | "pezuanalunar" => HITBOX_PROFILE_DEFAULT,
+        _ => HITBOX_PROFILE_DEFAULT,
+    }
+}
+
+fn parse_addbot_count(text: &str) -> Option<usize> {
+    let mut parts = text.split_whitespace();
+    let cmd = parts.next()?;
+    if !cmd.eq_ignore_ascii_case("/addbot") {
+        return None;
+    }
+    let requested = parts
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    Some(requested.clamp(1, BOT_MAX_PER_ROOM))
+}
+
+fn is_clearbots_command(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("/clearbots")
+}
 
 fn compute_rewind_timestamp(
     now_ms_v: i64,
@@ -247,13 +435,31 @@ fn compute_rewind_timestamp(
     base_rewind_ms: i64,
     latency_ms: f64,
 ) -> i64 {
-    let dynamic_extra = ((latency_ms * LAG_COMP_RTT_FACTOR).round() as i64).clamp(0, LAG_COMP_EXTRA_MAX_MS);
+    let dynamic_extra = ((latency_ms * LAG_COMP_RTT_FACTOR).round() as i64)
+        .clamp(0, LAG_COMP_EXTRA_MAX_MS);
+    let rewind_total = (base_rewind_ms + dynamic_extra).clamp(0, LAG_COMP_TOTAL_MAX_MS);
     let rewind_floor = now_ms_v - STATE_HISTORY_WINDOW_MS;
-    let fallback = now_ms_v - (base_rewind_ms + dynamic_extra);
+    let fallback = now_ms_v - rewind_total;
     match client_shot_ts {
-        Some(ts) => clamp_i64(ts, rewind_floor, now_ms_v),
+        Some(ts) => {
+            let bounded_client_ts = clamp_i64(
+                ts,
+                now_ms_v - CLIENT_SHOT_TS_MAX_AGE_MS,
+                now_ms_v + CLIENT_SHOT_TS_FUTURE_LEEWAY_MS,
+            );
+            clamp_i64(bounded_client_ts, rewind_floor, now_ms_v)
+        }
         None => clamp_i64(fallback, rewind_floor, now_ms_v),
     }
+}
+
+fn sanitize_client_shot_ts(now_ms_v: i64, client_shot_ts: Option<i64>) -> Option<i64> {
+    let ts = client_shot_ts?;
+    let delta = (ts - now_ms_v).abs();
+    if delta > CLIENT_SHOT_TS_MAX_AGE_MS {
+        return None;
+    }
+    Some(ts)
 }
 
 #[derive(Clone)]
@@ -271,17 +477,32 @@ impl RoomMeta {
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_grid = build_map_collision_grid(&map_collision, MAP_COLLISION_GRID_CELL_SIZE);
+        let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
+        let mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
+        let shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
+        let health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
         Self {
             weather: pick_from(WEATHER_TYPES, seed, None).to_string(),
             battle_theme: pick_from(BATTLE_THEMES, seed ^ 0x9E37_79B9, None).to_string(),
             map_seed,
+            map_collision_hash,
             map_profile,
             map_collision,
+            map_collision_grid,
+            mana_pickups,
+            shield_pickups,
+            health_pickups,
         }
     }
 
     fn rotate(&mut self, room_id: &str) {
         let seed = room_seed(room_id, now_ms());
+        let map_seed = positive_seed(seed);
+        let map_profile = create_map_profile(map_seed as u64);
+        let map_collision = create_map_collision(map_seed as u64);
+        let map_collision_grid = build_map_collision_grid(&map_collision, MAP_COLLISION_GRID_CELL_SIZE);
+        let map_collision_hash = map_collision_hash(&map_profile, &map_collision);
         self.weather = pick_from(WEATHER_TYPES, seed, Some(self.weather.as_str())).to_string();
         self.battle_theme = pick_from(
             BATTLE_THEMES,
@@ -289,10 +510,43 @@ impl RoomMeta {
             Some(self.battle_theme.as_str()),
         )
         .to_string();
+        self.map_seed = map_seed;
+        self.map_profile = map_profile;
+        self.map_collision = map_collision;
+        self.map_collision_grid = map_collision_grid;
+        self.map_collision_hash = map_collision_hash;
+        self.mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
+        self.shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
+        self.health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
     }
 }
 
+fn is_regular_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "game_state"
+            | "player_move"
+            | "ping"
+            | "latency_update"
+            | "pickup_state"
+            | "player_resources"
+            | "player_resources_public"
+    )
+}
+
 impl Inner {
+    fn enqueue_client_message(client: &ClientSession, event_type: Option<&str>, data: String) {
+        if event_type.is_some_and(is_regular_event_type) {
+            match client.tx_regular.try_send(data) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Closed(_)) => {}
+            }
+            return;
+        }
+        let _ = client.tx_critical.send(data);
+    }
+
     fn ensure_room_meta(&mut self, room_id: &str) {
         if self.room_meta.contains_key(room_id) {
             return;
@@ -308,7 +562,11 @@ impl Inner {
 
     fn send_to(&self, client_id: &str, payload: Value) {
         if let Some(client) = self.clients.get(client_id) {
-            let _ = client.tx.send(payload.to_string());
+            let event_type = payload
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Self::enqueue_client_message(client, event_type.as_deref(), payload.to_string());
         }
     }
 
@@ -316,15 +574,85 @@ impl Inner {
         let Some(room) = self.rooms.rooms.get(room_id) else {
             return;
         };
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let data = payload.to_string();
         for player_id in &room.players {
             if exclude_client_id == Some(player_id.as_str()) {
                 continue;
             }
             if let Some(client) = self.clients.get(player_id) {
-                let _ = client.tx.send(data.clone());
+                Self::enqueue_client_message(client, event_type.as_deref(), data.clone());
             }
         }
+    }
+
+    fn lobby_waiting_players_json(&self) -> Vec<Value> {
+        let mut players: Vec<Value> = self
+            .clients
+            .values()
+            .filter(|client| !client.is_bot && client.room_id.is_none())
+            .map(|client| {
+                json!({
+                  "id": client.id,
+                  "name": client.name,
+                  "character": client.character,
+                })
+            })
+            .collect();
+        players.sort_by(|a, b| {
+            let an = a
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let bn = b
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            an.cmp(&bn)
+        });
+        players
+    }
+
+    fn broadcast_lobby_waiting_clients(&self, payload: Value) {
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let text = payload.to_string();
+        for client in self.clients.values() {
+            if client.is_bot || client.room_id.is_some() {
+                continue;
+            }
+            Self::enqueue_client_message(client, event_type.as_deref(), text.clone());
+        }
+    }
+
+    fn broadcast_lobby_presence(&self) {
+        self.broadcast_lobby_waiting_clients(json!({
+          "type": "lobby_presence",
+          "ok": true,
+          "data": {
+            "players": self.lobby_waiting_players_json()
+          }
+        }));
+    }
+
+    fn broadcast_lobby_chat(&self, from_client_id: &str, from_name: &str, text: &str, ts: i64) {
+        self.broadcast_lobby_waiting_clients(json!({
+          "type":"lobby_chat_message",
+          "ok": true,
+          "data": {
+            "playerId": from_client_id,
+            "playerName": from_name,
+            "text": text,
+            "ts": ts
+          }
+        }));
     }
 
     fn room_summary_json(&self, room_id: &str) -> Option<Value> {
@@ -342,15 +670,24 @@ impl Inner {
           "maxPlayers": room.max_players,
           "weather": meta.map(|m| m.weather.clone()).unwrap_or_else(|| "night".to_string()),
           "battleTheme": meta.map(|m| m.battle_theme.clone()).unwrap_or_else(|| "battle1".to_string()),
-          "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1)
+          "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1),
+          "mapCollisionHash": meta.map(|m| m.map_collision_hash.clone()).unwrap_or_else(|| "".to_string())
         }))
     }
 
     fn player_json(&self, room_id: &str, player_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
         let client = self.clients.get(player_id)?;
+        let now = now_ms();
         let team = room.teams.get(player_id).copied().map(|t| t.as_wire());
         let ready = room.ready.get(player_id).copied().unwrap_or(false);
+        let is_mana = is_mana_character(client.character.as_deref());
+        let is_reloading = !is_mana && client.combat.reload_ends_at_ms > now;
+        let reload_remaining_ms = if is_reloading {
+            client.combat.reload_ends_at_ms - now
+        } else {
+            0
+        };
         Some(json!({
           "id": client.id,
           "name": client.name,
@@ -361,12 +698,18 @@ impl Inner {
           "deaths": client.deaths,
           "health": client.combat.health.round() as i64,
           "shield": client.combat.shield.round() as i64,
-          "mana": client.combat.mana.round() as i64,
+        "mana": client.combat.mana.round() as i64,
+        "ammoInMag": client.combat.ammo_in_mag,
+        "ammoReserve": client.combat.ammo_reserve,
+        "respawnAvailableAtMs": client.combat.respawn_available_at_ms,
+        "spawnProtectedUntilMs": client.combat.spawn_protected_until_ms,
+        "isReloading": is_reloading,
+          "reloadRemainingMs": reload_remaining_ms,
           "alive": client.combat.alive,
           "lunarRainCooldownMs": current_special_cooldown_remaining_ms(
             &client.combat,
             client.character.as_deref(),
-            now_ms()
+            now
           ),
           "pendingHealthRegen": client.combat.pending_health_regen,
           "state": player_state_json(&client.state),
@@ -376,14 +719,19 @@ impl Inner {
 
     fn room_state_json(&self, room_id: &str) -> Option<Value> {
         let room = self.rooms.rooms.get(room_id)?;
-        let room_json = self.room_summary_json(room_id)?;
+        let mut room_json = self.room_summary_json(room_id)?;
+        if let Some(room_obj) = room_json.as_object_mut() {
+            if let Some(meta) = self.room_meta.get(room_id) {
+                room_obj.insert("pickups".to_string(), pickup_state_payload(meta, now_ms()));
+            }
+        }
         let mut players = Vec::new();
         for player_id in &room.players {
             if let Some(player) = self.player_json(room_id, player_id) {
                 players.push(player);
             }
         }
-        Some(json!({ "room": room_json, "players": players }))
+        Some(json!({ "room": room_json, "players": players, "serverTs": now_ms() }))
     }
 
     fn public_rooms_json(&self) -> Value {
@@ -407,7 +755,7 @@ impl Inner {
         });
         let text = payload.to_string();
         for client in self.clients.values() {
-            let _ = client.tx.send(text.clone());
+            Self::enqueue_client_message(client, Some("rooms_list"), text.clone());
         }
     }
 
@@ -424,10 +772,21 @@ impl Inner {
 
 pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let (out_critical_tx, mut out_critical_rx) = mpsc::unbounded_channel::<String>();
+    let (out_regular_tx, mut out_regular_rx) =
+        mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
 
     let write_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
+        loop {
+            let next_msg = tokio::select! {
+                biased;
+                Some(msg) = out_critical_rx.recv() => Some(msg),
+                Some(msg) = out_regular_rx.recv() => Some(msg),
+                else => None,
+            };
+            let Some(msg) = next_msg else {
+                break;
+            };
             if ws_tx.send(AxumWsMessage::Text(msg.into())).await.is_err() {
                 break;
             }
@@ -435,7 +794,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     });
 
     let (client_id, connected_payload) = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         inner.client_seq += 1;
         let client_id = format!("p-{}", inner.client_seq);
         let name = format!("Player-{:04}", inner.client_seq % 10000);
@@ -456,11 +815,29 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 latency_probe_seq: 0,
                 latency_probe_sent_at: 0,
                 latency_probe_id: 0,
-                state_history: vec![StateSnapshot {
+                state_history: VecDeque::from([StateSnapshot {
                     ts: now_ms(),
                     position: initial_state.position.clone(),
-                }],
-                tx: out_tx.clone(),
+                }]),
+                last_shoot_req_at_ms: 0,
+                last_special_req_at_ms: 0,
+                last_pickup_req_at_ms: 0,
+                last_reload_req_at_ms: 0,
+                last_respawn_req_at_ms: 0,
+                last_list_rooms_req_at_ms: 0,
+                last_join_room_req_at_ms: 0,
+                last_leave_room_req_at_ms: 0,
+                last_ping_req_at_ms: 0,
+                global_msg_window_start_ms: 0,
+                global_msg_count_in_window: 0,
+                is_bot: false,
+                bot_orbit_phase: 0.0,
+                bot_orbit_radius: 0.0,
+                bot_orbit_speed: 0.0,
+                bot_move_speed: 0.0,
+                tx_critical: out_critical_tx.clone(),
+                tx_regular: out_regular_tx.clone(),
+                bot_task_abort: None,
             },
         );
         let connected_payload = json!({
@@ -474,13 +851,20 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
               "ts": now_ms(),
               "state": player_state_json(&initial_state)
             },
-            "rooms": inner.public_rooms_json()
+            "rooms": inner.public_rooms_json(),
+            "lobby": {
+              "players": inner.lobby_waiting_players_json()
+            }
           }
         });
         (client_id, connected_payload)
     };
     info!("[ws_rooms] connected client_id={}", client_id);
-    let _ = out_tx.send(connected_payload.to_string());
+    let _ = out_critical_tx.send(connected_payload.to_string());
+    {
+        let inner = state.inner.read().await;
+        inner.broadcast_lobby_presence();
+    }
     let ping_state = Arc::clone(&state);
     let ping_client_id = client_id.clone();
     let ping_task = tokio::spawn(async move {
@@ -488,22 +872,56 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let mut inner = ping_state.inner.lock().await;
+            let mut inner = ping_state.inner.write().await;
+            let now = now_ms();
             let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
                 break;
             };
+            update_combat_regen(&mut entry.combat, now);
             entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
             entry.latency_probe_id = entry.latency_probe_seq;
-            entry.latency_probe_sent_at = now_ms();
+            entry.latency_probe_sent_at = now;
             let payload = json!({
               "type": "ping",
               "ok": true,
               "data": {
                 "probeId": entry.latency_probe_id,
-                "serverTs": now_ms()
+                "serverTs": now
               }
             });
-            let _ = entry.tx.send(payload.to_string());
+            Inner::enqueue_client_message(entry, Some("ping"), payload.to_string());
+            let resources_payload =
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now);
+            Inner::enqueue_client_message(
+                entry,
+                Some("player_resources"),
+                resources_payload.to_string(),
+            );
+            let room_id_for_public = entry.room_id.clone();
+            let public_resources = Some((
+                entry.combat.health.round() as i64,
+                entry.combat.shield.round() as i64,
+                entry.combat.mana.round() as i64,
+            ));
+            if let (Some(room_id), Some((health, shield, mana))) =
+                (room_id_for_public, public_resources)
+            {
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"player_resources_public",
+                      "ok": true,
+                      "data": {
+                        "playerId": ping_client_id,
+                        "health": health,
+                        "shield": shield,
+                        "mana": mana,
+                        "ts": now
+                      }
+                    }),
+                    Some(&ping_client_id),
+                );
+            }
         }
     });
 
@@ -511,7 +929,12 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         let msg = match next {
             Ok(v) => v,
             Err(err) => {
-                warn!("ws_rooms receive error: {}", err);
+                let err_text = err.to_string();
+                if err_text.contains("Connection reset without closing handshake") {
+                    debug!("ws_rooms receive closed/reset connection: {}", err_text);
+                } else {
+                    warn!("ws_rooms receive error: {}", err_text);
+                }
                 break;
             }
         };
@@ -524,7 +947,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         let parsed = match serde_json::from_str::<Value>(&text) {
             Ok(v) => v,
             Err(_) => {
-                let _ = out_tx.send(
+                let _ = out_critical_tx.send(
                     json!({
                       "type": "error",
                       "ok": false,
@@ -545,9 +968,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     }
 
     let maybe_versus_countdown = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let countdown = leave_room_internal(&mut inner, &client_id, false);
         inner.clients.remove(&client_id);
+        inner.broadcast_lobby_presence();
         countdown
     };
     if let Some((room_id, winner_team)) = maybe_versus_countdown {
@@ -564,11 +988,15 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
 
 async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Value) {
     let event_type = message.get("type").and_then(Value::as_str).unwrap_or("");
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
 
     let Some(client) = inner.clients.get(client_id).cloned() else {
         return;
     };
+    let now = now_ms();
+    if !accept_rate_limited_event(&mut inner, client_id, event_type, now) {
+        return;
+    }
 
     match event_type {
         "list_rooms" => {
@@ -576,6 +1004,48 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 client_id,
                 json!({ "type": "rooms_list", "ok": true, "data": inner.public_rooms_json() }),
             );
+        }
+        "set_profile" => {
+            let mut changed = false;
+            if let Some(name) = message.get("playerName").and_then(Value::as_str) {
+                let trimmed = name.trim().chars().take(24).collect::<String>();
+                if trimmed.chars().count() >= 2 {
+                    if let Some(entry) = inner.clients.get_mut(client_id) {
+                        if entry.name != trimmed {
+                            entry.name = trimmed;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if let Some(character) = message.get("character").and_then(Value::as_str) {
+                let normalized = normalize_character(Some(character));
+                if let Some(entry) = inner.clients.get_mut(client_id) {
+                    if entry.character.as_deref() != Some(normalized.as_str()) {
+                        entry.character = Some(normalized);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                inner.broadcast_lobby_presence();
+            }
+            if let Some(entry) = inner.clients.get(client_id) {
+                inner.send_to(
+                    client_id,
+                    json!({
+                      "type": "profile_updated",
+                      "ok": true,
+                      "data": {
+                        "player": {
+                          "id": entry.id,
+                          "name": entry.name,
+                          "character": entry.character
+                        }
+                      }
+                    }),
+                );
+            }
         }
         "ping" => {
             // legacy ping from old clients, kept for compatibility.
@@ -610,6 +1080,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                             + (sample_ms * LATENCY_SMOOTH_ALPHA)
                     };
                     entry.latency_ms = clamp(next_latency, 0.0, 450.0);
+                    // One-shot probe consume: evita pongs repetidos para el mismo probeId.
+                    entry.latency_probe_id = 0;
+                    entry.latency_probe_sent_at = 0;
                     measured = Some(entry.latency_ms);
                 }
             }
@@ -841,8 +1314,15 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 room.status = if event_type == "start_game" {
                     RoomStatus::InGame
                 } else {
-                    RoomStatus::Finished
+                    RoomStatus::Cooldown
                 };
+            }
+            if event_type == "end_game" {
+                tokio::spawn(schedule_match_reset(
+                    Arc::clone(state),
+                    room_id.clone(),
+                    ROUND_RESET_SECONDS as u64,
+                ));
             }
             if let Some(summary) = inner.room_summary_json(&room_id) {
                 inner.broadcast_room(
@@ -869,9 +1349,6 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             }
         }
         "chat_message" => {
-            let Some(room_id) = client.room_id.clone() else {
-                return;
-            };
             let text = message
                 .get("text")
                 .and_then(Value::as_str)
@@ -881,6 +1358,65 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 .take(180)
                 .collect::<String>();
             if text.is_empty() {
+                return;
+            }
+            let Some(room_id) = client.room_id.clone() else {
+                inner.broadcast_lobby_chat(client_id, &client.name, &text, now_ms());
+                return;
+            };
+            if is_clearbots_command(&text) {
+                let removed = handle_clear_bots_command(&mut inner, &room_id);
+                if removed == 0 {
+                    inner.send_to(
+                        client_id,
+                        system_chat_payload("No hay bots para limpiar en esta sala.", now_ms()),
+                    );
+                } else {
+                    inner.broadcast_room(
+                        &room_id,
+                        system_chat_payload(&format!("Bots eliminados: {}", removed), now_ms()),
+                        None,
+                    );
+                }
+                return;
+            }
+            if let Some(requested) = parse_addbot_count(&text) {
+                let mut added_ids: Vec<String> = Vec::new();
+                for _ in 0..requested {
+                    let Some(bot_id) = handle_add_bot_command(&mut inner, &room_id) else {
+                        break;
+                    };
+                    added_ids.push(bot_id);
+                }
+                if added_ids.is_empty() {
+                    inner.send_to(
+                        client_id,
+                        system_chat_payload(
+                            "No se pudo agregar bots (modo o capacidad).",
+                            now_ms(),
+                        ),
+                    );
+                } else {
+                    inner.broadcast_room(
+                        &room_id,
+                        system_chat_payload(
+                            &format!("Bots agregados: {} / {}", added_ids.len(), requested),
+                            now_ms(),
+                        ),
+                        None,
+                    );
+                    for bot_id in added_ids {
+                        let bot_id_for_task = bot_id.clone();
+                        let state_cloned = Arc::clone(state);
+                        let handle = tokio::spawn(async move {
+                            run_room_bot(state_cloned, bot_id_for_task).await;
+                        });
+                        let abort = handle.abort_handle();
+                        if let Some(bot_entry) = inner.clients.get_mut(&bot_id) {
+                            bot_entry.bot_task_abort = Some(abort);
+                        }
+                    }
+                }
                 return;
             }
             inner.broadcast_room(
@@ -956,9 +1492,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(reported_direction) = reported_direction else {
                 return;
             };
-            let mut maybe_resources_payload: Option<Value> = None;
+            let maybe_resources_payload: Option<Value>;
             let mut shot_blocked = false;
-            let client_shot_ts = message.get("shotTs").and_then(Value::as_i64);
+            let client_shot_ts =
+                sanitize_client_shot_ts(now, message.get("shotTs").and_then(Value::as_i64));
+            let client_shot_id = message.get("shotId").and_then(Value::as_u64);
             let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
             {
                 let Some(shooter) = inner.clients.get_mut(client_id) else {
@@ -990,6 +1528,30 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                             now,
                         ));
                     }
+                } else if shooter.combat.reload_ends_at_ms > now {
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
+                    shot_blocked = true;
+                } else if shooter.combat.ammo_in_mag <= 0 {
+                    if shooter.combat.ammo_reserve > 0 {
+                        shooter.combat.reload_ends_at_ms = now + RELOAD_TIME_MS;
+                    }
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
+                    shot_blocked = true;
+                } else {
+                    shooter.combat.ammo_in_mag = (shooter.combat.ammo_in_mag - 1).max(0);
+                    maybe_resources_payload = Some(player_resources_payload(
+                        &shooter.combat,
+                        shooter.character.as_deref(),
+                        now,
+                    ));
                 }
                 if !shot_blocked {
                     shooter.combat.last_shot_at = now;
@@ -1031,6 +1593,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             else {
                 return;
             };
+            inner.send_to(
+                client_id,
+                json!({
+                  "type":"player_shot_ack",
+                  "ok": true,
+                  "data": {
+                    "shotId": client_shot_id,
+                    "ts": now
+                  }
+                }),
+            );
             let is_mana = is_mana_character(character_for_shot.as_deref());
             let base_rewind = if is_mana {
                 LAG_COMP_MAGIC_MS
@@ -1041,7 +1614,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 compute_rewind_timestamp(now, client_shot_ts, base_rewind, shooter_latency_ms);
             let wall_hit_distance =
                 resolve_wall_hit_distance(&inner, &room_id, &origin, &direction, distance);
-            let ground_hit_distance = resolve_ground_hit_distance(&origin, &direction, distance);
+            let ground_hit_distance = if is_mana && direction.y > -0.35 {
+                None
+            } else {
+                resolve_ground_hit_distance(&origin, &direction, distance)
+            };
             let effective_distance = match (wall_hit_distance, ground_hit_distance) {
                 (Some(w), Some(g)) => w.min(g).min(distance),
                 (Some(w), None) => w.min(distance),
@@ -1074,6 +1651,22 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 effective_distance,
                 rewind_ts,
             );
+            let hit = match hit {
+                Some((victim_id, headshot, hit_dist)) => {
+                    let wall_blocked = wall_hit_distance
+                        .map(|w| hit_dist > (w + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                        .unwrap_or(false);
+                    let ground_blocked = ground_hit_distance
+                        .map(|g| hit_dist > (g + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                        .unwrap_or(false);
+                    if wall_blocked || ground_blocked {
+                        None
+                    } else {
+                        Some((victim_id, headshot, hit_dist))
+                    }
+                }
+                None => None,
+            };
             if let Some((victim_id, headshot, hit_dist)) = hit {
                 if is_mana {
                     let projectile_speed =
@@ -1246,8 +1839,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
             let mut rays = Vec::new();
-            for i in 0..50 {
-                let t = (i as f64) / 50.0;
+            for i in 0..100 {
+                let t = (i as f64) / 100.0;
                 let angle = t * std::f64::consts::TAU;
                 rays.push(json!({
                   "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
@@ -1386,7 +1979,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             }
 
-            let (allow_cast, payload) = {
+            let (allow_cast, payload, origin) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
@@ -1395,6 +1988,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     (
                         false,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.state.position.clone(),
                     )
                 } else {
                     let can_cast = now >= entry.combat.pumori_cd_until_ms;
@@ -1404,6 +1998,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     (
                         can_cast,
                         player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                        entry.state.position.clone(),
                     )
                 }
             };
@@ -1419,7 +2014,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "data": {
                     "playerId": client_id,
                     "durationMs": PUMORI_ORBIT_DURATION_MS,
-                    "ts": now_ms()
+                    "ts": now_ms(),
+                    "origin": {
+                      "x": origin.x,
+                      "y": origin.y,
+                      "z": origin.z
+                    }
                   }
                 }),
                 None,
@@ -1434,17 +2034,49 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let Some(room_id) = client.room_id.clone() else {
                 return;
             };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let now = now_ms();
+            let can_respawn = inner
+                .clients
+                .get(client_id)
+                .map(|entry| {
+                    if entry.combat.alive {
+                        return false;
+                    }
+                    if entry.combat.respawn_available_at_ms <= 0 {
+                        return false;
+                    }
+                    now >= entry.combat.respawn_available_at_ms
+                })
+                .unwrap_or(false);
+            if !can_respawn {
+                return;
+            }
             let spawn = pick_spawn_position(&inner, &room_id, Some(client_id));
-            let (position, health, shield, mana) = {
+            let (position, health, shield, mana, ammo_in_mag, ammo_reserve) = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
+                if entry.combat.alive {
+                    return;
+                }
                 entry.state = default_player_state();
                 entry.state.position = spawn;
                 entry.state_ts = now_ms();
                 entry.combat = default_combat_state();
+                entry.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
+                apply_special_cooldown_on_respawn(
+                    &mut entry.combat,
+                    entry.character.as_deref(),
+                    now,
+                );
                 entry.state_history.clear();
-                entry.state_history.push(StateSnapshot {
+                entry.state_history.push_back(StateSnapshot {
                     ts: entry.state_ts,
                     position: entry.state.position.clone(),
                 });
@@ -1457,6 +2089,8 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     entry.combat.health.round() as i64,
                     entry.combat.shield.round() as i64,
                     entry.combat.mana.round() as i64,
+                    entry.combat.ammo_in_mag,
+                    entry.combat.ammo_reserve,
                 )
             };
             inner.broadcast_room(
@@ -1470,6 +2104,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "health": health,
                     "shield": shield,
                     "mana": mana,
+                    "ammoInMag": ammo_in_mag,
+                    "ammoReserve": ammo_reserve,
+                    "spawnProtectedUntilMs": now + RESPAWN_SPAWN_PROTECTION_MS,
+                    "isReloading": false,
+                    "reloadRemainingMs": 0,
                     "ts": now_ms()
                   }
                 }),
@@ -1477,73 +2116,490 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             );
             inner.broadcast_room_state(&room_id);
         }
-        "player_pickup_health" => {
-            let Some(_room_id) = client.room_id.clone() else {
+        "player_reload" => {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
             let payload = {
                 let Some(entry) = inner.clients.get_mut(client_id) else {
                     return;
                 };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
+                let now = now_ms();
+                update_combat_regen(&mut entry.combat, now);
+                if !entry.combat.alive || is_mana_character(entry.character.as_deref()) {
                     return;
                 }
-                let recoverable = (MAX_HEALTH
-                    - (entry.combat.health + entry.combat.pending_health_regen))
-                    .max(0.0);
-                if recoverable > 0.0001 {
-                    entry.combat.pending_health_regen +=
-                        HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable);
+                if entry.combat.reload_ends_at_ms <= now
+                    && entry.combat.ammo_in_mag < MAX_AMMO_IN_MAG
+                    && entry.combat.ammo_reserve > 0
+                {
+                    entry.combat.reload_ends_at_ms = now + RELOAD_TIME_MS;
                 }
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+                player_resources_payload(&entry.combat, entry.character.as_deref(), now)
             };
             inner.send_to(client_id, payload);
+        }
+        "player_pickup_ammo" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive || is_mana_character(player_state.character.as_deref()) {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "invalid_character_or_dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            if player_state.combat.ammo_reserve >= MAX_AMMO_TOTAL {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "ammo_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.mana_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    client_pickup_position,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.ammo_reserve =
+                        (entry.combat.ammo_reserve + AMMO_PICKUP_AMOUNT).min(MAX_AMMO_TOTAL);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Mana.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_ammo",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+            }
+        }
+        "player_pickup_health" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            let recoverable = (MAX_HEALTH
+                - (player_state.combat.health + player_state.combat.pending_health_regen))
+                .max(0.0);
+            if recoverable <= 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "health_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.health_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    client_pickup_position,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    let recoverable_now = (MAX_HEALTH
+                        - (entry.combat.health + entry.combat.pending_health_regen))
+                        .max(0.0);
+                    if recoverable_now > 0.0001 {
+                        entry.combat.pending_health_regen +=
+                            HEALTH_PICKUP_REGEN_AMOUNT.min(recoverable_now);
+                    }
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Health.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_health",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+            }
         }
         "player_pickup_mana" => {
-            let Some(_room_id) = client.room_id.clone() else {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
-                    return;
-                }
-                entry.combat.mana = (entry.combat.mana + MANA_PICKUP_AMOUNT).min(MAX_MANA);
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
             };
-            inner.send_to(client_id, payload);
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive || !is_mana_character(player_state.character.as_deref()) {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "invalid_character_or_dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            if player_state.combat.mana >= MAX_MANA - 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "mana_full",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.mana_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    client_pickup_position,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.mana = (entry.combat.mana + MANA_PICKUP_AMOUNT).min(MAX_MANA);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Mana.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_mana",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+            }
         }
         "player_pickup_shield" => {
-            let Some(_room_id) = client.room_id.clone() else {
+            let Some(room_id) = client.room_id.clone() else {
                 return;
             };
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                if !entry.combat.alive {
-                    return;
-                }
-                entry.combat.shield = (entry.combat.shield + SHIELD_PICKUP_AMOUNT).min(MAX_SHIELD);
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
             };
-            inner.send_to(client_id, payload);
-        }
-        "player_resources" => {
-            let payload = {
-                let Some(entry) = inner.clients.get_mut(client_id) else {
-                    return;
-                };
-                update_combat_regen(&mut entry.combat, now_ms());
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now_ms())
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let pickup_index = message.get("index").and_then(Value::as_u64).unwrap_or(u64::MAX) as usize;
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
             };
-            inner.send_to(client_id, payload);
+            if !player_state.combat.alive {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "dead",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            if player_state.combat.shield > 0.0001 {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "shield_not_empty",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                return;
+            }
+            let consumed = if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                consume_pickup(
+                    &mut meta.shield_pickups,
+                    pickup_index,
+                    player_state.state.position.x,
+                    player_state.state.position.z,
+                    client_pickup_position,
+                    now,
+                )
+            } else {
+                None
+            };
+            if let Some(respawn_at) = consumed {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    true,
+                    "consumed",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+                let payload = {
+                    let Some(entry) = inner.clients.get_mut(client_id) else {
+                        return;
+                    };
+                    update_combat_regen(&mut entry.combat, now);
+                    entry.combat.shield = (entry.combat.shield + SHIELD_PICKUP_AMOUNT).min(MAX_SHIELD);
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now)
+                };
+                inner.send_to(client_id, payload);
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"pickup_state",
+                      "ok": true,
+                      "data": {
+                        "kind": PickupKind::Shield.as_wire(),
+                        "index": pickup_index,
+                        "active": false,
+                        "respawnAtMs": respawn_at
+                      }
+                    }),
+                    None,
+                );
+            } else {
+                log_pickup_trace(
+                    "player_pickup_shield",
+                    client_id,
+                    &room_id,
+                    pickup_index,
+                    false,
+                    "out_of_range_or_respawning",
+                    (player_state.state.position.x, player_state.state.position.z),
+                    client_pickup_position,
+                );
+            }
         }
+        "player_resources" => {}
         "player_move" => {
             let Some(room_id) = client.room_id.clone() else {
                 return;
@@ -1569,7 +2625,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 return;
             };
 
-            let jumping = message
+            let requested_jumping = message
                 .get("jumping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
@@ -1588,6 +2644,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     clamp(px, -200.0, 200.0),
                     clamp(pz, -200.0, 200.0),
                     dt_ms,
+                    yaw,
                 );
                 resolve_player_position(
                     &inner,
@@ -1601,10 +2658,13 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 (clamp(px, -200.0, 200.0), clamp(pz, -200.0, 200.0))
             };
 
+            let next_y = clamp(py, 0.5, 4.0);
+            let jumping = requested_jumping && next_y > JUMPING_MIN_HEIGHT_Y;
+
             let next_state = PlayerState {
                 position: Vec3 {
                     x: next_x,
-                    y: clamp(py, 0.5, 4.0),
+                    y: next_y,
                     z: next_z,
                 },
                 rotation: Rotation {
@@ -1622,10 +2682,17 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 jumping,
                 moving,
             };
+            let mut resources_for_move: Option<(i64, i64, i64)> = None;
             if let Some(entry) = inner.clients.get_mut(client_id) {
+                update_combat_regen(&mut entry.combat, ts);
                 entry.state = next_state.clone();
                 entry.state_ts = ts;
                 push_state_snapshot(entry, ts);
+                resources_for_move = Some((
+                    entry.combat.health.round() as i64,
+                    entry.combat.shield.round() as i64,
+                    entry.combat.mana.round() as i64,
+                ));
             }
 
             inner.send_to(
@@ -1651,6 +2718,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 }),
             );
 
+            let (health_wire, shield_wire, mana_wire) = resources_for_move.unwrap_or((
+                MAX_HEALTH as i64,
+                START_SHIELD as i64,
+                MAX_MANA as i64,
+            ));
             inner.broadcast_room(
                 &room_id,
                 json!({
@@ -1659,6 +2731,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                   "data": {
                     "playerId": client_id,
                     "character": client.character,
+                    "health": health_wire,
+                    "shield": shield_wire,
+                    "mana": mana_wire,
                     "position": {
                       "x": next_state.position.x,
                       "y": next_state.position.y,
@@ -1684,6 +2759,100 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 client_id, event_type
             );
         }
+    }
+}
+
+fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &str, now: i64) -> bool {
+    let Some(client) = inner.clients.get_mut(client_id) else {
+        return false;
+    };
+    if now - client.global_msg_window_start_ms >= GLOBAL_MSG_RATE_WINDOW_MS {
+        client.global_msg_window_start_ms = now;
+        client.global_msg_count_in_window = 0;
+    }
+    client.global_msg_count_in_window = client.global_msg_count_in_window.saturating_add(1);
+    if client.global_msg_count_in_window > GLOBAL_MSG_RATE_MAX_PER_WINDOW {
+        return false;
+    }
+    match event_type {
+        "player_shoot" => {
+            if now - client.last_shoot_req_at_ms < SHOOT_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_shoot_req_at_ms = now;
+            true
+        }
+        "player_special_lunar_rain"
+        | "player_special_silent_cone"
+        | "player_special_neoorphen_meteor"
+        | "player_special_pumori_orbit" => {
+            if now - client.last_special_req_at_ms < SPECIAL_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_special_req_at_ms = now;
+            true
+        }
+        "player_pickup_ammo"
+        | "player_pickup_mana"
+        | "player_pickup_shield"
+        | "player_pickup_health" => {
+            if now - client.last_pickup_req_at_ms < PICKUP_REQ_MIN_INTERVAL_MS {
+                if pickup_trace_enabled() {
+                    debug!(
+                        "[ws_rooms][pickup] rate_limited client_id={} event={} delta_ms={}",
+                        client_id,
+                        event_type,
+                        now - client.last_pickup_req_at_ms
+                    );
+                }
+                return false;
+            }
+            client.last_pickup_req_at_ms = now;
+            true
+        }
+        "player_reload" => {
+            if now - client.last_reload_req_at_ms < RELOAD_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_reload_req_at_ms = now;
+            true
+        }
+        "player_respawn" => {
+            if now - client.last_respawn_req_at_ms < RESPAWN_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_respawn_req_at_ms = now;
+            true
+        }
+        "list_rooms" => {
+            if now - client.last_list_rooms_req_at_ms < LIST_ROOMS_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_list_rooms_req_at_ms = now;
+            true
+        }
+        "join_room" | "join_server_room" => {
+            if now - client.last_join_room_req_at_ms < JOIN_ROOM_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_join_room_req_at_ms = now;
+            true
+        }
+        "leave_room" => {
+            if now - client.last_leave_room_req_at_ms < LEAVE_ROOM_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_leave_room_req_at_ms = now;
+            true
+        }
+        "ping" => {
+            if now - client.last_ping_req_at_ms < PING_REQ_MIN_INTERVAL_MS {
+                return false;
+            }
+            client.last_ping_req_at_ms = now;
+            true
+        }
+        _ => true,
     }
 }
 
@@ -1717,21 +2886,31 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     }
     inner.ensure_room_meta(room_id);
     let spawn = pick_spawn_position(inner, room_id, Some(client_id));
+    let now = now_ms();
     if let Some(client) = inner.clients.get_mut(client_id) {
         client.room_id = Some(room_id.to_string());
         client.kills = 0;
         client.deaths = 0;
         client.combat = default_combat_state();
+        client.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
+        apply_special_cooldown_on_respawn(
+            &mut client.combat,
+            client.character.as_deref(),
+            now,
+        );
         client.state = default_player_state();
         client.state.position = spawn;
-        client.state_ts = now_ms();
+        client.state_ts = now;
         client.state_history.clear();
-        client.state_history.push(StateSnapshot {
+        client.state_history.push_back(StateSnapshot {
             ts: client.state_ts,
             position: client.state.position.clone(),
         });
     }
-    if let Some(state) = inner.room_state_json(room_id) {
+    if let Some(mut state) = inner.room_state_json(room_id) {
+        if let Some(obj) = state.as_object_mut() {
+            obj.insert("serverTs".to_string(), json!(now));
+        }
         inner.send_to(
             client_id,
             json!({ "type": "room_joined", "ok": true, "data": state }),
@@ -1750,6 +2929,7 @@ fn join_room_internal(inner: &mut Inner, client_id: &str, room_id: &str) {
     }
     inner.broadcast_room_state(room_id);
     inner.broadcast_rooms_list_all();
+    inner.broadcast_lobby_presence();
 }
 
 fn leave_room_internal(
@@ -1788,6 +2968,7 @@ fn leave_room_internal(
     let maybe_versus_winner_team = infer_versus_winner_after_leave(inner, &room_id, leaving_team);
     inner.broadcast_room_state(&room_id);
     inner.broadcast_rooms_list_all();
+    inner.broadcast_lobby_presence();
     if send_left_room {
         inner.send_to(
             client_id,
@@ -1795,6 +2976,743 @@ fn leave_room_internal(
         );
     }
     maybe_versus_winner_team.map(|team| (room_id, team))
+}
+
+fn system_chat_payload(text: &str, ts: i64) -> Value {
+    json!({
+      "type":"chat_message",
+      "ok": true,
+      "data": {
+        "playerId": "system",
+        "playerName": "SYSTEM",
+        "text": text,
+        "ts": ts
+      }
+    })
+}
+
+fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
+    let room = inner.rooms.rooms.get(room_id)?;
+    if room.mode != RoomMode::FreeForAll {
+        return None;
+    }
+    let bot_count = room
+        .players
+        .iter()
+        .filter(|id| inner.clients.get(*id).map(|c| c.is_bot).unwrap_or(false))
+        .count();
+    if bot_count >= BOT_MAX_PER_ROOM || room.players.len() >= room.max_players {
+        return None;
+    }
+
+    inner.client_seq = inner.client_seq.wrapping_add(1);
+    let bot_id = format!("bot-{}", inner.client_seq);
+    let mut rng = SeededRng::new((now_ms() as u64) ^ hash_room_id(room_id) ^ hash_room_id(&bot_id));
+    let names = [
+        "Agent_Neo",
+        "HexRider",
+        "ZeroPulse",
+        "NovaByte",
+        "K0ketron",
+        "NoxShard",
+        "Valkyr",
+        "EchoRune",
+        "GhostIO",
+        "RiftNine",
+    ];
+    let characters = ["silentman", "pumori", "neoorphen", "pezunalunar"];
+    let name_idx = ((rng.next_f64() * names.len() as f64).floor() as usize).min(names.len() - 1);
+    let num = 10 + ((rng.next_f64() * 90.0).floor() as i64).clamp(0, 89);
+    let character_idx =
+        ((rng.next_f64() * characters.len() as f64).floor() as usize).min(characters.len() - 1);
+    let bot_name = format!("{}-{}", names[name_idx], num);
+    let character = characters[character_idx].to_string();
+    let bot_orbit_phase = rng.next_f64() * std::f64::consts::TAU;
+    let bot_orbit_radius = 8.0 + (rng.next_f64() * 14.0);
+    let bot_orbit_speed = 0.30 + (rng.next_f64() * 0.45);
+    let bot_move_speed = 3.5 + (rng.next_f64() * 2.5);
+
+    let (tx_critical, mut rx_critical) = mpsc::unbounded_channel::<String>();
+    let (tx_regular, mut rx_regular) = mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
+    tokio::spawn(async move {
+        loop {
+            let next_msg = tokio::select! {
+                biased;
+                Some(msg) = rx_critical.recv() => Some(msg),
+                Some(msg) = rx_regular.recv() => Some(msg),
+                else => None,
+            };
+            if next_msg.is_none() {
+                break;
+            }
+        }
+    });
+
+    let initial_state = default_player_state();
+    inner.clients.insert(
+        bot_id.clone(),
+        ClientSession {
+            id: bot_id.clone(),
+            name: bot_name,
+            character: Some(character),
+            room_id: None,
+            state: initial_state.clone(),
+            state_ts: now_ms(),
+            combat: default_combat_state(),
+            kills: 0,
+            deaths: 0,
+            latency_ms: 0.0,
+            latency_probe_seq: 0,
+            latency_probe_sent_at: 0,
+            latency_probe_id: 0,
+            state_history: VecDeque::from([StateSnapshot {
+                ts: now_ms(),
+                position: initial_state.position.clone(),
+            }]),
+            last_shoot_req_at_ms: 0,
+            last_special_req_at_ms: 0,
+            last_pickup_req_at_ms: 0,
+            last_reload_req_at_ms: 0,
+            last_respawn_req_at_ms: 0,
+            last_list_rooms_req_at_ms: 0,
+            last_join_room_req_at_ms: 0,
+            last_leave_room_req_at_ms: 0,
+            last_ping_req_at_ms: 0,
+            global_msg_window_start_ms: 0,
+            global_msg_count_in_window: 0,
+            is_bot: true,
+            bot_orbit_phase,
+            bot_orbit_radius,
+            bot_orbit_speed,
+            bot_move_speed,
+            tx_critical,
+            tx_regular,
+            bot_task_abort: None,
+        },
+    );
+    join_room_internal(inner, &bot_id, room_id);
+    Some(bot_id)
+}
+
+fn handle_clear_bots_command(inner: &mut Inner, room_id: &str) -> usize {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return 0;
+    };
+    if room.mode != RoomMode::FreeForAll {
+        return 0;
+    }
+    let bot_ids: Vec<String> = room
+        .players
+        .iter()
+        .filter_map(|id| match inner.clients.get(id) {
+            Some(client) if client.is_bot => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    if bot_ids.is_empty() {
+        return 0;
+    }
+
+    for bot_id in &bot_ids {
+        if let Some(bot) = inner.clients.get(bot_id) {
+            if let Some(abort) = &bot.bot_task_abort {
+                abort.abort();
+            }
+        }
+        let _ = leave_room_internal(inner, bot_id, false);
+        inner.clients.remove(bot_id);
+    }
+    inner.broadcast_lobby_presence();
+    bot_ids.len()
+}
+
+async fn run_room_bot(state: Arc<WsRoomsState>, bot_id: String) {
+    let mut move_ticker = interval(Duration::from_millis(BOT_MOVE_TICK_MS));
+    let mut shoot_ticker = interval(Duration::from_millis(BOT_SHOOT_TICK_MS));
+    let mut respawn_ticker = interval(Duration::from_millis(BOT_RESPAWN_TICK_MS));
+    let mut special_ticker = interval(Duration::from_millis(BOT_SPECIAL_TICK_MS));
+    move_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    shoot_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    respawn_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    special_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = move_ticker.tick() => {
+                let mut inner = state.inner.write().await;
+                let (room_id, payload) = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    if room.mode != RoomMode::FreeForAll {
+                        break;
+                    }
+                    if !bot.combat.alive {
+                        continue;
+                    }
+                    let ts = now_ms();
+                    let dt_ms = clamp_i64(ts - bot.state_ts, 16, PLAYER_MAX_MOVE_DT_MS);
+                    let dt_s = dt_ms as f64 / 1000.0;
+                    let angle = (ts as f64 * 0.001 * bot.bot_orbit_speed) + bot.bot_orbit_phase;
+                    let target_x = bot.bot_orbit_radius * angle.cos();
+                    let target_z = bot.bot_orbit_radius * angle.sin();
+                    let to_target_x = target_x - bot.state.position.x;
+                    let to_target_z = target_z - bot.state.position.z;
+                    let to_target_len = (to_target_x * to_target_x + to_target_z * to_target_z).sqrt();
+                    let step = (bot.bot_move_speed.clamp(3.2, PLAYER_MAX_SPEED_UNITS_PER_SECOND) * dt_s)
+                        .max(0.04);
+                    let (req_x, req_z) = if to_target_len > 0.0001 {
+                        let ratio = (step / to_target_len).min(1.0);
+                        (
+                            bot.state.position.x + (to_target_x * ratio),
+                            bot.state.position.z + (to_target_z * ratio),
+                        )
+                    } else {
+                        (bot.state.position.x, bot.state.position.z)
+                    };
+                    let (x, z) = resolve_player_position_with_radius(
+                        &inner,
+                        &room_id,
+                        bot.state.position.x,
+                        bot.state.position.z,
+                        req_x,
+                        req_z,
+                        PLAYER_COLLISION_RADIUS * BOT_PILLAR_COLLISION_RADIUS_FACTOR,
+                    );
+                    let move_dx = x - bot.state.position.x;
+                    let move_dz = z - bot.state.position.z;
+                    let moved_len = (move_dx * move_dx + move_dz * move_dz).sqrt();
+                    let yaw = if moved_len > 0.0001 {
+                        move_dz.atan2(move_dx)
+                    } else {
+                        bot.state.rotation.yaw
+                    };
+                    let moving = moved_len > 0.01;
+                    {
+                        let Some(bot_mut) = inner.clients.get_mut(&bot_id) else {
+                            continue;
+                        };
+                        bot_mut.state.position.x = x;
+                        bot_mut.state.position.y = SPAWN_BASE_Y;
+                        bot_mut.state.position.z = z;
+                        bot_mut.state.rotation.yaw = yaw;
+                        bot_mut.state.rotation.pitch = 0.0;
+                        bot_mut.state.moving = moving;
+                        bot_mut.state.jumping = false;
+                        bot_mut.state_ts = ts;
+                        push_state_snapshot(bot_mut, ts);
+                    }
+                    let payload = json!({
+                      "type":"player_move",
+                      "ok": true,
+                      "data": {
+                        "playerId": bot_id,
+                        "position": { "x": x, "y": SPAWN_BASE_Y, "z": z },
+                        "rotation": { "yaw": yaw, "pitch": 0.0 },
+                        "jumping": false,
+                        "moving": moving,
+                        "ts": ts
+                      }
+                    });
+                    (room_id, payload)
+                };
+                inner.broadcast_room(&room_id, payload, Some(&bot_id));
+            }
+            _ = shoot_ticker.tick() => {
+                let mut inner = state.inner.write().await;
+                let room_id = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    if !inner.rooms.rooms.contains_key(&room_id) {
+                        break;
+                    }
+                    room_id
+                };
+                bot_apply_authoritative_shot(&mut inner, &state, &room_id, &bot_id);
+            }
+            _ = special_ticker.tick() => {
+                let mut inner = state.inner.write().await;
+                let room_id = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    if room.mode != RoomMode::FreeForAll || room.status != RoomStatus::InGame {
+                        continue;
+                    }
+                    room_id
+                };
+                bot_try_cast_special(&mut inner, &state, &room_id, &bot_id);
+            }
+            _ = respawn_ticker.tick() => {
+                let mut inner = state.inner.write().await;
+                let can_respawn = {
+                    let Some(bot) = inner.clients.get(&bot_id) else {
+                        break;
+                    };
+                    let Some(room_id) = bot.room_id.clone() else {
+                        break;
+                    };
+                    let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                        break;
+                    };
+                    room.status == RoomStatus::InGame
+                        && !bot.combat.alive
+                        && now_ms() >= bot.combat.respawn_available_at_ms
+                };
+                if !can_respawn {
+                    continue;
+                }
+                let room_id = match inner.clients.get(&bot_id).and_then(|bot| bot.room_id.clone()) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let spawn = pick_spawn_position(&inner, &room_id, Some(&bot_id));
+                let (position, health, shield, mana, ammo_in_mag, ammo_reserve, spawn_protected_until_ms) = {
+                    let Some(bot) = inner.clients.get_mut(&bot_id) else {
+                        break;
+                    };
+                    bot.state = default_player_state();
+                    bot.state.position = spawn;
+                    bot.state_ts = now_ms();
+                    bot.combat = default_combat_state();
+                    let now_respawn = now_ms();
+                    bot.combat.spawn_protected_until_ms = now_respawn + RESPAWN_SPAWN_PROTECTION_MS;
+                    apply_special_cooldown_on_respawn(
+                        &mut bot.combat,
+                        bot.character.as_deref(),
+                        now_respawn,
+                    );
+                    bot.state_history.clear();
+                    bot.state_history.push_back(StateSnapshot {
+                        ts: bot.state_ts,
+                        position: bot.state.position.clone(),
+                    });
+                    (
+                        json!({ "x": bot.state.position.x, "y": bot.state.position.y, "z": bot.state.position.z }),
+                        bot.combat.health.round() as i64,
+                        bot.combat.shield.round() as i64,
+                        bot.combat.mana.round() as i64,
+                        bot.combat.ammo_in_mag,
+                        bot.combat.ammo_reserve,
+                        bot.combat.spawn_protected_until_ms,
+                    )
+                };
+                inner.broadcast_room(
+                    &room_id,
+                    json!({
+                      "type":"player_respawned",
+                      "ok": true,
+                      "data": {
+                        "playerId": bot_id,
+                        "position": position,
+                        "health": health,
+                        "shield": shield,
+                        "mana": mana,
+                        "ammoInMag": ammo_in_mag,
+                        "ammoReserve": ammo_reserve,
+                        "spawnProtectedUntilMs": spawn_protected_until_ms,
+                        "isReloading": false,
+                        "reloadRemainingMs": 0,
+                        "ts": now_ms()
+                      }
+                    }),
+                    None,
+                );
+                inner.broadcast_room_state(&room_id);
+            }
+        }
+    }
+    // Cleanup de sesión del bot cuando el loop termina (por cualquier break).
+    // Evita que el ClientSession quede zombie en inner.clients.
+    let mut inner = state.inner.write().await;
+    if inner.clients.contains_key(&bot_id) {
+        let _ = leave_room_internal(&mut inner, &bot_id, false);
+        inner.clients.remove(&bot_id);
+        inner.cleanup_removed_room_meta();
+        inner.broadcast_lobby_presence();
+    }
+}
+
+fn bot_apply_authoritative_shot(
+    inner: &mut Inner,
+    state: &Arc<WsRoomsState>,
+    room_id: &str,
+    bot_id: &str,
+) {
+    let now = now_ms();
+    let (origin, fallback_direction, character_for_shot) = {
+        let Some(entry) = inner.clients.get_mut(bot_id) else {
+            return;
+        };
+        if !entry.combat.alive {
+            return;
+        }
+        update_combat_regen(&mut entry.combat, now);
+        let shot_interval = get_shot_interval_ms(entry.character.as_deref());
+        if now - entry.combat.last_shot_at < shot_interval {
+            return;
+        }
+        if entry.combat.mana + 0.0001 < MANA_COST_PER_SHOT {
+            return;
+        }
+        entry.combat.mana = (entry.combat.mana - MANA_COST_PER_SHOT).max(0.0);
+        entry.combat.last_shot_at = now;
+        let origin = server_eye_origin_from_state(&entry.state);
+        let direction =
+            server_aim_direction_from_rotation(&entry.state.rotation).unwrap_or(Vec3 {
+                x: entry.state.rotation.yaw.cos(),
+                y: 0.0,
+                z: entry.state.rotation.yaw.sin(),
+            });
+        (origin, direction, entry.character.clone())
+    };
+    let direction = bot_pick_target_direction(inner, room_id, bot_id, &origin, &fallback_direction);
+
+    let wall_hit_distance = resolve_wall_hit_distance(inner, room_id, &origin, &direction, 95.0);
+    let is_mana = is_mana_character(character_for_shot.as_deref());
+    let ground_hit_distance = if is_mana && direction.y > -0.35 {
+        None
+    } else {
+        resolve_ground_hit_distance(&origin, &direction, 95.0)
+    };
+    let effective_distance = match (wall_hit_distance, ground_hit_distance) {
+        (Some(w), Some(g)) => w.min(g).min(95.0),
+        (Some(w), None) => w.min(95.0),
+        (None, Some(g)) => g.min(95.0),
+        (None, None) => 95.0,
+    };
+    inner.broadcast_room(
+        room_id,
+        json!({
+          "type":"player_shoot",
+          "ok": true,
+          "data": {
+            "playerId": bot_id,
+            "character": character_for_shot.clone(),
+            "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+            "direction": { "x": direction.x, "y": direction.y, "z": direction.z },
+            "distance": effective_distance,
+            "ts": now
+          }
+        }),
+        Some(bot_id),
+    );
+
+    let rewind_ts = compute_rewind_timestamp(now, None, LAG_COMP_MAGIC_MS, 0.0);
+    let hit = find_best_hit(
+        inner,
+        room_id,
+        bot_id,
+        &origin,
+        &direction,
+        effective_distance,
+        rewind_ts,
+    );
+    let hit = match hit {
+        Some((victim_id, headshot, hit_dist)) => {
+            let wall_blocked = wall_hit_distance
+                .map(|w| hit_dist > (w + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                .unwrap_or(false);
+            let ground_blocked = ground_hit_distance
+                .map(|g| hit_dist > (g + WALL_HIT_PLAYER_TOLERANCE_UNITS))
+                .unwrap_or(false);
+            if wall_blocked || ground_blocked {
+                None
+            } else {
+                Some((victim_id, headshot, hit_dist))
+            }
+        }
+        None => None,
+    };
+    if let Some((victim_id, headshot, hit_dist)) = hit {
+        let projectile_speed =
+            projectile_speed_units_per_second(character_for_shot.as_deref());
+        let travel_ms = ((hit_dist / projectile_speed.max(1.0)) * 1000.0).round();
+        let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+        let impact_point = Vec3 {
+            x: origin.x + (direction.x * hit_dist),
+            y: origin.y + (direction.y * hit_dist),
+            z: origin.z + (direction.z * hit_dist),
+        };
+        tokio::spawn(apply_delayed_authoritative_hit(
+            Arc::clone(state),
+            room_id.to_string(),
+            bot_id.to_string(),
+            victim_id,
+            headshot,
+            HIT_DAMAGE,
+            impact_point,
+            Some(now),
+            impact_delay_ms,
+            false,
+        ));
+    } else {
+        let impact_point = Vec3 {
+            x: origin.x + (direction.x * effective_distance),
+            y: origin.y + (direction.y * effective_distance),
+            z: origin.z + (direction.z * effective_distance),
+        };
+        let projectile_speed =
+            projectile_speed_units_per_second(character_for_shot.as_deref());
+        let travel_ms = ((effective_distance / projectile_speed.max(1.0)) * 1000.0).round();
+        let impact_delay_ms = (travel_ms as i64).clamp(30, 900) as u64;
+        tokio::spawn(apply_delayed_normal_shockwave_damage(
+            Arc::clone(state),
+            room_id.to_string(),
+            bot_id.to_string(),
+            impact_point,
+            impact_delay_ms,
+        ));
+    }
+}
+
+fn bot_pick_target_direction(
+    inner: &Inner,
+    room_id: &str,
+    bot_id: &str,
+    origin: &Vec3,
+    fallback: &Vec3,
+) -> Vec3 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return fallback.clone();
+    };
+    let mut best_dir: Option<Vec3> = None;
+    let mut best_d2 = f64::MAX;
+    for victim_id in &room.players {
+        if victim_id == bot_id {
+            continue;
+        }
+        if is_friendly_fire_blocked(inner, room_id, bot_id, victim_id) {
+            continue;
+        }
+        let Some(victim) = inner.clients.get(victim_id) else {
+            continue;
+        };
+        if !victim.combat.alive {
+            continue;
+        }
+        let target = Vec3 {
+            x: victim.state.position.x,
+            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+            z: victim.state.position.z,
+        };
+        let to = Vec3 {
+            x: target.x - origin.x,
+            y: target.y - origin.y,
+            z: target.z - origin.z,
+        };
+        let d2 = to.x * to.x + to.y * to.y + to.z * to.z;
+        if d2 < 0.001 || d2 >= best_d2 {
+            continue;
+        }
+        if let Some(normalized) = normalize_vec3(to) {
+            best_d2 = d2;
+            best_dir = Some(normalized);
+        }
+    }
+    best_dir.unwrap_or_else(|| fallback.clone())
+}
+
+fn bot_try_cast_special(
+    inner: &mut Inner,
+    state: &Arc<WsRoomsState>,
+    room_id: &str,
+    bot_id: &str,
+) {
+    let (character_key, origin, allow_cast, caster_latency_ms) = {
+        let Some(entry) = inner.clients.get_mut(bot_id) else {
+            return;
+        };
+        if !entry.combat.alive {
+            return;
+        }
+        let now = now_ms();
+        let key = normalize_character(entry.character.as_deref());
+        let allow = match key.as_str() {
+            "silentman" | "silenmant" => {
+                if now >= entry.combat.silent_cd_until_ms {
+                    entry.combat.silent_cd_until_ms = now + SILENT_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            "pumori" => {
+                if now >= entry.combat.pumori_cd_until_ms {
+                    entry.combat.pumori_cd_until_ms = now + PUMORI_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            "neoorphen" => {
+                if now >= entry.combat.neoorphen_cd_until_ms {
+                    entry.combat.neoorphen_cd_until_ms = now + NEOORPHEN_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => {
+                if now >= entry.combat.lunar_cd_until_ms {
+                    entry.combat.lunar_cd_until_ms = now + LUNAR_SPECIAL_COOLDOWN_MS;
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        (key, entry.state.position.clone(), allow, entry.latency_ms)
+    };
+    if !allow_cast {
+        return;
+    }
+
+    match character_key.as_str() {
+        "silentman" | "silenmant" => {
+            let mut rays = Vec::new();
+            for i in 0..100 {
+                let t = (i as f64) / 100.0;
+                let angle = t * std::f64::consts::TAU;
+                rays.push(json!({
+                  "direction": { "x": angle.cos(), "y": 0.0, "z": angle.sin() },
+                  "distance": 90.0
+                }));
+            }
+            inner.broadcast_room(
+                room_id,
+                json!({
+                  "type":"special_silent_cone",
+                  "ok": true,
+                  "data": {
+                    "playerId": bot_id,
+                    "character": "silentman",
+                    "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
+                    "rays": rays,
+                    "ts": now_ms()
+                  }
+                }),
+                None,
+            );
+            let room_players: Vec<String> = inner
+                .rooms
+                .rooms
+                .get(room_id)
+                .map(|r| r.players.iter().cloned().collect())
+                .unwrap_or_default();
+            let now_hit = now_ms();
+            let rewind_ts = compute_rewind_timestamp(now_hit, None, LAG_COMP_MAGIC_MS, caster_latency_ms);
+            let mut pending_impacts: Vec<(Vec3, u64)> = Vec::new();
+            for victim_id in &room_players {
+                if victim_id == bot_id {
+                    continue;
+                }
+                if is_friendly_fire_blocked(inner, room_id, bot_id, victim_id) {
+                    continue;
+                }
+                let Some(victim) = inner.clients.get(victim_id) else {
+                    continue;
+                };
+                if !victim.combat.alive {
+                    continue;
+                }
+                let rewound = client_position_at(victim, rewind_ts);
+                let to_target = Vec3 {
+                    x: rewound.x - origin.x,
+                    y: rewound.y - origin.y,
+                    z: rewound.z - origin.z,
+                };
+                let distance = distance_sq(&rewound, &origin).sqrt();
+                if distance <= 0.0001 || distance > SILENT_SPECIAL_MAX_DISTANCE {
+                    continue;
+                }
+                let Some(direction) = normalize_vec3(to_target) else {
+                    continue;
+                };
+                if let Some(wall_distance) =
+                    resolve_wall_hit_distance(inner, room_id, &origin, &direction, distance)
+                {
+                    if wall_distance + 0.2 < distance {
+                        continue;
+                    }
+                }
+                let delay_ms = ((distance / SILENT_SPECIAL_PROJECTILE_SPEED.max(1.0)) * 1000.0)
+                    .round()
+                    .clamp(25.0, 900.0) as u64;
+                pending_impacts.push((rewound, delay_ms));
+            }
+            for (impact, delay_ms) in pending_impacts {
+                tokio::spawn(apply_delayed_radial_falloff_damage(
+                    Arc::clone(state),
+                    room_id.to_string(),
+                    bot_id.to_string(),
+                    impact,
+                    SILENT_SPECIAL_EXPLOSION_RADIUS,
+                    HIT_DAMAGE,
+                    SILENT_SPECIAL_MIN_FACTOR,
+                    SILENT_SPECIAL_MAX_FACTOR,
+                    delay_ms,
+                ));
+            }
+        }
+        "pumori" => {
+            inner.broadcast_room(
+                room_id,
+                json!({
+                  "type":"special_pumori_orbit_start",
+                  "ok": true,
+                  "data": {
+                    "playerId": bot_id,
+                    "durationMs": PUMORI_ORBIT_DURATION_MS,
+                    "ts": now_ms(),
+                    "origin": {
+                      "x": origin.x,
+                      "y": origin.y,
+                      "z": origin.z
+                    }
+                  }
+                }),
+                None,
+            );
+            tokio::spawn(run_pumori_orbit_damage(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+            ));
+        }
+        "neoorphen" => {
+            tokio::spawn(run_neoorphen_meteor_special(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+                origin,
+            ));
+        }
+        _ => {
+            tokio::spawn(run_lunar_rain_special(
+                Arc::clone(state),
+                room_id.to_string(),
+                bot_id.to_string(),
+                origin,
+            ));
+        }
+    }
 }
 
 fn game_state_payload(inner: &Inner, room_id: &str) -> Value {
@@ -1833,6 +3751,16 @@ fn kills_to_win_for_room(inner: &Inner, room_id: &str) -> i64 {
         (RoomMode::VersusMatch, Some(VersusType::TwoVsTwo)) => VERSUS_2V2_KILLS_TO_WIN,
         _ => FFA_KILLS_TO_WIN,
     }
+}
+
+fn respawn_delay_ms_for_room(inner: &Inner, room_id: &str) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return FFA_RESPAWN_MS;
+    };
+    if room.mode == RoomMode::VersusMatch {
+        return VERSUS_RESPAWN_MS;
+    }
+    FFA_RESPAWN_MS
 }
 
 fn team_kills(inner: &Inner, room_id: &str, team: Team) -> i64 {
@@ -1923,7 +3851,17 @@ fn apply_hit_and_emit(
     base_damage: f64,
     ts: i64,
 ) -> bool {
+    if attacker_id == victim_id {
+        return false;
+    }
+    let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
+    let mut death_award_eligible = false;
+    let applied_damage = if headshot {
+        base_damage * HEADSHOT_DAMAGE_MULTIPLIER
+    } else {
+        base_damage
+    };
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
             return false;
@@ -1931,19 +3869,24 @@ fn apply_hit_and_emit(
         if !victim.combat.alive {
             return false;
         }
-        if headshot {
-            victim.combat.health = 0.0;
-        } else if victim.combat.shield > 0.0 {
-            let reduced = (base_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
-            let shield_cost = (base_damage * SHIELD_DAMAGE_COST_FACTOR).ceil();
-            victim.combat.shield = (victim.combat.shield - shield_cost).max(0.0);
+        if ts < victim.combat.spawn_protected_until_ms {
+            return false;
+        }
+        if victim.combat.shield > 0.0 {
+            let reduced = (applied_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
+            victim.combat.shield = (victim.combat.shield - SHIELD_HIT_COST_PER_HIT).max(0.0);
             victim.combat.health = (victim.combat.health - reduced).max(0.0);
         } else {
-            victim.combat.health = (victim.combat.health - base_damage).max(0.0);
+            victim.combat.health = (victim.combat.health - applied_damage).max(0.0);
         }
         victim.combat.pending_health_regen = 0.0;
         if victim.combat.health <= 0.0 {
             victim.combat.alive = false;
+            victim.combat.respawn_available_at_ms = ts + respawn_delay_ms;
+            if ts > victim.combat.last_death_award_at_ms {
+                victim.combat.last_death_award_at_ms = ts;
+                death_award_eligible = true;
+            }
             died = true;
         }
         (victim.combat.health, victim.combat.shield)
@@ -1964,7 +3907,7 @@ fn apply_hit_and_emit(
         }),
     );
 
-    if !died {
+    if !died || !death_award_eligible {
         inner.broadcast_room_state(room_id);
         return false;
     }
@@ -1987,12 +3930,23 @@ fn apply_hit_and_emit(
             "playerId": victim_id,
             "killerId": attacker_id,
             "headshot": headshot,
+            "respawnAvailableAtMs": ts + respawn_delay_ms,
             "ts": ts
           }
         }),
         None,
     );
 
+    let already_cooldown = inner
+        .rooms
+        .rooms
+        .get(room_id)
+        .map(|r| r.status == RoomStatus::Cooldown)
+        .unwrap_or(false);
+    if already_cooldown {
+        inner.broadcast_room_state(room_id);
+        return false;
+    }
     if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
         maybe_resolve_match_winner(inner, room_id, attacker_id, killer_kills)
     {
@@ -2049,7 +4003,7 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
         ticker.tick().await;
 
         let winner = {
-            let mut inner = state.inner.lock().await;
+            let mut inner = state.inner.write().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -2163,11 +4117,20 @@ async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, cast
 
                 if victim_hit.is_some() {
                     hammer.active = false;
+                    let impact_center = victim_hit
+                        .as_ref()
+                        .and_then(|victim_id| inner.clients.get(victim_id))
+                        .map(|victim| Vec3 {
+                            x: victim.state.position.x,
+                            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+                            z: victim.state.position.z,
+                        })
+                        .unwrap_or_else(|| segment_end.clone());
                     if apply_radial_falloff_damage(
                         &mut inner,
                         &room_id,
                         &caster_id,
-                        &segment_end,
+                        &impact_center,
                         PUMORI_SPECIAL_EXPLOSION_RADIUS,
                         PUMORI_SPECIAL_HIT_DAMAGE,
                         PUMORI_SPECIAL_MIN_FACTOR,
@@ -2215,7 +4178,7 @@ async fn apply_delayed_authoritative_hit(
     sleep(Duration::from_millis(impact_delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -2237,12 +4200,32 @@ async fn apply_delayed_authoritative_hit(
         if !inner.clients.contains_key(&attacker_id) {
             return;
         }
-        let Some(revalidated_headshot) = classify_point_hit_on_player(
+        let revalidated_headshot = classify_point_hit_on_player_with_history(
+            victim,
             &impact_point,
-            &victim.state.position,
             headshot,
-            MAGIC_IMPACT_REVALIDATION_MARGIN,
-        ) else {
+            shot_ts,
+            impact_delay_ms as i64,
+        )
+        .or_else(|| classify_close_range_fallback_hit(victim, &impact_point));
+        let Some(revalidated_headshot) = revalidated_headshot else {
+            if send_hit_confirm {
+                let mut data = json!({
+                  "reason": "revalidation_failed",
+                  "ts": now_ms()
+                });
+                if let Some(shot_ts_value) = shot_ts {
+                    data["shotTs"] = json!(shot_ts_value);
+                }
+                inner.send_to(
+                    &attacker_id,
+                    json!({
+                      "type":"hit_miss",
+                      "ok": true,
+                      "data": data
+                    }),
+                );
+            }
             return;
         };
         let ts = now_ms();
@@ -2318,13 +4301,22 @@ fn apply_radial_falloff_damage(
             y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
             z: victim.state.position.z,
         };
-        if !has_line_of_sight(inner, room_id, impact, &victim_aim) {
-            continue;
-        }
         let dx = victim.state.position.x - impact.x;
         let dz = victim.state.position.z - impact.z;
-        let dist = (dx * dx + dz * dz).sqrt();
+        let dy_raw = (victim_aim.y - impact.y).abs();
+        let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
+        let dist = (dx * dx + dz * dz + dy * dy).sqrt();
         if dist > radius {
+            continue;
+        }
+        let has_los = has_line_of_sight_with_margin(
+            inner,
+            room_id,
+            impact,
+            &victim_aim,
+            RADIAL_LOS_CLEARANCE_UNITS,
+        );
+        if !has_los && dist > RADIAL_LOS_BYPASS_CLOSE_RADIUS {
             continue;
         }
         let t = (1.0 - (dist / radius.max(0.001))).clamp(0.0, 1.0);
@@ -2345,8 +4337,23 @@ fn apply_radial_falloff_damage(
             splash_damage,
             ts,
         ) {
+            inner.send_to(
+                attacker_id,
+                json!({
+                  "type":"hit_confirm",
+                  "data": { "victimId": victim_id, "headshot": false }
+                }),
+            );
             winner = true;
             break;
+        } else {
+            inner.send_to(
+                attacker_id,
+                json!({
+                  "type":"hit_confirm",
+                  "data": { "victimId": victim_id, "headshot": false }
+                }),
+            );
         }
     }
     winner
@@ -2384,7 +4391,7 @@ async fn apply_delayed_normal_shockwave_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -2428,7 +4435,7 @@ async fn apply_delayed_radial_falloff_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -2477,7 +4484,7 @@ async fn apply_delayed_area_wave_damage(
     sleep(Duration::from_millis(delay_ms)).await;
 
     let winner = {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -2510,16 +4517,26 @@ async fn apply_delayed_area_wave_damage(
                     y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
                     z: victim.state.position.z,
                 };
-                if !has_line_of_sight(&inner, &room_id, impact, &victim_aim) {
-                    continue;
-                }
                 let dx = victim.state.position.x - impact.x;
                 let dz = victim.state.position.z - impact.z;
-                if (dx * dx + dz * dz).sqrt() > aoe_radius {
+                let dy_raw = (victim_aim.y - impact.y).abs();
+                let dy = dy_raw.min(RADIAL_VERTICAL_MAX_DELTA) * RADIAL_VERTICAL_FACTOR;
+                let dist = (dx * dx + dz * dz + dy * dy).sqrt();
+                if dist > aoe_radius {
+                    continue;
+                }
+                let has_los = has_line_of_sight_with_margin(
+                    &inner,
+                    &room_id,
+                    impact,
+                    &victim_aim,
+                    RADIAL_LOS_CLEARANCE_UNITS,
+                );
+                if !has_los && dist > RADIAL_LOS_BYPASS_CLOSE_RADIUS {
                     continue;
                 }
                 hit_once.insert(victim_id.clone());
-                let t = (1.0 - (((dx * dx + dz * dz).sqrt()) / aoe_radius.max(0.001))).clamp(0.0, 1.0);
+                let t = (1.0 - (dist / aoe_radius.max(0.001))).clamp(0.0, 1.0);
                 let factor = min_factor + ((max_factor - min_factor) * t);
                 let mut damage = base_damage * factor;
                 if max_factor < 1.0 {
@@ -2537,8 +4554,23 @@ async fn apply_delayed_area_wave_damage(
                     damage,
                     now_hit,
                 ) {
+                    inner.send_to(
+                        &caster_id,
+                        json!({
+                          "type":"hit_confirm",
+                          "data": { "victimId": victim_id, "headshot": false }
+                        }),
+                    );
                     winner = true;
                     break;
+                } else {
+                    inner.send_to(
+                        &caster_id,
+                        json!({
+                          "type":"hit_confirm",
+                          "data": { "victimId": victim_id, "headshot": false }
+                        }),
+                    );
                 }
             }
             if winner {
@@ -2593,7 +4625,7 @@ async fn run_lunar_rain_special(
         ticker.tick().await;
 
         let impacts = {
-            let inner = state.inner.lock().await;
+            let inner = state.inner.read().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -2670,7 +4702,7 @@ async fn run_neoorphen_meteor_special(
         ticker.tick().await;
 
         let impacts = {
-            let inner = state.inner.lock().await;
+            let inner = state.inner.read().await;
             let Some(room) = inner.rooms.rooms.get(&room_id) else {
                 return;
             };
@@ -2736,7 +4768,7 @@ async fn run_neoorphen_meteor_special(
 async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds: u64) {
     sleep(Duration::from_secs(seconds)).await;
 
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
     let Some(status) = inner.rooms.rooms.get(&room_id).map(|r| r.status) else {
         return;
     };
@@ -2759,14 +4791,21 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     for player_id in player_ids {
         let spawn = pick_spawn_position(&inner, &room_id, Some(&player_id));
         if let Some(client) = inner.clients.get_mut(&player_id) {
+            let now = now_ms();
             client.kills = 0;
             client.deaths = 0;
             client.combat = default_combat_state();
+            client.combat.spawn_protected_until_ms = now + RESPAWN_SPAWN_PROTECTION_MS;
+            apply_special_cooldown_on_respawn(
+                &mut client.combat,
+                client.character.as_deref(),
+                now,
+            );
             client.state = default_player_state();
             client.state.position = spawn;
-            client.state_ts = now_ms();
+            client.state_ts = now;
             client.state_history.clear();
-            client.state_history.push(StateSnapshot {
+            client.state_history.push_back(StateSnapshot {
                 ts: client.state_ts,
                 position: client.state.position.clone(),
             });
@@ -2869,7 +4908,7 @@ async fn start_versus_room_deletion_countdown(
     winner_team: Team,
 ) {
     {
-        let mut inner = state.inner.lock().await;
+        let mut inner = state.inner.write().await;
         let Some(room) = inner.rooms.rooms.get(&room_id) else {
             return;
         };
@@ -2944,7 +4983,7 @@ async fn start_versus_room_deletion_countdown(
 
     sleep(Duration::from_secs(ROUND_RESET_SECONDS as u64)).await;
 
-    let mut inner = state.inner.lock().await;
+    let mut inner = state.inner.write().await;
     let Some(room) = inner.rooms.rooms.get(&room_id) else {
         return;
     };
@@ -2995,6 +5034,12 @@ fn default_combat_state() -> CombatState {
         health: MAX_HEALTH,
         shield: START_SHIELD,
         mana: MAX_MANA,
+        ammo_in_mag: MAX_AMMO_IN_MAG,
+        ammo_reserve: (MAX_AMMO_TOTAL - MAX_AMMO_IN_MAG).max(0),
+        reload_ends_at_ms: 0,
+        respawn_available_at_ms: 0,
+        spawn_protected_until_ms: 0,
+        last_death_award_at_ms: 0,
         pending_health_regen: 0.0,
         last_health_regen_at: now,
         last_mana_regen_at: now,
@@ -3004,6 +5049,24 @@ fn default_combat_state() -> CombatState {
         silent_cd_until_ms: 0,
         neoorphen_cd_until_ms: 0,
         pumori_cd_until_ms: 0,
+    }
+}
+
+fn apply_special_cooldown_on_respawn(
+    combat: &mut CombatState,
+    character: Option<&str>,
+    now_ms_v: i64,
+) {
+    combat.lunar_cd_until_ms = 0;
+    combat.silent_cd_until_ms = 0;
+    match normalize_character(character).as_str() {
+        "silentman" | "silenmant" => {
+            combat.silent_cd_until_ms = now_ms_v + SILENT_SPECIAL_COOLDOWN_MS;
+        }
+        "pumori" | "neoorphen" | "pezunalunar" | "pezuanalunar" => {
+            combat.lunar_cd_until_ms = now_ms_v + LUNAR_SPECIAL_COOLDOWN_MS;
+        }
+        _ => {}
     }
 }
 
@@ -3033,11 +5096,28 @@ fn update_combat_regen(combat: &mut CombatState, now_ms_v: i64) {
         combat.mana = (combat.mana + MANA_REGEN_PER_SECOND * dt_mana).min(MAX_MANA);
     }
 
+    if combat.reload_ends_at_ms > 0 && now_ms_v >= combat.reload_ends_at_ms {
+        combat.reload_ends_at_ms = 0;
+        let needed = (MAX_AMMO_IN_MAG - combat.ammo_in_mag).max(0);
+        let reloaded = needed.min(combat.ammo_reserve.max(0));
+        combat.ammo_in_mag += reloaded;
+        combat.ammo_reserve = (combat.ammo_reserve - reloaded).max(0);
+    }
+
     combat.health = combat.health.clamp(0.0, MAX_HEALTH);
     combat.shield = combat.shield.clamp(0.0, MAX_SHIELD);
+    combat.ammo_in_mag = combat.ammo_in_mag.clamp(0, MAX_AMMO_IN_MAG);
+    combat.ammo_reserve = combat.ammo_reserve.clamp(0, MAX_AMMO_TOTAL);
 }
 
 fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_ms_v: i64) -> Value {
+    let is_mana = is_mana_character(character);
+    let is_reloading = !is_mana && combat.reload_ends_at_ms > now_ms_v;
+    let reload_remaining_ms = if is_reloading {
+        (combat.reload_ends_at_ms - now_ms_v).max(0)
+    } else {
+        0
+    };
     json!({
       "type": "player_resources",
       "ok": true,
@@ -3045,6 +5125,11 @@ fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_m
         "health": combat.health,
         "shield": combat.shield.round() as i64,
         "mana": combat.mana.round() as i64,
+        "ammoInMag": combat.ammo_in_mag,
+        "ammoReserve": combat.ammo_reserve,
+        "spawnProtectedUntilMs": combat.spawn_protected_until_ms,
+        "isReloading": is_reloading,
+        "reloadRemainingMs": reload_remaining_ms,
         "pendingHealthRegen": combat.pending_health_regen,
         "lunarRainCooldownMs": current_special_cooldown_remaining_ms(combat, character, now_ms_v)
       }
@@ -3076,17 +5161,17 @@ fn normalize_character(character: Option<&str>) -> String {
 }
 
 fn push_state_snapshot(client: &mut ClientSession, ts: i64) {
-    client.state_history.push(StateSnapshot {
+    client.state_history.push_back(StateSnapshot {
         ts,
         position: client.state.position.clone(),
     });
     let cutoff = ts - STATE_HISTORY_WINDOW_MS;
     while client.state_history.len() > 2 {
-        let first_ts = client.state_history.first().map(|s| s.ts).unwrap_or(ts);
+        let first_ts = client.state_history.front().map(|s| s.ts).unwrap_or(ts);
         if first_ts >= cutoff {
             break;
         }
-        client.state_history.remove(0);
+        client.state_history.pop_front();
     }
 }
 
@@ -3097,7 +5182,7 @@ fn client_position_at(client: &ClientSession, target_ts: i64) -> Vec3 {
     if target_ts <= client.state_history[0].ts {
         return client.state_history[0].position.clone();
     }
-    if let Some(last) = client.state_history.last() {
+    if let Some(last) = client.state_history.back() {
         if target_ts >= last.ts {
             return last.position.clone();
         }
@@ -3119,6 +5204,52 @@ fn client_position_at(client: &ClientSession, target_ts: i64) -> Vec3 {
     client.state.position.clone()
 }
 
+fn client_speed_at_ts(client: &ClientSession, target_ts: i64) -> f64 {
+    if client.state_history.len() < 2 {
+        return 0.0;
+    }
+    if target_ts <= client.state_history[0].ts {
+        let first = &client.state_history[0];
+        let second = &client.state_history[1];
+        let dt_s = ((second.ts - first.ts).max(1) as f64) / 1000.0;
+        let dx = second.position.x - first.position.x;
+        let dz = second.position.z - first.position.z;
+        return ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35);
+    }
+    if let Some(last) = client.state_history.back() {
+        if target_ts >= last.ts {
+            let len = client.state_history.len();
+            let prev = &client.state_history[len - 2];
+            let dt_s = ((last.ts - prev.ts).max(1) as f64) / 1000.0;
+            let dx = last.position.x - prev.position.x;
+            let dz = last.position.z - prev.position.z;
+            return ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35);
+        }
+    }
+    let mut prev_opt: Option<&StateSnapshot> = None;
+    let mut next_opt: Option<&StateSnapshot> = None;
+    for i in 1..client.state_history.len() {
+        let prev = &client.state_history[i - 1];
+        let next = &client.state_history[i];
+        if target_ts >= prev.ts && target_ts <= next.ts {
+            prev_opt = Some(prev);
+            next_opt = Some(next);
+            break;
+        }
+    }
+    let (prev, next) = match (prev_opt, next_opt) {
+        (Some(prev), Some(next)) => (prev, next),
+        _ => {
+            let len = client.state_history.len();
+            (&client.state_history[len - 2], &client.state_history[len - 1])
+        }
+    };
+    let dt_s = ((next.ts - prev.ts).max(1) as f64) / 1000.0;
+    let dx = next.position.x - prev.position.x;
+    let dz = next.position.z - prev.position.z;
+    ((dx * dx + dz * dz).sqrt() / dt_s).clamp(0.0, PLAYER_MAX_SPEED_UNITS_PER_SECOND * 1.35)
+}
+
 fn is_mana_character(character: Option<&str>) -> bool {
     matches!(
         normalize_character(character).as_str(),
@@ -3137,10 +5268,10 @@ fn get_shot_interval_ms(character: Option<&str>) -> i64 {
 fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
     let key = normalize_character(character);
     match key.as_str() {
-        "silentman" | "silenmant" => 85.0,
-        "neoorphen" => 60.0,
-        "pezunalunar" | "pezuanalunar" => 80.0,
-        "pumori" => 36.0,
+        "silentman" | "silenmant" => 240.0,
+        "neoorphen" => 190.0,
+        "pezunalunar" | "pezuanalunar" => 230.0,
+        "pumori" => 190.0,
         _ => 120.0,
     }
 }
@@ -3199,6 +5330,7 @@ fn clamp_move_step(
     desired_x: f64,
     desired_z: f64,
     dt_ms: i64,
+    yaw: f64,
 ) -> (f64, f64) {
     let dx = desired_x - prev_x;
     let dz = desired_z - prev_z;
@@ -3207,7 +5339,16 @@ fn clamp_move_step(
         return (desired_x, desired_z);
     }
     let dt_s = (clamp_i64(dt_ms, 1, PLAYER_MAX_MOVE_DT_MS) as f64) / 1000.0;
-    let max_step = (PLAYER_MAX_SPEED_UNITS_PER_SECOND * dt_s) + PLAYER_MOVE_TOLERANCE_UNITS;
+    let forward_x = -yaw.sin();
+    let forward_z = -yaw.cos();
+    let alignment = ((dx * forward_x) + (dz * forward_z)) / step_len.max(1e-8);
+    let directional_factor = if alignment < -0.05 {
+        PLAYER_BACKWARD_SPEED_FACTOR
+    } else {
+        1.0
+    };
+    let max_step = (PLAYER_MAX_SPEED_UNITS_PER_SECOND * directional_factor * dt_s)
+        + PLAYER_MOVE_TOLERANCE_UNITS;
     if step_len <= max_step {
         return (desired_x, desired_z);
     }
@@ -3346,109 +5487,131 @@ fn find_best_hit(
         }
 
         let rewound = client_position_at(candidate, rewind_ts);
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
+        let target_speed = client_speed_at_ts(candidate, rewind_ts);
+        let speed_inflate =
+            (target_speed * HITBOX_MOTION_INFLATE_FACTOR).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
+        let latency_inflate =
+            (candidate.latency_ms * HITBOX_LATENCY_INFLATE_PER_MS).clamp(0.0, HITBOX_LATENCY_INFLATE_MAX);
+        let motion_inflate = (speed_inflate + latency_inflate).clamp(0.0, HITBOX_MOTION_INFLATE_MAX);
+        let sweep_window_ms = ((HITREG_SWEEP_BASE_WINDOW_MS as f64)
+            + (target_speed * HITREG_SWEEP_SPEED_WINDOW_FACTOR))
+            .round() as i64;
+        let sweep_window_ms = sweep_window_ms.clamp(0, HITREG_SWEEP_MAX_WINDOW_MS);
+        let mut sample_positions = Vec::new();
+        if sweep_window_ms <= 0 {
+            sample_positions.push(rewound.clone());
+        } else {
+            let long_shot_bonus = ((max_distance / 24.0).floor() as usize).min(2);
+            let temporal_steps = (HITREG_TEMPORAL_SUBSTEPS_MIN + long_shot_bonus)
+                .clamp(HITREG_TEMPORAL_SUBSTEPS_MIN, HITREG_TEMPORAL_SUBSTEPS_MAX);
+            sample_positions.reserve(temporal_steps);
+            for i in 0..temporal_steps {
+                let t = if temporal_steps <= 1 {
+                    0.5
+                } else {
+                    (i as f64) / ((temporal_steps - 1) as f64)
+                };
+                let offset_ms = ((-sweep_window_ms as f64)
+                    + ((2.0 * sweep_window_ms as f64) * t))
+                    .round() as i64;
+                sample_positions.push(client_position_at(candidate, rewind_ts + offset_ms));
+            }
+        }
+        let head_radius = profile.head_radius + motion_inflate.min(HITBOX_MOTION_INFLATE_HEAD_MAX);
+        let body_radius = profile.body_radius + motion_inflate;
+        let torso_radius = profile.torso_radius + motion_inflate;
+        let torso_capsule_radius = profile.torso_capsule_radius + motion_inflate;
+        let legs_capsule_radius = profile.legs_capsule_radius + (motion_inflate * 0.85);
         let head_center = Vec3 {
             x: rewound.x,
-            y: rewound.y + HEAD_CENTER_OFFSET_Y,
+            y: rewound.y + profile.head_center_offset_y,
             z: rewound.z,
         };
-        let body_center = Vec3 {
-            x: rewound.x,
-            y: rewound.y + BODY_CENTER_OFFSET_Y,
-            z: rewound.z,
-        };
-        let torso_min_y = rewound.y - 0.28;
-        let torso_max_y = rewound.y + 0.58;
-        let legs_min_y = rewound.y - 1.05;
-        let legs_max_y = rewound.y - 0.18;
 
-        let mut candidate_hit: Option<(bool, f64)> = None;
-        if let Some(head_dist) = ray_hit_sphere(
+        let head_hit = ray_hit_sphere(
             origin,
             direction_norm,
             &head_center,
-            HEADSHOT_RADIUS,
+            head_radius,
             max_distance,
-        ) {
-            candidate_hit = Some((true, head_dist));
-        }
-        if let Some(body_dist) = ray_hit_sphere(
-            origin,
-            direction_norm,
-            &body_center,
-            BODYSHOT_RADIUS,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if body_dist < cur => {
-                    candidate_hit = Some((false, body_dist));
-                }
-                None => {
-                    candidate_hit = Some((false, body_dist));
-                }
-                _ => {}
+        );
+        let mut best_body_hit: Option<f64> = None;
+        for sample in &sample_positions {
+            if let Some(body_dist) = ray_hit_sphere(
+                origin,
+                direction_norm,
+                &Vec3 {
+                    x: sample.x,
+                    y: sample.y + profile.body_center_offset_y,
+                    z: sample.z,
+                },
+                body_radius,
+                max_distance,
+            ) {
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(body_dist),
+                    None => body_dist,
+                });
+            }
+            if let Some(torso_dist) = ray_hit_sphere(
+                origin,
+                direction_norm,
+                &Vec3 {
+                    x: sample.x,
+                    y: sample.y + (profile.body_center_offset_y * 0.45),
+                    z: sample.z,
+                },
+                torso_radius,
+                max_distance,
+            ) {
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(torso_dist),
+                    None => torso_dist,
+                });
+            }
+            let torso_min_y = sample.y - 0.28;
+            let torso_max_y = sample.y + 0.58;
+            let legs_min_y = sample.y - 1.05;
+            let legs_max_y = sample.y - 0.18;
+            if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
+                origin,
+                direction_norm,
+                sample.x,
+                sample.z,
+                torso_min_y,
+                torso_max_y,
+                torso_capsule_radius,
+                max_distance,
+            ) {
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(torso_capsule_dist),
+                    None => torso_capsule_dist,
+                });
+            }
+            if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
+                origin,
+                direction_norm,
+                sample.x,
+                sample.z,
+                legs_min_y,
+                legs_max_y,
+                legs_capsule_radius,
+                max_distance,
+            ) {
+                best_body_hit = Some(match best_body_hit {
+                    Some(cur) => cur.min(legs_capsule_dist),
+                    None => legs_capsule_dist,
+                });
             }
         }
-        if let Some(torso_dist) = ray_hit_sphere(
-            origin,
-            direction_norm,
-            &Vec3 {
-                x: rewound.x,
-                y: rewound.y + (BODY_CENTER_OFFSET_Y * 0.45),
-                z: rewound.z,
-            },
-            TORSO_RADIUS,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if torso_dist < cur => {
-                    candidate_hit = Some((false, torso_dist));
-                }
-                None => {
-                    candidate_hit = Some((false, torso_dist));
-                }
-                _ => {}
-            }
-        }
-        if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
-            origin,
-            direction_norm,
-            rewound.x,
-            rewound.z,
-            torso_min_y,
-            torso_max_y,
-            TORSO_CAPSULE_RADIUS,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if torso_capsule_dist < cur => {
-                    candidate_hit = Some((false, torso_capsule_dist));
-                }
-                None => {
-                    candidate_hit = Some((false, torso_capsule_dist));
-                }
-                _ => {}
-            }
-        }
-        if let Some(legs_capsule_dist) = ray_hit_vertical_capsule(
-            origin,
-            direction_norm,
-            rewound.x,
-            rewound.z,
-            legs_min_y,
-            legs_max_y,
-            LEGS_CAPSULE_RADIUS,
-            max_distance,
-        ) {
-            match candidate_hit {
-                Some((_is_head, cur)) if legs_capsule_dist < cur => {
-                    candidate_hit = Some((false, legs_capsule_dist));
-                }
-                None => {
-                    candidate_hit = Some((false, legs_capsule_dist));
-                }
-                _ => {}
-            }
-        }
+
+        let candidate_hit = match (head_hit, best_body_hit) {
+            (Some(head_dist), Some(body_dist)) => Some((false, body_dist.min(head_dist))),
+            (Some(head_dist), None) => Some((true, head_dist)),
+            (None, Some(body_dist)) => Some((false, body_dist)),
+            (None, None) => None,
+        };
 
         if let Some((is_headshot, dist)) = candidate_hit {
             match &best {
@@ -3483,16 +5646,17 @@ fn find_pumori_hammer_hit(
         if !candidate.combat.alive {
             continue;
         }
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
 
         let center = &candidate.state.position;
         let head_center = Vec3 {
             x: center.x,
-            y: center.y + HEAD_CENTER_OFFSET_Y,
+            y: center.y + profile.head_center_offset_y,
             z: center.z,
         };
         let body_center = Vec3 {
             x: center.x,
-            y: center.y + BODY_CENTER_OFFSET_Y,
+            y: center.y + profile.body_center_offset_y,
             z: center.z,
         };
 
@@ -3551,22 +5715,25 @@ fn find_pumori_hammer_overlap_hit(
         if !candidate.combat.alive {
             continue;
         }
+        let profile = hitbox_profile_for_character(candidate.character.as_deref());
 
         let center = &candidate.state.position;
         let head_center = Vec3 {
             x: center.x,
-            y: center.y + HEAD_CENTER_OFFSET_Y,
+            y: center.y + profile.head_center_offset_y,
             z: center.z,
         };
         let body_center = Vec3 {
             x: center.x,
-            y: center.y + BODY_CENTER_OFFSET_Y,
+            y: center.y + profile.body_center_offset_y,
             z: center.z,
         };
         let head_d2 = distance_sq(hammer_pos, &head_center);
         let body_d2 = distance_sq(hammer_pos, &body_center);
-        let in_head = head_d2 <= (PUMORI_HAMMER_HEAD_RADIUS * PUMORI_HAMMER_HEAD_RADIUS);
-        let in_body = body_d2 <= (PUMORI_HAMMER_BODY_RADIUS * PUMORI_HAMMER_BODY_RADIUS);
+        let head_radius = PUMORI_HAMMER_HEAD_RADIUS;
+        let body_radius = PUMORI_HAMMER_BODY_RADIUS;
+        let in_head = head_d2 <= (head_radius * head_radius);
+        let in_body = body_d2 <= (body_radius * body_radius);
         if !in_head && !in_body {
             continue;
         }
@@ -3672,7 +5839,13 @@ fn resolve_ground_hit_distance(
     Some(t)
 }
 
-fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bool {
+fn has_line_of_sight_with_margin(
+    inner: &Inner,
+    room_id: &str,
+    from: &Vec3,
+    to: &Vec3,
+    clearance: f64,
+) -> bool {
     let segment = sub(to, from);
     let total_distance = (segment.x * segment.x + segment.y * segment.y + segment.z * segment.z).sqrt();
     if total_distance <= 0.0001 {
@@ -3682,7 +5855,7 @@ fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bo
         return true;
     };
     match resolve_wall_hit_distance(inner, room_id, from, &direction, total_distance) {
-        Some(wall_dist) => wall_dist + 0.08 >= total_distance,
+        Some(wall_dist) => wall_dist + clearance >= total_distance,
         None => true,
     }
 }
@@ -3690,38 +5863,99 @@ fn has_line_of_sight(inner: &Inner, room_id: &str, from: &Vec3, to: &Vec3) -> bo
 fn classify_point_hit_on_player(
     impact_point: &Vec3,
     base_position: &Vec3,
+    profile: HitboxProfile,
     prefer_headshot: bool,
     margin: f64,
 ) -> Option<bool> {
     let head_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + HEAD_CENTER_OFFSET_Y,
+        y: base_position.y + profile.head_center_offset_y,
         z: base_position.z,
     };
     let body_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + BODY_CENTER_OFFSET_Y,
+        y: base_position.y + profile.body_center_offset_y,
         z: base_position.z,
     };
-    let head_radius = HEADSHOT_RADIUS + margin;
-    if distance_sq(impact_point, &head_center) <= head_radius * head_radius {
-        return Some(true);
-    }
-    let body_radius = BODYSHOT_RADIUS + margin;
-    if distance_sq(impact_point, &body_center) <= body_radius * body_radius {
-        return Some(false);
-    }
+    let head_radius = profile.head_radius + margin;
+    let body_radius = profile.body_radius + margin;
+    let hits_head = distance_sq(impact_point, &head_center) <= head_radius * head_radius;
+    let hits_body = distance_sq(impact_point, &body_center) <= body_radius * body_radius;
     let torso_center = Vec3 {
         x: base_position.x,
-        y: base_position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+        y: base_position.y + (profile.body_center_offset_y * 0.45),
         z: base_position.z,
     };
-    let torso_radius = TORSO_RADIUS + margin;
-    if distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius {
+    let torso_radius = profile.torso_radius + margin;
+    let hits_torso = distance_sq(impact_point, &torso_center) <= torso_radius * torso_radius;
+    if hits_body || hits_torso {
         return Some(false);
+    }
+    if hits_head {
+        return Some(true);
     }
     if prefer_headshot {
         return None;
+    }
+    None
+}
+
+fn classify_point_hit_on_player_with_history(
+    victim: &ClientSession,
+    impact_point: &Vec3,
+    prefer_headshot: bool,
+    shot_ts: Option<i64>,
+    impact_delay_ms: i64,
+) -> Option<bool> {
+    let profile = hitbox_profile_for_character(victim.character.as_deref());
+    let now = now_ms();
+    let target_ts = match shot_ts {
+        Some(ts) => clamp_i64(ts + impact_delay_ms, now - STATE_HISTORY_WINDOW_MS, now),
+        None => now,
+    };
+    let sample_ts = [
+        target_ts - MAGIC_IMPACT_REVALIDATION_WINDOW_MS,
+        target_ts - (MAGIC_IMPACT_REVALIDATION_WINDOW_MS / 2),
+        target_ts,
+        target_ts + (MAGIC_IMPACT_REVALIDATION_WINDOW_MS / 2),
+    ];
+
+    let mut fallback_body: Option<bool> = None;
+    for ts in sample_ts {
+        let clamped_ts = clamp_i64(ts, now - STATE_HISTORY_WINDOW_MS, now);
+        let pos = client_position_at(victim, clamped_ts);
+        let speed = client_speed_at_ts(victim, clamped_ts);
+        let margin = MAGIC_IMPACT_REVALIDATION_MARGIN
+            + (speed * MAGIC_IMPACT_REVALIDATION_SPEED_FACTOR)
+                .clamp(0.0, MAGIC_IMPACT_REVALIDATION_SPEED_MAX);
+        if let Some(result) = classify_point_hit_on_player(
+            impact_point,
+            &pos,
+            profile,
+            prefer_headshot,
+            margin,
+        ) {
+            return Some(result);
+        }
+        if prefer_headshot {
+            fallback_body = classify_point_hit_on_player(impact_point, &pos, profile, false, margin)
+                .or(fallback_body);
+        }
+    }
+
+    fallback_body
+}
+
+fn classify_close_range_fallback_hit(victim: &ClientSession, impact_point: &Vec3) -> Option<bool> {
+    let profile = hitbox_profile_for_character(victim.character.as_deref());
+    let body_center = Vec3 {
+        x: victim.state.position.x,
+        y: victim.state.position.y + profile.body_center_offset_y,
+        z: victim.state.position.z,
+    };
+    let close_radius = profile.body_radius + MAGIC_IMPACT_CLOSE_FALLBACK_EXTRA_RADIUS;
+    if distance_sq(impact_point, &body_center) <= close_radius * close_radius {
+        return Some(false);
     }
     None
 }
@@ -3761,7 +5995,12 @@ fn pick_spawn_position(inner: &Inner, room_id: &str, exclude_player_id: Option<&
             z: angle.sin() * ring,
         };
         if let Some(room_meta) = meta {
-            if !is_valid_player_position(room_meta, candidate.x, candidate.z) {
+            if !is_valid_player_position(
+                room_meta,
+                candidate.x,
+                candidate.z,
+                PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
+            ) {
                 continue;
             }
         }
@@ -3795,15 +6034,70 @@ fn resolve_player_position(
     desired_x: f64,
     desired_z: f64,
 ) -> (f64, f64) {
+    resolve_player_position_with_radius(
+        inner,
+        room_id,
+        prev_x,
+        prev_z,
+        desired_x,
+        desired_z,
+        PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
+    )
+}
+
+fn resolve_player_position_with_radius(
+    inner: &Inner,
+    room_id: &str,
+    prev_x: f64,
+    prev_z: f64,
+    desired_x: f64,
+    desired_z: f64,
+    collision_radius: f64,
+) -> (f64, f64) {
     let Some(meta) = inner.room_meta.get(room_id) else {
         return (desired_x, desired_z);
     };
 
-    if is_valid_player_position(meta, desired_x, desired_z) {
+    if is_valid_player_position(meta, desired_x, desired_z, collision_radius) {
         return (desired_x, desired_z);
     }
-    if is_valid_player_position(meta, prev_x, prev_z) {
+    // Axis slide fallback reduces corner snagging against AABB pillars.
+    if is_valid_player_position(meta, desired_x, prev_z, collision_radius) {
+        return (desired_x, prev_z);
+    }
+    if is_valid_player_position(meta, prev_x, desired_z, collision_radius) {
+        return (prev_x, desired_z);
+    }
+    if is_valid_player_position(meta, prev_x, prev_z, collision_radius) {
         return (prev_x, prev_z);
+    }
+
+    let mut best_x = prev_x;
+    for i in 1..=10 {
+        let t = (i as f64) / 10.0;
+        let x = prev_x + (desired_x - prev_x) * t;
+        if is_valid_player_position(meta, x, prev_z, collision_radius) {
+            best_x = x;
+        } else {
+            break;
+        }
+    }
+    if is_valid_player_position(meta, best_x, prev_z, collision_radius) {
+        return (best_x, prev_z);
+    }
+
+    let mut best_z = prev_z;
+    for i in 1..=10 {
+        let t = (i as f64) / 10.0;
+        let z = prev_z + (desired_z - prev_z) * t;
+        if is_valid_player_position(meta, prev_x, z, collision_radius) {
+            best_z = z;
+        } else {
+            break;
+        }
+    }
+    if is_valid_player_position(meta, prev_x, best_z, collision_radius) {
+        return (prev_x, best_z);
     }
 
     let mut last_valid = (prev_x, prev_z);
@@ -3811,7 +6105,7 @@ fn resolve_player_position(
         let t = (i as f64) / 10.0;
         let x = prev_x + (desired_x - prev_x) * t;
         let z = prev_z + (desired_z - prev_z) * t;
-        if is_valid_player_position(meta, x, z) {
+        if is_valid_player_position(meta, x, z, collision_radius) {
             last_valid = (x, z);
         } else {
             break;
@@ -3820,27 +6114,60 @@ fn resolve_player_position(
     last_valid
 }
 
-fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64) -> bool {
-    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS + 0.05)
-        && !collides_with_map_box(
-            meta,
-            x,
-            z,
-            PLAYER_COLLISION_RADIUS * PLAYER_PILLAR_COLLISION_FACTOR,
-        )
+fn is_valid_player_position(meta: &RoomMeta, x: f64, z: f64, collision_radius: f64) -> bool {
+    is_inside_map_bounds(&meta.map_profile, x, z, PLAYER_COLLISION_RADIUS * 0.2)
+        && !collides_with_map_box(meta, x, z, collision_radius)
 }
 
 fn collides_with_map_box(meta: &RoomMeta, x: f64, z: f64, radius: f64) -> bool {
-    for b in &meta.map_collision {
-        if x + radius > b.min_x
-            && x - radius < b.max_x
-            && z + radius > b.min_z
-            && z - radius < b.max_z
-        {
-            return true;
+    let cell_size = meta.map_collision_grid.cell_size;
+    if cell_size <= 0.0 {
+        return false;
+    }
+    let min_cx = ((x - radius) / cell_size).floor() as i32;
+    let max_cx = ((x + radius) / cell_size).floor() as i32;
+    let min_cz = ((z - radius) / cell_size).floor() as i32;
+    let max_cz = ((z + radius) / cell_size).floor() as i32;
+
+    for cx in min_cx..=max_cx {
+        for cz in min_cz..=max_cz {
+            let Some(indices) = meta.map_collision_grid.buckets.get(&(cx, cz)) else {
+                continue;
+            };
+            for &idx in indices {
+                let Some(b) = meta.map_collision.get(idx) else {
+                    continue;
+                };
+                if x + radius > b.min_x
+                    && x - radius < b.max_x
+                    && z + radius > b.min_z
+                    && z - radius < b.max_z
+                {
+                    return true;
+                }
+            }
         }
     }
     false
+}
+
+fn build_map_collision_grid(boxes: &[MapBox], cell_size: f64) -> MapCollisionGrid {
+    let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    if cell_size <= 0.0 {
+        return MapCollisionGrid { cell_size, buckets };
+    }
+    for (index, b) in boxes.iter().enumerate() {
+        let min_cx = (b.min_x / cell_size).floor() as i32;
+        let max_cx = (b.max_x / cell_size).floor() as i32;
+        let min_cz = (b.min_z / cell_size).floor() as i32;
+        let max_cz = (b.max_z / cell_size).floor() as i32;
+        for cx in min_cx..=max_cx {
+            for cz in min_cz..=max_cz {
+                buckets.entry((cx, cz)).or_default().push(index);
+            }
+        }
+    }
+    MapCollisionGrid { cell_size, buckets }
 }
 
 fn create_map_profile(seed: u64) -> MapProfile {
@@ -3881,25 +6208,139 @@ fn create_map_collision(seed: u64) -> Vec<MapBox> {
     boxes
 }
 
-fn map_boundary_radius(profile: &MapProfile, theta: f64) -> f64 {
-    let wave_a = ((theta * profile.freq1) + profile.phase1).sin() * profile.amp1;
-    let wave_b = ((theta * profile.freq2) + profile.phase2).sin() * profile.amp2;
-    let wave_c = ((theta * profile.freq3) + profile.phase3).cos() * profile.amp3;
-    clamp(
-        1.0 + wave_a + wave_b + wave_c,
-        MAP_BOUNDARY_MIN_RADIUS,
-        MAP_BOUNDARY_MAX_RADIUS,
-    )
+fn create_pickups(seed: u64, salt: u64, count: usize) -> Vec<PickupState> {
+    let mut rng = SeededRng::new(seed ^ salt);
+    let mut pickups = Vec::with_capacity(count);
+    for _ in 0..count {
+        pickups.push(PickupState {
+            x: (rng.next_f64() - 0.5) * 180.0,
+            z: (rng.next_f64() - 0.5) * 180.0,
+            respawn_at_ms: 0,
+        });
+    }
+    pickups
 }
 
-fn is_inside_map_bounds(profile: &MapProfile, x: f64, z: f64, padding: f64) -> bool {
-    let theta = (z / profile.axis_z.max(1.0)).atan2(x / profile.axis_x.max(1.0));
-    let boundary = map_boundary_radius(profile, theta);
-    let norm = ((x * x) / (profile.axis_x * profile.axis_x)
-        + (z * z) / (profile.axis_z * profile.axis_z))
-        .sqrt();
-    let normalized_padding = padding / profile.axis_x.min(profile.axis_z).max(1.0);
-    norm <= (boundary - normalized_padding)
+fn pickup_state_payload(meta: &RoomMeta, now: i64) -> Value {
+    json!({
+      "mana": pickup_vec_payload(&meta.mana_pickups, now),
+      "shield": pickup_vec_payload(&meta.shield_pickups, now),
+      "health": pickup_vec_payload(&meta.health_pickups, now),
+    })
+}
+
+fn pickup_vec_payload(pickups: &[PickupState], now: i64) -> Vec<Value> {
+    let mut out = Vec::with_capacity(pickups.len());
+    for (index, pickup) in pickups.iter().enumerate() {
+        let active = pickup.respawn_at_ms <= now;
+        out.push(json!({
+          "index": index,
+          "active": active,
+          "respawnAtMs": if active { 0 } else { pickup.respawn_at_ms }
+        }));
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+enum PickupKind {
+    Mana,
+    Shield,
+    Health,
+}
+
+impl PickupKind {
+    fn as_wire(self) -> &'static str {
+        match self {
+            PickupKind::Mana => "mana",
+            PickupKind::Shield => "shield",
+            PickupKind::Health => "health",
+        }
+    }
+}
+
+fn consume_pickup(
+    pickups: &mut [PickupState],
+    pickup_index: usize,
+    player_x: f64,
+    player_z: f64,
+    client_position: Option<(f64, f64)>,
+    now: i64,
+) -> Option<i64> {
+    let pickup = pickups.get_mut(pickup_index)?;
+    // Inclusive guard para evitar doble-take exacto en borde de respawn (mismo ms).
+    if pickup.respawn_at_ms >= now {
+        return None;
+    }
+
+    let server_dx = player_x - pickup.x;
+    let server_dz = player_z - pickup.z;
+    let mut can_take = ((server_dx * server_dx) + (server_dz * server_dz)).sqrt() <= PICKUP_TAKE_RADIUS;
+
+    if !can_take {
+        if let Some((client_x, client_z)) = client_position {
+            let drift_dx = client_x - player_x;
+            let drift_dz = client_z - player_z;
+            let drift = ((drift_dx * drift_dx) + (drift_dz * drift_dz)).sqrt();
+            if drift <= PICKUP_CLIENT_POS_MAX_DRIFT {
+                let client_dx = client_x - pickup.x;
+                let client_dz = client_z - pickup.z;
+                can_take = ((client_dx * client_dx) + (client_dz * client_dz)).sqrt()
+                    <= PICKUP_TAKE_RADIUS;
+            }
+        }
+    }
+    if !can_take {
+        return None;
+    }
+    let respawn_at = now + PICKUP_RESPAWN_MS;
+    pickup.respawn_at_ms = respawn_at;
+    Some(respawn_at)
+}
+
+fn map_collision_hash(profile: &MapProfile, boxes: &[MapBox]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash = fnv1a_update_u64(hash, boxes.len() as u64);
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.axis_x));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.axis_z));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.amp3));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.freq3));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase1));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase2));
+    hash = fnv1a_update_i64(hash, quantized_map_value(profile.phase3));
+
+    for b in boxes {
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.min_x));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.max_x));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.min_z));
+        hash = fnv1a_update_i64(hash, quantized_map_value(b.max_z));
+    }
+    format!("{hash:016x}")
+}
+
+fn quantized_map_value(v: f64) -> i64 {
+    (v * 1000.0).round() as i64
+}
+
+fn fnv1a_update_u64(mut hash: u64, value: u64) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+fn fnv1a_update_i64(hash: u64, value: i64) -> u64 {
+    fnv1a_update_u64(hash, value as u64)
+}
+
+fn is_inside_map_bounds(_profile: &MapProfile, x: f64, z: f64, padding: f64) -> bool {
+    let limit = (MAP_PLAYABLE_HALF_EXTENT - padding.max(0.0)).max(8.0);
+    x.abs() <= limit && z.abs() <= limit
 }
 
 struct SeededRng {

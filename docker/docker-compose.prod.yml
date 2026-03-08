@@ -45,6 +45,8 @@ services:
     build:
       context: ../game1/front
       dockerfile: Dockerfile.prod
+      args:
+        - VITE_APP_ENV=prod
     restart: unless-stopped
     depends_on:
       - backend_v2
