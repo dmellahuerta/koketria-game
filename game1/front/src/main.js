@@ -10604,13 +10604,13 @@ function spawnQuadDamageLandingEffect(position) {
   }
   const shockOuter = createHitWave(position, 0x7ef6ff, {
     scale: 3.2,
-    life: 0.95,
-    expand: 16.5,
+    life: 1.2,
+    expand: 11.5,
   });
   const shockInner = createHitWave(position, 0xffde84, {
     scale: 2.1,
-    life: 0.72,
-    expand: 12.5,
+    life: 0.92,
+    expand: 8.6,
   });
   if (shockOuter) {
     shockOuter.position.y += 0.08;
