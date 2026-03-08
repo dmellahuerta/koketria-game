@@ -6881,7 +6881,7 @@ const createImpact = (position, color = 0x7dff92) => {
   return impact;
 };
 
-const createHitWave = (position, color = 0x9fffb6) => {
+const createHitWave = (position, color = 0x9fffb6, options = {}) => {
   if (!position) {
     return null;
   }
@@ -6909,9 +6909,16 @@ const createHitWave = (position, color = 0x9fffb6) => {
   wave.material.color = new THREE.Color(color);
   wave.position.copy(position);
   wave.position.y += hitWaveYOffset;
-  wave.scale.setScalar(hitWaveStartScale);
-  wave.userData.life = state.showCollisionOnly ? Math.max(hitWaveLife, 0.32) : hitWaveLife;
-  wave.userData.expand = state.showCollisionOnly ? hitWaveExpand * 1.25 : hitWaveExpand;
+  const scale = Number.isFinite(Number(options.scale)) ? Number(options.scale) : hitWaveStartScale;
+  const life = Number.isFinite(Number(options.life))
+    ? Number(options.life)
+    : (state.showCollisionOnly ? Math.max(hitWaveLife, 0.32) : hitWaveLife);
+  const expand = Number.isFinite(Number(options.expand))
+    ? Number(options.expand)
+    : (state.showCollisionOnly ? hitWaveExpand * 1.25 : hitWaveExpand);
+  wave.scale.setScalar(scale);
+  wave.userData.life = life;
+  wave.userData.expand = expand;
   if (state.showCollisionOnly) {
     wave.renderOrder = 1900;
   }
@@ -10595,7 +10602,22 @@ function spawnQuadDamageLandingEffect(position) {
     impactB.scale.setScalar(1.7);
     impactB.userData.life = 0.36;
   }
-  createHitWave(position, 0x7ef6ff, 2.2);
+  const shockOuter = createHitWave(position, 0x7ef6ff, {
+    scale: 3.2,
+    life: 0.95,
+    expand: 16.5,
+  });
+  const shockInner = createHitWave(position, 0xffde84, {
+    scale: 2.1,
+    life: 0.72,
+    expand: 12.5,
+  });
+  if (shockOuter) {
+    shockOuter.position.y += 0.08;
+  }
+  if (shockInner) {
+    shockInner.position.y += 0.04;
+  }
   triggerQuadDamageLandingShake(position);
 }
 
