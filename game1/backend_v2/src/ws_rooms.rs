@@ -2743,39 +2743,12 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if room.status != RoomStatus::InGame {
                 return;
             }
-            let Some(player) = inner.clients.get(client_id) else {
-                return;
-            };
-            let center_x = player.state.position.x;
-            let center_z = player.state.position.z;
-            let yaw = player.state.rotation.yaw;
             let now = now_ms();
             let mut spawned_payload: Option<Value> = None;
             if let Some(meta) = inner.room_meta.get_mut(&room_id) {
                 let seed =
                     (now as u64) ^ hash_room_id(&room_id) ^ hash_room_id(client_id) ^ 0x0BAD_1DEAu64;
-                let mut rng = SeededRng::new(seed);
-                let mut candidates = Vec::with_capacity(19);
-                for distance in [6.0_f64, 8.0, 10.0] {
-                    let x = center_x + yaw.sin() * distance;
-                    let z = center_z - yaw.cos() * distance;
-                    candidates.push((x, z));
-                }
-                for _ in 0..16 {
-                    let angle = yaw + ((rng.next_f64() - 0.5) * 1.2);
-                    let radius = 5.0 + (rng.next_f64() * 6.0);
-                    let x = center_x + angle.sin() * radius;
-                    let z = center_z - angle.cos() * radius;
-                    candidates.push((x, z));
-                }
-                let mut selected = None;
-                for (x, z) in candidates {
-                    if is_valid_player_position(meta, x, z, QUAD_DAMAGE_PICKUP_RADIUS) {
-                        selected = Some((x, z));
-                        break;
-                    }
-                }
-                if let Some((x, z)) = selected {
+                if let Some((x, z)) = create_quad_damage_position(meta, seed) {
                     meta.quad_damage_position = Some((x, z));
                     meta.quad_damage_active = false;
                     meta.quad_damage_land_at_ms = now + QUAD_DAMAGE_FALL_MS;

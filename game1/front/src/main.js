@@ -10791,23 +10791,20 @@ function updateQuadDamagePickup(delta) {
     quadDamagePickup.mesh.rotation.y += delta * 2.4;
     const currentPosition = quadDamagePickup.mesh.position.clone();
     if (!state.showCollisionOnly) {
-      createTracer(
-        currentPosition.clone().add(new THREE.Vector3(0, 12, 0)),
-        currentPosition,
-        0x67f6ff,
-        { radiusScale: 4.2, life: 0.65, opacity: 0.72 },
-      );
-      createTracer(
-        currentPosition.clone().add(new THREE.Vector3(0, 22, 0)),
-        currentPosition.clone().add(new THREE.Vector3(0, 4, 0)),
-        0xffde84,
-        { radiusScale: 2.8, life: 0.95, opacity: 0.5 },
-      );
-      if (previousPosition.distanceToSquared(currentPosition) > 0.0001) {
-        createTracer(previousPosition, currentPosition, 0x9ef8ff, {
-          radiusScale: 3.2,
+      tmpTravelVec.subVectors(currentPosition, previousPosition);
+      if (tmpTravelVec.lengthSq() > 0.0001) {
+        const tailDir = tmpTravelVec.clone().normalize();
+        const longTailStart = currentPosition.clone().sub(tailDir.clone().multiplyScalar(18));
+        const shortTailStart = currentPosition.clone().sub(tailDir.clone().multiplyScalar(9));
+        createTracer(longTailStart, currentPosition, 0x67f6ff, {
+          radiusScale: 4.4,
+          life: 0.9,
+          opacity: 0.72,
+        });
+        createTracer(shortTailStart, currentPosition, 0xffde84, {
+          radiusScale: 2.5,
           life: 0.72,
-          opacity: 0.62,
+          opacity: 0.46,
         });
       }
       if (Math.random() < delta * 24) {
