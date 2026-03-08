@@ -6034,6 +6034,9 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   if (!liveEntry) {
     return;
   }
+  if (!liveEntry.group) {
+    return;
+  }
   liveEntry.character = character;
 
   const prevPos = liveEntry.group.position.clone();
@@ -6420,15 +6423,19 @@ const clearRemotePlayers = () => {
   }
   state.remotePlayers.clear();
   // Cancel pending missile wave timers so stale VFX don't fire after leaving the room
-  for (let i = 0; i < pendingMissileTimers.length; i += 1) {
-    clearTimeout(pendingMissileTimers[i]);
-  }
-  pendingMissileTimers.length = 0;
+  clearPendingMissileTimers();
   // Stop and release any playing special missile audio
   for (let i = 0; i < specialMissileVoices.length; i += 1) {
     specialMissileVoices[i].pause();
   }
   specialMissileVoices.length = 0;
+};
+
+const clearPendingMissileTimers = () => {
+  for (let i = 0; i < pendingMissileTimers.length; i += 1) {
+    clearTimeout(pendingMissileTimers[i]);
+  }
+  pendingMissileTimers.length = 0;
 };
 
 const createTracer = (start, end, color = 0xa2ffae, options = {}) => {
@@ -7294,6 +7301,9 @@ const connectWebSocket = () => {
   connectionStatus.textContent = `Conectando a ${wsUrl}`;
 
   ws.addEventListener('open', () => {
+    if (state.ws !== ws) {
+      return;
+    }
     connectionStatus.textContent = 'Conectado';
     setLobbyError();
     clearLocalPredictionHistory();
@@ -7301,6 +7311,9 @@ const connectWebSocket = () => {
   });
 
   ws.addEventListener('message', (event) => {
+    if (state.ws !== ws) {
+      return;
+    }
     let payload;
 
     try {
@@ -8272,9 +8285,14 @@ const connectWebSocket = () => {
   });
 
   ws.addEventListener('close', () => {
+    if (state.ws !== ws) {
+      return;
+    }
+    state.ws = null;
     connectionStatus.textContent = 'Desconectado. Reintentando...';
     pendingShotAcks.clear();
     remoteUpgradeEpoch += 1;
+    clearPendingMissileTimers();
     clearLocalPredictionHistory();
     state.joinedRoom = null;
     state.showScoreboard = false;
@@ -8304,6 +8322,9 @@ const connectWebSocket = () => {
   });
 
   ws.addEventListener('error', () => {
+    if (state.ws !== ws) {
+      return;
+    }
     setLobbyError('No se pudo conectar al WebSocket');
   });
 };
@@ -10429,8 +10450,9 @@ const applyPickupClientState = (collection, index, active, respawnAtMs = 0) => {
   if (!pickup?.mesh) {
     return;
   }
+  const respawnAtMsNum = Number(respawnAtMs);
   pickup.active = Boolean(active);
-  pickup.respawnAtMs = pickup.active ? 0 : Math.max(0, Number(respawnAtMs) || 0);
+  pickup.respawnAtMs = pickup.active ? 0 : (Number.isFinite(respawnAtMsNum) ? Math.max(0, respawnAtMsNum) : 0);
   pickup.pendingRequestUntil = 0;
   pickup.mesh.visible = pickup.active;
 };
@@ -10450,7 +10472,13 @@ const applyPickupStateSnapshot = (pickupsPayload) => {
       if (!Number.isFinite(index)) {
         continue;
       }
-      applyPickupClientState(collection, index, Boolean(item.active), Number(item.respawnAtMs) || 0);
+      const respawnAtMs = Number(item.respawnAtMs);
+      applyPickupClientState(
+        collection,
+        index,
+        Boolean(item.active),
+        Number.isFinite(respawnAtMs) ? respawnAtMs : 0,
+      );
     }
   };
   applyList('mana', ammoPickups);
@@ -10586,6 +10614,31 @@ function clearQuadDamagePickupVisual() {
     quadDamagePickup = null;
     return;
   }
+  const disposableNames = new Set([
+    '__pickup_fallback__',
+    'quad_damage_core',
+    'quad_damage_halo',
+    'quad_damage_beam_outer',
+    'quad_damage_beam_inner',
+  ]);
+  quadDamagePickup.mesh.traverse((node) => {
+    if (!node?.isMesh) {
+      return;
+    }
+    if (!disposableNames.has(String(node.name || ''))) {
+      return;
+    }
+    if (node.geometry && typeof node.geometry.dispose === 'function') {
+      node.geometry.dispose();
+    }
+    if (node.material) {
+      if (Array.isArray(node.material)) {
+        node.material.forEach((material) => material?.dispose?.());
+      } else if (typeof node.material.dispose === 'function') {
+        node.material.dispose();
+      }
+    }
+  });
   if (quadDamagePickup.mesh.parent) {
     quadDamagePickup.mesh.parent.remove(quadDamagePickup.mesh);
   }

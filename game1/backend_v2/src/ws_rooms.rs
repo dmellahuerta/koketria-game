@@ -2944,6 +2944,11 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "health": health_wire,
                     "shield": shield_wire,
                     "mana": mana_wire,
+                    "quadDamageUntilMs": inner
+                        .clients
+                        .get(client_id)
+                        .map(|entry| entry.combat.quad_damage_until_ms)
+                        .unwrap_or(0),
                     "position": {
                       "x": next_state.position.x,
                       "y": next_state.position.y,
@@ -5008,9 +5013,17 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     if let Some(meta) = inner.room_meta.get_mut(&room_id) {
         meta.rotate(&room_id);
     }
+    let mut bot_ids_to_restart = Vec::new();
     for player_id in player_ids {
         let spawn = pick_spawn_position(&inner, &room_id, Some(&player_id));
         if let Some(client) = inner.clients.get_mut(&player_id) {
+            if client.is_bot {
+                if let Some(abort) = &client.bot_task_abort {
+                    abort.abort();
+                }
+                client.bot_task_abort = None;
+                bot_ids_to_restart.push(player_id.clone());
+            }
             let now = now_ms();
             client.kills = 0;
             client.deaths = 0;
@@ -5052,6 +5065,17 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     );
     inner.broadcast_room_state(&room_id);
     inner.broadcast_rooms_list_all();
+    for bot_id in bot_ids_to_restart {
+        let state_cloned = Arc::clone(&state);
+        let bot_id_for_task = bot_id.clone();
+        let handle = tokio::spawn(async move {
+            run_room_bot(state_cloned, bot_id_for_task).await;
+        });
+        let abort = handle.abort_handle();
+        if let Some(bot_entry) = inner.clients.get_mut(&bot_id) {
+            bot_entry.bot_task_abort = Some(abort);
+        }
+    }
 }
 
 fn should_expose_room_in_list(room: &crate::rooms::Room) -> bool {

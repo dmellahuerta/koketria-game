@@ -64,3 +64,5 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
 - 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.
 - 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.
 - 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.
+- 2026-03-08: lifecycle fixes. Guard WS listeners against stale sockets, dispose Quad custom meshes on clear, include quadDamageUntilMs in player_move, restart bot tasks cleanly after match reset, harden pickup respawn parsing, clear pending missile timers on disconnect.
+- 2026-03-08: lifecycle fixes. Guard WS listeners against stale sockets, dispose Quad custom meshes on clear, include quadDamageUntilMs in player_move, restart bot tasks cleanly after match reset, harden pickup respawn parsing, clear pending missile timers on disconnect.
