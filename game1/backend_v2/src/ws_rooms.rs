@@ -206,7 +206,7 @@ const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
 const HEALTH_REGEN_PER_SECOND: f64 = 10.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
-const QUAD_DAMAGE_INTERVAL_MS: i64 = 180_000;
+const QUAD_DAMAGE_INTERVAL_MS: i64 = 60_000;
 const QUAD_DAMAGE_PICKUP_RADIUS: f64 = 1.5;
 const QUAD_DAMAGE_DURATION_MS: i64 = 30_000;
 const QUAD_DAMAGE_MULTIPLIER: f64 = 2.0;
@@ -6606,22 +6606,25 @@ fn maybe_spawn_quad_damage(inner: &mut Inner, room_id: &str, now: i64) {
         if meta.quad_damage_position.is_some() && !meta.quad_damage_active && meta.quad_damage_land_at_ms > 0 && now >= meta.quad_damage_land_at_ms {
             meta.quad_damage_active = true;
         }
-        if meta.quad_damage_position.is_none() && now >= meta.quad_damage_spawn_at_ms {
-            let seed = (now as u64) ^ hash_room_id(room_id);
-            if let Some((x, z)) = create_quad_damage_position(meta, seed) {
-                meta.quad_damage_position = Some((x, z));
-                meta.quad_damage_active = false;
-                meta.quad_damage_land_at_ms = now + QUAD_DAMAGE_FALL_MS;
-                spawned_payload = Some(json!({
-                  "type":"quad_damage_incoming",
-                  "ok": true,
-                  "data": {
-                    "x": x,
-                    "z": z,
-                    "landAtMs": meta.quad_damage_land_at_ms,
-                    "durationMs": QUAD_DAMAGE_DURATION_MS
-                  }
-                }));
+        if now >= meta.quad_damage_spawn_at_ms {
+            meta.quad_damage_spawn_at_ms = now + QUAD_DAMAGE_INTERVAL_MS;
+            if meta.quad_damage_position.is_none() {
+                let seed = (now as u64) ^ hash_room_id(room_id);
+                if let Some((x, z)) = create_quad_damage_position(meta, seed) {
+                    meta.quad_damage_position = Some((x, z));
+                    meta.quad_damage_active = false;
+                    meta.quad_damage_land_at_ms = now + QUAD_DAMAGE_FALL_MS;
+                    spawned_payload = Some(json!({
+                      "type":"quad_damage_incoming",
+                      "ok": true,
+                      "data": {
+                        "x": x,
+                        "z": z,
+                        "landAtMs": meta.quad_damage_land_at_ms,
+                        "durationMs": QUAD_DAMAGE_DURATION_MS
+                      }
+                    }));
+                }
             }
         }
     }
