@@ -61,3 +61,6 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - Limitación de test: la corrida con `.room-card button` no entró a sala por timeout del selector; no se validó el flujo completo de recolección in-game en esta pasada.
 
 - 2026-03-08: perf pass aplicado. Backend: room_state coalesced por dirty flag + flush interval, payload compartido con Arc<str>, state_history con limite duro. Frontend: cache de materials para impacts, pooling de pickup sparks, menos allocaciones por frame en quad damage/hammer, rain/snow usan performance.now() una vez por frame, audio one-shot con pool por src.
+- 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.
+- 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.
+- 2026-03-08: perf follow-up. Holy projectiles ahora usan scratch vectors en update loop; connected payload se arma fuera del write lock tras capturar los datos necesarios.

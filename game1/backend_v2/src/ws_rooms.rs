@@ -845,7 +845,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         }
     });
 
-    let (client_id, connected_payload) = {
+    let (client_id, name, initial_state, rooms_json, lobby_players) = {
         let mut inner = state.inner.write().await;
         inner.client_seq += 1;
         let client_id = format!("p-{}", inner.client_seq);
@@ -892,25 +892,27 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                 bot_task_abort: None,
             },
         );
-        let connected_payload = json!({
-          "type": "connected",
-          "ok": true,
-          "data": {
-            "player": {
-              "id": client_id,
-              "name": name,
-              "character": Value::Null,
-              "ts": now_ms(),
-              "state": player_state_json(&initial_state)
-            },
-            "rooms": inner.public_rooms_json(),
-            "lobby": {
-              "players": inner.lobby_waiting_players_json()
-            }
-          }
-        });
-        (client_id, connected_payload)
+        let rooms_json = inner.public_rooms_json();
+        let lobby_players = inner.lobby_waiting_players_json();
+        (client_id, name, initial_state, rooms_json, lobby_players)
     };
+    let connected_payload = json!({
+      "type": "connected",
+      "ok": true,
+      "data": {
+        "player": {
+          "id": client_id,
+          "name": name,
+          "character": Value::Null,
+          "ts": now_ms(),
+          "state": player_state_json(&initial_state)
+        },
+        "rooms": rooms_json,
+        "lobby": {
+          "players": lobby_players
+        }
+      }
+    });
     info!("[ws_rooms] connected client_id={}", client_id);
     let _ = out_critical_tx.send(Arc::from(connected_payload.to_string()));
     {

@@ -11580,32 +11580,32 @@ const updateEffects = (delta) => {
 };
 
 const updateHolyProjectiles = (delta) => {
+  const nowPerf = performance.now();
   for (let i = activeHolyProjectiles.length - 1; i >= 0; i -= 1) {
     const projectile = activeHolyProjectiles[i];
     projectile.prevPos.copy(projectile.pos);
     projectile.traveled += projectile.speed * delta;
     const t = Math.max(0, Math.min(1, projectile.traveled / projectile.distance));
 
-    const linePos = projectile.start.clone().lerp(projectile.end, t);
-    projectile.pos.copy(linePos);
+    tmpTravelVecB.copy(projectile.start).lerp(projectile.end, t);
+    projectile.pos.copy(tmpTravelVecB);
     const angle = projectile.phase + (t * projectile.spin);
     const spiralRadius = Math.max(0, projectile.radius * (1 - (t * projectile.radiusFalloff)));
     const wobbleA = Math.cos(angle) * spiralRadius;
     const wobbleB = Math.sin(angle) * spiralRadius;
-    const renderPos = linePos.clone()
-      .add(projectile.right.clone().multiplyScalar(wobbleA))
-      .add(projectile.up.clone().multiplyScalar(wobbleB));
-    projectile.mesh.position.copy(renderPos);
+    tmpTravelVecC.copy(tmpTravelVecB).addScaledVector(projectile.right, wobbleA);
+    tmpTravelVecC.addScaledVector(projectile.up, wobbleB);
+    projectile.mesh.position.copy(tmpTravelVecC);
     projectile.mesh.visible = !state.showCollisionOnly;
     ensureProjectileCollisionDebug(projectile, projectile.hitRadius || unifiedMagicHitboxRadius, 0x9af6ff);
 
-    projectile.mesh.scale.setScalar(1.25 + (Math.sin(performance.now() * 0.02) * 0.24));
+    projectile.mesh.scale.setScalar(1.25 + (Math.sin(nowPerf * 0.02) * 0.24));
 
     projectile.trailTimer += delta;
     const trailInterval = projectile.source === 'remote' ? 0.028 : 0.012;
     if (projectile.trailTimer >= trailInterval) {
       projectile.trailTimer = 0;
-      const spark = createImpact(renderPos, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
+      const spark = createImpact(projectile.mesh.position, Math.random() > 0.5 ? projectile.colors.a : projectile.colors.b);
       if (spark) {
         spark.scale.setScalar(1.35 + Math.random() * 0.95);
         spark.userData.life = 0.3 + Math.random() * 0.18;
