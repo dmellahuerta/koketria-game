@@ -176,6 +176,12 @@ app.innerHTML = `
       <div class="ability-track"><div id="abilityCooldownFill" class="ability-fill"></div></div>
     </div>
 
+    <div id="quadDamageHud" class="quad-damage-hud hidden">
+      <p class="quad-damage-title">Quad Damage</p>
+      <p id="quadDamageText" class="quad-damage-value">-</p>
+      <div class="quad-damage-track"><div id="quadDamageFill" class="quad-damage-fill"></div></div>
+    </div>
+
     <div id="matchInfo">
       <h2>Panel (I)</h2>
       <p><strong>Movimiento:</strong> W A S D</p>
@@ -249,6 +255,7 @@ app.innerHTML = `
   </div>
 
   <div id="damageOverlay"></div>
+  <div id="quadDamageOverlay" class="quad-damage-overlay hidden"></div>
   <div id="damageIndicator"></div>
 
   <div id="mobileControls" class="mobile-controls hidden">
@@ -393,6 +400,7 @@ const winnerScreen = document.querySelector('#winnerScreen');
 const winnerText = document.querySelector('#winnerText');
 const winnerCounter = document.querySelector('#winnerCounter');
 const damageOverlay = document.querySelector('#damageOverlay');
+const quadDamageOverlay = document.querySelector('#quadDamageOverlay');
 const damageIndicator = document.querySelector('#damageIndicator');
 const scoreboard = document.querySelector('#scoreboard');
 const scoreboardBody = document.querySelector('#scoreboardBody');
@@ -406,6 +414,9 @@ const ammoSideLabel = document.querySelector('#ammoSideLabel');
 const abilityHud = document.querySelector('#abilityHud');
 const abilityCooldownText = document.querySelector('#abilityCooldownText');
 const abilityCooldownFill = document.querySelector('#abilityCooldownFill');
+const quadDamageHud = document.querySelector('#quadDamageHud');
+const quadDamageText = document.querySelector('#quadDamageText');
+const quadDamageFill = document.querySelector('#quadDamageFill');
 const healthBarFill = document.querySelector('#healthBarFill');
 const shieldBarFill = document.querySelector('#shieldBarFill');
 const ammoBarFill = document.querySelector('#ammoBarFill');
@@ -553,6 +564,7 @@ const chatMessageTtlMs = 8000;
 const killFeedMessages = [];
 const maxKillFeedMessages = 8;
 const killFeedMessageTtlMs = 7000;
+const quadDamageKillFeedTtlMs = 8000;
 const lobbyChatMessages = [];
 const maxLobbyChatMessages = 80;
 const versusChatMessages = [];
@@ -771,7 +783,8 @@ const renderKillFeed = () => {
   }
   const now = Date.now();
   for (let i = killFeedMessages.length - 1; i >= 0; i -= 1) {
-    if (now - killFeedMessages[i].ts > killFeedMessageTtlMs) {
+    const ttlMs = Number(killFeedMessages[i].ttlMs || killFeedMessageTtlMs);
+    if (now - killFeedMessages[i].ts > ttlMs) {
       killFeedMessages.splice(i, 1);
     }
   }
@@ -782,6 +795,10 @@ const renderKillFeed = () => {
   }
   killFeed.classList.add('open');
   killFeed.innerHTML = killFeedMessages.map((entry) => {
+    if (entry.kind === 'announcement') {
+      const tone = entry.tone ? ` ${entry.tone}` : '';
+      return `<p class="announcement${tone}">${entry.text}</p>`;
+    }
     const killerSelf = entry.killerId && state.self && entry.killerId === state.self.id ? ' (Tú)' : '';
     const victimSelf = entry.victimId && state.self && entry.victimId === state.self.id ? ' (Tú)' : '';
     const headshotTag = entry.headshot ? ' <em>[HEADSHOT]</em>' : '';
@@ -798,11 +815,30 @@ const pushKillFeedMessage = (killerId, victimId, headshot = false) => {
   const killerName = getPlayerNameById(normalizedKillerId);
   const victimName = getPlayerNameById(normalizedVictimId);
   killFeedMessages.push({
+    kind: 'kill',
     killerId: normalizedKillerId,
     victimId: normalizedVictimId,
     killerName,
     victimName,
     headshot: Boolean(headshot),
+    ts: Date.now(),
+  });
+  if (killFeedMessages.length > maxKillFeedMessages) {
+    killFeedMessages.splice(0, killFeedMessages.length - maxKillFeedMessages);
+  }
+  renderKillFeed();
+};
+
+const pushKillFeedAnnouncement = (text, tone = 'quad', ttlMs = quadDamageKillFeedTtlMs) => {
+  const normalized = String(text || '').trim();
+  if (!normalized) {
+    return;
+  }
+  killFeedMessages.push({
+    kind: 'announcement',
+    text: normalized,
+    tone,
+    ttlMs,
     ts: Date.now(),
   });
   if (killFeedMessages.length > maxKillFeedMessages) {
@@ -2282,6 +2318,7 @@ const pickupModelSpecs = {
   mana: { url: '/items/mana.glb', targetHeight: 0.62 },
   defensa: { url: '/items/defensa.glb', targetHeight: 0.7 },
   vida: { url: '/items/vida.glb', targetHeight: 0.68 },
+  quad_damage: { url: '/items/quad_damage.glb', targetHeight: 0.8 },
 };
 const pickupModelTemplateCache = new Map();
 const pickupModelPromiseCache = new Map();
@@ -2882,9 +2919,10 @@ const bootLobbyLoader = async () => {
     + 1
     + 1
     + 1
+    + 1
     + battleThemeIds.length
     + 2
-    + 3
+    + 4
     + 1;
   const preloadWarnings = [];
   let done = 0;
@@ -2953,6 +2991,11 @@ const bootLobbyLoader = async () => {
     markWarning('audio: kill_confirm');
   }
   tick('Audio kill confirm cargado');
+  const quadDamageSrc = await resolveQuadDamageSoundUrl();
+  if (!quadDamageSrc || !(await preloadAudioSource(quadDamageSrc, 6000))) {
+    markWarning('audio: quad_damage');
+  }
+  tick('Audio quad damage cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -2982,6 +3025,10 @@ const bootLobbyLoader = async () => {
     markWarning('item: vida.glb');
   }
   tick('Item vida cargado');
+  if (!(await loadPickupModelTemplate('quad_damage'))) {
+    markWarning('item: quad_damage.glb');
+  }
+  tick('Item quad damage cargado');
 
   await ensureLocalAvatar();
   mountPreviewModel();
@@ -3166,6 +3213,11 @@ const killConfirmSoundCandidates = [
   '/sound_effecs/kill_confirmation.mp3',
 ];
 let killConfirmSoundUrl = '';
+const quadDamageSoundCandidates = [
+  '/sound_effects/quad_damage.mp3',
+  '/sound_effecs/quad_damage.mp3',
+];
+let quadDamageSoundUrl = '';
 let localAttackSoundCharacter = '';
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
@@ -3560,6 +3612,21 @@ const resolveKillConfirmSoundUrl = async () => {
   return '';
 };
 
+const resolveQuadDamageSoundUrl = async () => {
+  if (quadDamageSoundUrl) {
+    return quadDamageSoundUrl;
+  }
+  for (let i = 0; i < quadDamageSoundCandidates.length; i += 1) {
+    const candidate = quadDamageSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      quadDamageSoundUrl = candidate;
+      return candidate;
+    }
+  }
+  return '';
+};
+
 const applyAudioSource = (audio, src) => {
   const current = audio.getAttribute('data-attack-src') || '';
   if (current === src) {
@@ -3697,6 +3764,21 @@ const playKillConfirmSound = async () => {
   voice.preload = 'auto';
   voice.loop = false;
   voice.volume = Math.max(0.02, Math.min(1, 0.55 * settings.masterVolume * settings.sfxVolume));
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {});
+  }
+};
+
+const playQuadDamageSound = async () => {
+  const src = await resolveQuadDamageSoundUrl();
+  if (!src) {
+    return;
+  }
+  const voice = new Audio(src);
+  voice.preload = 'auto';
+  voice.loop = false;
+  voice.volume = Math.max(0.02, Math.min(1, 0.62 * settings.masterVolume * settings.sfxVolume));
   const maybePromise = voice.play();
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => {});
@@ -4060,6 +4142,9 @@ let respawnSecondsLeft = getRespawnDurationSeconds();
 let respawnRequestPending = false;
 let lastRespawnRequestAt = 0;
 let localSpawnProtectedUntilMs = 0;
+let selfQuadDamageUntilMs = 0;
+let quadDamageLandingShakeUntil = 0;
+let quadDamageLandingShakeStrength = 0;
 const respawnRequestRetryMs = 700;
 let isMatchEnding = false;
 let matchWinnerEndsAt = 0;
@@ -4096,6 +4181,7 @@ const remoteInterpolationMinMs = 85;
 const remoteInterpolationMaxMs = 215;
 const remoteInterpolationLatencyFactor = 0.16;
 const remoteInterpolationCorrectionBoostMs = 44;
+const remoteQuadDamagePlayers = new Set();
 const remoteExtrapolationBaseMs = 74;
 const remoteExtrapolationMinMs = 45;
 const remoteExtrapolationMaxMs = 130;
@@ -4229,6 +4315,12 @@ const shieldPickupMaterial = new THREE.MeshStandardMaterial({
 });
 const shieldPickups = [];
 const healthPickups = [];
+let quadDamagePickup = null;
+const quadDamagePickupRequestCooldownMs = 300;
+const quadDamagePickupFallStartY = 80;
+const quadDamagePickupFloatAmplitude = 0.1;
+const quadDamagePickupFloatSpeed = 2.2;
+const quadDamagePickupRadiusSq = 1.5 * 1.5;
 
 const createSeededRng = (seed) => {
   // Keep deterministic parity with backend_v2 SeededRng (u64 LCG).
@@ -4788,6 +4880,7 @@ const rebuildMapFromSeed = (seed, force = false) => {
     scene.remove(healthPickups[i].mesh);
   }
   healthPickups.length = 0;
+  clearQuadDamagePickupVisual();
 
   const pillarRnd = createSeededRng(normalizedSeed ^ 0x9E3779B9);
   for (let i = 0; i < 220; i += 1) {
@@ -5051,6 +5144,7 @@ const updateHud = () => {
   healthBarFill.style.width = `${Math.max(0, Math.min(100, (health / maxHealth) * 100))}%`;
   shieldBarFill.style.width = `${Math.max(0, Math.min(100, (shield / maxShield) * 100))}%`;
   ammoBarFill.style.height = `${Math.max(0, Math.min(100, (currentAmmoLikeValue / reserveAmmoLikeValue) * 100))}%`;
+  updateQuadDamageHud();
 
   if (!state.joinedRoom) {
     roomHud.textContent = 'Sala: -';
@@ -5328,6 +5422,7 @@ const updateMiniMap = () => {
 
 const resetCombatStats = () => {
   clearAllPumoriOrbitSpecials();
+  clearQuadDamagePickupVisual();
   health = maxHealth;
   shield = startShield;
   ammoInMag = maxAmmoInMag;
@@ -5346,6 +5441,9 @@ const resetCombatStats = () => {
   respawnRequestPending = false;
   lastRespawnRequestAt = 0;
   localSpawnProtectedUntilMs = 0;
+  selfQuadDamageUntilMs = 0;
+  quadDamageLandingShakeUntil = 0;
+  quadDamageLandingShakeStrength = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
   respawnEndsAt = 0;
   hideWinnerOverlay();
@@ -5944,6 +6042,67 @@ const upgradeRemotePlayerToCharacter = async (entry) => {
   updateRemoteHealthBar(liveEntry);
   ensureRemoteHitboxDebug(liveEntry);
   setRemoteIdle(liveEntry);
+  applyRemoteQuadDamageVisual(liveEntry, remoteQuadDamagePlayers.has(liveEntry.id));
+};
+
+const restoreRemoteQuadDamageMaterials = (entry) => {
+  if (!entry?.quadDamageMaterialBackup) {
+    return;
+  }
+  for (let i = 0; i < entry.quadDamageMaterialBackup.length; i += 1) {
+    const backup = entry.quadDamageMaterialBackup[i];
+    if (!backup?.mesh) {
+      continue;
+    }
+    const quadMat = backup.mesh.material;
+    backup.mesh.material = backup.material;
+    if (quadMat && quadMat !== backup.material && typeof quadMat.dispose === 'function') {
+      quadMat.dispose();
+    }
+  }
+  entry.quadDamageMaterialBackup = null;
+  entry.quadDamageFxApplied = false;
+};
+
+const applyRemoteQuadDamageVisual = (entry, enabled) => {
+  if (entry) {
+    entry.quadDamageDesired = Boolean(enabled);
+  }
+  if (!entry?.avatarRoot) {
+    return;
+  }
+  if (!enabled) {
+    restoreRemoteQuadDamageMaterials(entry);
+    return;
+  }
+  if (entry.quadDamageFxApplied) {
+    return;
+  }
+  const backups = [];
+  entry.avatarRoot.traverse((node) => {
+    if (!node.isMesh || !node.material) {
+      return;
+    }
+    const originalMaterial = node.material;
+    const source = Array.isArray(originalMaterial) ? originalMaterial[0] : originalMaterial;
+    backups.push({ mesh: node, material: originalMaterial });
+    node.material = new THREE.MeshPhysicalMaterial({
+      color: 0x00ffff,
+      emissive: 0x00d8ff,
+      emissiveIntensity: 0.7,
+      transmission: 0.6,
+      roughness: 0.1,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.88,
+      map: source?.map || null,
+      alphaMap: source?.alphaMap || null,
+      skinning: Boolean(node.isSkinnedMesh),
+      side: source?.side ?? THREE.FrontSide,
+    });
+  });
+  entry.quadDamageMaterialBackup = backups;
+  entry.quadDamageFxApplied = true;
 };
 
 const disposeRemotePlayer = (entry) => {
@@ -5951,6 +6110,7 @@ const disposeRemotePlayer = (entry) => {
     unregisterShootableMesh(entry.shootableMesh);
     entry.shootableMesh = null;
   }
+  restoreRemoteQuadDamageMaterials(entry);
   if (entry?.mixer) {
     entry.mixer.stopAllAction();
     if (entry.avatarRoot) {
@@ -6035,6 +6195,7 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     isJumping: false,
     deadAt: 0,
     spawnProtectedUntilMs: 0,
+    quadDamageUntilMs: 0,
     visualOpacity: 1,
     targetPosition: new THREE.Vector3(0, 0, 0),
     targetYaw: 0,
@@ -6049,6 +6210,9 @@ const createRemotePlayer = (id, isCurrentHost, character) => {
     teamOutline: null,
     hitboxDebug: null,
     shootableMesh: null,
+    quadDamageFxApplied: false,
+    quadDamageMaterialBackup: null,
+    quadDamageDesired: false,
   });
 
   const entry = state.remotePlayers.get(id);
@@ -6142,6 +6306,16 @@ const syncRemotePlayer = (player) => {
   if (Number.isFinite(Number(player.spawnProtectedUntilMs))) {
     entry.spawnProtectedUntilMs = Number(player.spawnProtectedUntilMs);
   }
+  if (Number.isFinite(Number(player.quadDamageUntilMs))) {
+    entry.quadDamageUntilMs = Number(player.quadDamageUntilMs);
+  }
+  const remoteQuadActive = Number(entry.quadDamageUntilMs || 0) > getEstimatedServerNowMs();
+  if (remoteQuadActive) {
+    remoteQuadDamagePlayers.add(entry.id);
+  } else {
+    remoteQuadDamagePlayers.delete(entry.id);
+  }
+  applyRemoteQuadDamageVisual(entry, remoteQuadActive);
   const hasAliveFlag = typeof player.alive === 'boolean';
   if (hasAliveFlag) {
     if (!player.alive && !entry.isDead) {
@@ -6149,6 +6323,9 @@ const syncRemotePlayer = (player) => {
       entry.deadAt = performance.now();
       entry.animationUntil = 0;
       setRemoteAnimation(entry, 'death');
+      entry.quadDamageUntilMs = 0;
+      remoteQuadDamagePlayers.delete(entry.id);
+      applyRemoteQuadDamageVisual(entry, false);
       updateRemoteHealthBar(entry);
     } else if (player.alive && entry.isDead) {
       entry.isDead = false;
@@ -6215,6 +6392,7 @@ const syncRemotePlayersFromRoom = (roomState) => {
 
 const clearRemotePlayers = () => {
   remoteUpgradeEpoch += 1;
+  remoteQuadDamagePlayers.clear();
   for (const entry of state.remotePlayers.values()) {
     disposeRemotePlayer(entry);
   }
@@ -7007,6 +7185,9 @@ const applyOwnStateFromRoom = (roomState) => {
   if (Number.isFinite(Number(selfPlayer.spawnProtectedUntilMs))) {
     localSpawnProtectedUntilMs = Number(selfPlayer.spawnProtectedUntilMs);
   }
+  if (Number.isFinite(Number(selfPlayer.quadDamageUntilMs))) {
+    selfQuadDamageUntilMs = Number(selfPlayer.quadDamageUntilMs);
+  }
   if (Number.isFinite(Number(selfPlayer.lunarRainCooldownMs))) {
     setLunarRainCooldownRemainingMs(Number(selfPlayer.lunarRainCooldownMs));
   }
@@ -7055,6 +7236,7 @@ const applyRoomState = (roomState, options = {}) => {
   );
   rebuildMapFromSeed(roomSeed, shouldForceMapRebuild);
   applyPickupStateSnapshot(roomState.room?.pickups);
+  applyQuadDamageStateSnapshot(roomState.room?.quadDamage);
   syncRemotePlayersFromRoom(roomState);
   syncLocalTeamFromRoom(roomState);
   applyWeather(roomState.room?.weather);
@@ -7636,6 +7818,37 @@ const connectWebSocket = () => {
       return;
     }
 
+    if (payload.type === 'quad_damage_incoming') {
+      ensureQuadDamagePickupVisual(payload.data || {});
+      return;
+    }
+
+    if (payload.type === 'quad_damage_collected') {
+      const playerId = String(payload.data?.playerId || '');
+      const durationMs = Math.max(0, Number(payload.data?.durationMs || 0));
+      const expiresAt = getEstimatedServerNowMs() + durationMs;
+      clearQuadDamagePickupVisual();
+      if (playerId) {
+        if (state.self && playerId === state.self.id) {
+          selfQuadDamageUntilMs = expiresAt;
+          void playQuadDamageSound();
+        } else {
+          remoteQuadDamagePlayers.add(playerId);
+          const remoteEntry = state.remotePlayers.get(playerId);
+          if (remoteEntry) {
+            remoteEntry.quadDamageUntilMs = expiresAt;
+            applyRemoteQuadDamageVisual(remoteEntry, true);
+          }
+        }
+      }
+      const announcement = String(payload.data?.announcement || '').trim();
+      if (announcement) {
+        pushKillFeedAnnouncement(announcement, 'quad');
+      }
+      updateHud();
+      return;
+    }
+
     if (payload.type === 'player_damage') {
       if (!state.self || !canPlay()) {
         return;
@@ -7678,6 +7891,7 @@ const connectWebSocket = () => {
       const nextPendingHealthRegen = Number(payload.data?.pendingHealthRegen);
       const nextSpawnProtectedUntilMs = Number(payload.data?.spawnProtectedUntilMs);
       const nextLunarRainCooldownMs = Number(payload.data?.lunarRainCooldownMs);
+      const nextQuadDamageUntilMs = Number(payload.data?.quadDamageUntilMs);
       const nextIsReloading = payload.data?.isReloading;
       const nextReloadRemainingMs = Number(payload.data?.reloadRemainingMs);
       let changed = false;
@@ -7711,6 +7925,10 @@ const connectWebSocket = () => {
       if (Number.isFinite(nextLunarRainCooldownMs)) {
         setLunarRainCooldownRemainingMs(nextLunarRainCooldownMs);
       }
+      if (Number.isFinite(nextQuadDamageUntilMs)) {
+        selfQuadDamageUntilMs = Math.max(0, nextQuadDamageUntilMs);
+        changed = true;
+      }
       if (typeof nextIsReloading === 'boolean') {
         isReloading = Boolean(nextIsReloading);
         changed = true;
@@ -7738,6 +7956,7 @@ const connectWebSocket = () => {
       const nextHealth = Number(payload.data?.health);
       const nextShield = Number(payload.data?.shield);
       const nextMana = Number(payload.data?.mana);
+      const nextQuadDamageUntilMs = Number(payload.data?.quadDamageUntilMs);
       let changed = false;
       if (Number.isFinite(nextHealth)) {
         entry.health = Math.max(0, Math.min(maxHealth, Math.round(nextHealth)));
@@ -7750,6 +7969,16 @@ const connectWebSocket = () => {
       if (Number.isFinite(nextMana)) {
         entry.mana = Math.max(0, Math.min(maxMana, Math.round(nextMana)));
         changed = true;
+      }
+      if (Number.isFinite(nextQuadDamageUntilMs)) {
+        entry.quadDamageUntilMs = Math.max(0, nextQuadDamageUntilMs);
+        const quadActive = entry.quadDamageUntilMs > getEstimatedServerNowMs();
+        if (quadActive) {
+          remoteQuadDamagePlayers.add(playerId);
+        } else {
+          remoteQuadDamagePlayers.delete(playerId);
+        }
+        applyRemoteQuadDamageVisual(entry, quadActive);
       }
       if (changed) {
         updateRemoteHealthBar(entry);
@@ -7771,6 +8000,10 @@ const connectWebSocket = () => {
         applyPickupClientState(shieldPickups, index, active, respawnAtMs);
       } else if (kind === 'health') {
         applyPickupClientState(healthPickups, index, active, respawnAtMs);
+      } else if (kind === 'quad_damage' && quadDamagePickup) {
+        quadDamagePickup.active = active;
+        quadDamagePickup.pendingRequestUntil = 0;
+        quadDamagePickup.mesh.visible = active;
       }
       return;
     }
@@ -7788,6 +8021,7 @@ const connectWebSocket = () => {
 
       if (state.self && playerId === state.self.id) {
         health = 0;
+        selfQuadDamageUntilMs = 0;
         pendingHealthRegen = 0;
         updateHud();
         startRespawnCountdown(payload.data?.respawnAvailableAtMs);
@@ -7801,8 +8035,11 @@ const connectWebSocket = () => {
       const player = state.remotePlayers.get(playerId);
       player.isDead = true;
       player.health = 0;
+      player.quadDamageUntilMs = 0;
       player.isJumping = false;
       player.deadAt = performance.now();
+      remoteQuadDamagePlayers.delete(playerId);
+      applyRemoteQuadDamageVisual(player, false);
       if (player.shootableMesh) {
         unregisterShootableMesh(player.shootableMesh);
       }
@@ -7845,6 +8082,7 @@ const connectWebSocket = () => {
         if (Number.isFinite(Number(payload.data?.spawnProtectedUntilMs))) {
           localSpawnProtectedUntilMs = Number(payload.data.spawnProtectedUntilMs);
         }
+        selfQuadDamageUntilMs = 0;
         isReloading = Boolean(payload.data?.isReloading);
         reloadCooldown = Number.isFinite(Number(payload.data?.reloadRemainingMs))
           ? Math.max(0, Number(payload.data.reloadRemainingMs) / 1000)
@@ -7878,6 +8116,9 @@ const connectWebSocket = () => {
       if (Number.isFinite(Number(payload.data?.spawnProtectedUntilMs))) {
         remote.spawnProtectedUntilMs = Number(payload.data.spawnProtectedUntilMs);
       }
+      remote.quadDamageUntilMs = 0;
+      remoteQuadDamagePlayers.delete(playerId);
+      applyRemoteQuadDamageVisual(remote, false);
       remote.animationUntil = 0;
       setRemoteIdle(remote);
       const remoteRespawnPos = payload.data?.position;
@@ -9774,6 +10015,11 @@ window.addEventListener('keydown', (event) => {
     devCollectNearestRequestKind = 'mana';
     return;
   }
+  if (import.meta.env.DEV && event.code === 'Digit1' && state.joinedRoom) {
+    event.preventDefault();
+    sendWs({ type: 'dev_trigger_quad_damage' });
+    return;
+  }
   if (isTestControlsEnabled() && event.code === 'KeyV') {
     event.preventDefault();
     devCollectNearestRequestKind = 'shield';
@@ -10239,6 +10485,239 @@ const spawnPickupSpark = (pickup, color) => {
     ),
   });
 };
+
+function createQuadDamageFallbackMesh() {
+  return new THREE.Mesh(
+    new THREE.TorusKnotGeometry(0.24, 0.08, 96, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0x65f6ff,
+      emissive: 0x1ecbff,
+      emissiveIntensity: 1.1,
+      roughness: 0.18,
+      metalness: 0.45,
+    }),
+  );
+}
+
+function clearQuadDamagePickupVisual() {
+  if (!quadDamagePickup?.mesh) {
+    quadDamagePickup = null;
+    return;
+  }
+  if (quadDamagePickup.mesh.parent) {
+    quadDamagePickup.mesh.parent.remove(quadDamagePickup.mesh);
+  }
+  quadDamagePickup = null;
+}
+
+function triggerQuadDamageLandingShake(position) {
+  if (!position) {
+    return;
+  }
+  const distance = position.distanceTo(camera.position);
+  if (distance > 10) {
+    return;
+  }
+  const strength = Math.max(0, 1 - (distance / 10));
+  quadDamageLandingShakeStrength = Math.max(quadDamageLandingShakeStrength, 0.12 + (strength * 0.28));
+  quadDamageLandingShakeUntil = performance.now() + 280;
+}
+
+function spawnQuadDamageLandingEffect(position) {
+  if (!position) {
+    return;
+  }
+  for (let i = 0; i < 20; i += 1) {
+    const sparkPickup = {
+      mesh: {
+        position: new THREE.Vector3(
+          position.x + ((Math.random() - 0.5) * 0.8),
+          position.y + 0.04 + (Math.random() * 0.24),
+          position.z + ((Math.random() - 0.5) * 0.8),
+        ),
+        visible: true,
+      },
+      active: true,
+    };
+    spawnPickupSpark(sparkPickup, i % 2 === 0 ? 0xffe082 : 0x65f6ff);
+  }
+  const impactA = createImpact(position, 0xffdf7c);
+  const impactB = createImpact(position, 0x67f2ff);
+  if (impactA) {
+    impactA.scale.setScalar(2.2);
+    impactA.userData.life = 0.42;
+  }
+  if (impactB) {
+    impactB.scale.setScalar(1.7);
+    impactB.userData.life = 0.36;
+  }
+  createHitWave(position, 0x7ef6ff, 2.2);
+  triggerQuadDamageLandingShake(position);
+}
+
+function ensureQuadDamagePickupVisual(data = {}) {
+  const x = Number(data.x);
+  const z = Number(data.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    clearQuadDamagePickupVisual();
+    return;
+  }
+  if (!quadDamagePickup?.mesh) {
+    const mesh = createPickupVisualGroup('quad_damage', createQuadDamageFallbackMesh);
+    scene.add(mesh);
+    quadDamagePickup = {
+      mesh,
+      x,
+      z,
+      baseY: 0.68,
+      phase: Math.random() * Math.PI * 2,
+      active: false,
+      incoming: true,
+      landed: false,
+      landAtMs: 0,
+      pendingRequestUntil: 0,
+      announcedLanding: false,
+    };
+  }
+  quadDamagePickup.x = x;
+  quadDamagePickup.z = z;
+  quadDamagePickup.baseY = 0.68;
+  quadDamagePickup.incoming = true;
+  quadDamagePickup.active = false;
+  quadDamagePickup.landed = false;
+  quadDamagePickup.announcedLanding = false;
+  quadDamagePickup.landAtMs = Number.isFinite(Number(data.landAtMs))
+    ? Number(data.landAtMs)
+    : (Date.now() + 3000);
+  quadDamagePickup.pendingRequestUntil = 0;
+  quadDamagePickup.mesh.position.set(x, quadDamagePickupFallStartY, z);
+  quadDamagePickup.mesh.visible = true;
+}
+
+function applyQuadDamageStateSnapshot(quadState) {
+  if (!quadState || typeof quadState !== 'object' || !quadState.present) {
+    clearQuadDamagePickupVisual();
+    return;
+  }
+  ensureQuadDamagePickupVisual(quadState);
+  if (!quadDamagePickup) {
+    return;
+  }
+  quadDamagePickup.active = Boolean(quadState.active);
+  quadDamagePickup.incoming = !quadDamagePickup.active;
+  quadDamagePickup.landed = quadDamagePickup.active;
+  quadDamagePickup.announcedLanding = quadDamagePickup.active;
+  quadDamagePickup.landAtMs = Number.isFinite(Number(quadState.landAtMs))
+    ? Number(quadState.landAtMs)
+    : quadDamagePickup.landAtMs;
+  quadDamagePickup.mesh.position.set(
+    quadDamagePickup.x,
+    quadDamagePickup.active ? quadDamagePickup.baseY : quadDamagePickup.mesh.position.y,
+    quadDamagePickup.z,
+  );
+  quadDamagePickup.mesh.visible = true;
+}
+
+function updateQuadDamageHud() {
+  const remainingMs = Math.max(0, Number(selfQuadDamageUntilMs || 0) - getEstimatedServerNowMs());
+  const active = remainingMs > 0;
+  if (quadDamageHud) {
+    quadDamageHud.classList.toggle('hidden', !active);
+  }
+  if (quadDamageOverlay) {
+    quadDamageOverlay.classList.toggle('hidden', !active);
+    if (active) {
+      const pulse = 0.42 + (((Math.sin(performance.now() * 0.012) + 1) * 0.5) * 0.58);
+      quadDamageOverlay.style.opacity = String((0.08 + (pulse * 0.12)).toFixed(3));
+    } else {
+      quadDamageOverlay.style.opacity = '0';
+    }
+  }
+  if (!active) {
+    if (quadDamageText) {
+      quadDamageText.textContent = '-';
+    }
+    if (quadDamageFill) {
+      quadDamageFill.style.width = '0%';
+    }
+    return;
+  }
+  if (quadDamageText) {
+    quadDamageText.textContent = `${Math.ceil(remainingMs / 1000)}s`;
+  }
+  if (quadDamageFill) {
+    quadDamageFill.style.width = `${Math.max(0, Math.min(100, (remainingMs / 15000) * 100)).toFixed(1)}%`;
+  }
+}
+
+function updateQuadDamagePickup(delta) {
+  if (!quadDamagePickup?.mesh) {
+    return;
+  }
+  const nowMs = Date.now();
+  const nowPerf = performance.now();
+  if (Number(selfQuadDamageUntilMs || 0) > 0 && getEstimatedServerNowMs() >= selfQuadDamageUntilMs) {
+    selfQuadDamageUntilMs = 0;
+  }
+  for (const [playerId, entry] of state.remotePlayers.entries()) {
+    if (Number(entry?.quadDamageUntilMs || 0) > 0 && getEstimatedServerNowMs() >= Number(entry.quadDamageUntilMs)) {
+      entry.quadDamageUntilMs = 0;
+      remoteQuadDamagePlayers.delete(playerId);
+      applyRemoteQuadDamageVisual(entry, false);
+    }
+  }
+  if (quadDamagePickup.incoming) {
+    const startAtMs = quadDamagePickup.landAtMs - 3000;
+    const progress = Math.max(0, Math.min(1, (nowMs - startAtMs) / 3000));
+    const eased = progress * progress;
+    quadDamagePickup.mesh.position.set(
+      quadDamagePickup.x,
+      quadDamagePickupFallStartY + ((quadDamagePickup.baseY - quadDamagePickupFallStartY) * eased),
+      quadDamagePickup.z,
+    );
+    quadDamagePickup.mesh.rotation.y += delta * 2.4;
+    if (!quadDamagePickup.announcedLanding && nowMs >= quadDamagePickup.landAtMs) {
+      quadDamagePickup.incoming = false;
+      quadDamagePickup.active = true;
+      quadDamagePickup.landed = true;
+      quadDamagePickup.announcedLanding = true;
+      quadDamagePickup.mesh.position.y = quadDamagePickup.baseY;
+      spawnQuadDamageLandingEffect(quadDamagePickup.mesh.position.clone());
+    }
+    return;
+  }
+  if (!quadDamagePickup.active) {
+    quadDamagePickup.mesh.visible = false;
+    return;
+  }
+  quadDamagePickup.mesh.visible = true;
+  quadDamagePickup.mesh.rotation.y += delta * 1.6;
+  quadDamagePickup.mesh.position.set(
+    quadDamagePickup.x,
+    quadDamagePickup.baseY + (Math.sin((nowPerf / 1000) * quadDamagePickupFloatSpeed + quadDamagePickup.phase) * quadDamagePickupFloatAmplitude),
+    quadDamagePickup.z,
+  );
+  if (Math.random() < delta * 4.6) {
+    spawnPickupSpark(quadDamagePickup, 0xffdc85);
+    spawnPickupSpark(quadDamagePickup, 0x67f6ff);
+  }
+  if (!canPlay() || isRespawning) {
+    return;
+  }
+  const dx = camera.position.x - quadDamagePickup.x;
+  const dz = camera.position.z - quadDamagePickup.z;
+  if (((dx * dx) + (dz * dz)) > quadDamagePickupRadiusSq) {
+    return;
+  }
+  if (nowMs < Number(quadDamagePickup.pendingRequestUntil || 0)) {
+    return;
+  }
+  quadDamagePickup.pendingRequestUntil = nowMs + quadDamagePickupRequestCooldownMs;
+  sendWs({
+    type: 'player_pickup_quad',
+    position: { x: quadDamagePickup.x, z: quadDamagePickup.z },
+  });
+}
 
 const updatePickupSparks = (delta) => {
   for (let i = activePickupSparks.length - 1; i >= 0; i -= 1) {
@@ -11535,6 +12014,16 @@ const renderGameToText = () => {
   const manaSummary = summarizePickups(ammoPickups);
   const shieldSummary = summarizePickups(shieldPickups);
   const healthSummary = summarizePickups(healthPickups);
+  const quadSummary = quadDamagePickup?.mesh && quadDamagePickup.mesh.visible
+    ? {
+      active: Boolean(quadDamagePickup.active),
+      incoming: Boolean(quadDamagePickup.incoming),
+      x: Number(quadDamagePickup.mesh.position.x.toFixed(3)),
+      y: Number(quadDamagePickup.mesh.position.y.toFixed(3)),
+      z: Number(quadDamagePickup.mesh.position.z.toFixed(3)),
+      remainingBuffMs: Math.max(0, Number(selfQuadDamageUntilMs || 0) - getEstimatedServerNowMs()),
+    }
+    : null;
   camera.getWorldDirection(forward);
   const payload = {
     note: 'coords: x derecha(+), z adelante(+), y arriba(+)',
@@ -11565,12 +12054,14 @@ const renderGameToText = () => {
       mana: Math.round(mana),
       ammoInMag: Math.round(ammoInMag),
       ammoReserve: Math.round(ammoReserve),
+      quadDamageRemainingMs: Math.max(0, Number(selfQuadDamageUntilMs || 0) - getEstimatedServerNowMs()),
       pendingHealthRegen: Number(pendingHealthRegen.toFixed(3)),
     },
     pickups: {
       mana: manaSummary,
       shield: shieldSummary,
       health: healthSummary,
+      quadDamage: quadSummary,
     },
     timing: {
       nowMs: Date.now(),
@@ -11634,6 +12125,7 @@ const animate = () => {
     updateAmmoPickups(delta);
     updateShieldPickups(delta);
     updateHealthPickups(delta);
+    updateQuadDamagePickup(delta);
     updateDevCollectionRequests();
     updateRain(delta);
     updateSnow(delta);
@@ -11651,6 +12143,7 @@ const animate = () => {
     renderSpecialStat(false);
     updateRemoteShootSound(delta);
     updateBleedEffect(delta);
+    updateQuadDamageHud();
     if (shouldRenderLobbyPreview() && previewState.mixer) {
       previewState.mixer.update(delta);
     }
@@ -11691,14 +12184,18 @@ const animate = () => {
     const fpBobOffset = (!isThirdPerson && fpBob.intensity > 0.0005)
       ? Math.sin(fpBob.phase) * FP_BOB_AMP * fpBob.intensity
       : 0;
-    if (fpBobOffset !== 0) camera.position.y += fpBobOffset;
+    const quadShakeActive = performance.now() < quadDamageLandingShakeUntil;
+    const quadShakeOffset = quadShakeActive
+      ? (Math.sin(performance.now() * 0.08) * quadDamageLandingShakeStrength)
+      : 0;
+    if (fpBobOffset !== 0 || quadShakeOffset !== 0) camera.position.y += (fpBobOffset + quadShakeOffset);
     try {
       renderer.render(scene, getRenderCamera());
     } catch {
       isMainWebglContextLost = true;
       return;
     }
-    if (fpBobOffset !== 0) camera.position.y -= fpBobOffset;
+    if (fpBobOffset !== 0 || quadShakeOffset !== 0) camera.position.y -= (fpBobOffset + quadShakeOffset);
     renderPerfStats.drawCalls = renderer.info.render.calls || 0;
     renderPerfStats.triangles = renderer.info.render.triangles || 0;
     renderPerfStats.geometries = renderer.info.memory.geometries || 0;

@@ -1,3 +1,10 @@
+Original prompt: Lista completa de implementación — Quad Damage
+
+- 2026-03-08: implementación en curso de Quad Damage backend+frontend.
+- Backend: estado de spawn, pickup, buff x2, anuncio global, estado público `quadDamageUntilMs`, handler DEV `dev_trigger_quad_damage`.
+- Frontend: pickup visual con caída, HUD/overlay local, sonido, kill feed anuncio, efecto cyan remoto, recolección local, preload de modelo/sonido.
+- Pendiente inmediato: validar con build + Playwright y dejar commit.
+
 Original prompt: $develop-web-game prueba los ultimos cambios implementados
 
 - Contexto: Validar últimos cambios de pickups/sincronización usando skill develop-web-game.
@@ -46,3 +53,9 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - Carga ws: `run_ws_load_matrix` con 5 bots / 10s => errores 0, desconexiones esperadas 5/5, pong avg/max 2.57/5ms.
   - Revisión estática: rutas de impacto normal/habilidades y daño radial existen para normal shot, silent R, neo R, pezuna R y pumori R.
   - Gap pendiente: validar visualmente en sesión real de 2+ jugadores que cada habilidad especial remota muestre exactamente la misma onda de impacto en collision-only.
+
+- Quad Damage (2026-03-08):
+  - Backend: spawn/cooldown/buff x2 integrado, pickup `player_pickup_quad`, broadcast `quad_damage_incoming`/`quad_damage_collected`, estado `quadDamageUntilMs`, trigger DEV `dev_trigger_quad_damage`.
+  - Frontend: pickup meteor con caída, HUD/overlay local, sonido, anuncio en kill feed, glow cyan remoto, preload de asset/sonido.
+  - Validación: `cargo check -q` OK, `npm run build` OK, Playwright básico OK en lobby sin `pageerror`; `state-0.json` generado en `output/web-game-quad-check-basic`.
+  - Limitación de test: la corrida con `.room-card button` no entró a sala por timeout del selector; no se validó el flujo completo de recolección in-game en esta pasada.

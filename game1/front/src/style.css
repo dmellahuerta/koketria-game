@@ -1111,6 +1111,52 @@ button:disabled {
   overflow: hidden;
 }
 
+.quad-damage-hud {
+  position: fixed;
+  left: 50%;
+  bottom: 94px;
+  transform: translateX(-50%);
+  z-index: 14;
+  min-width: 210px;
+  border: 1px solid rgba(112, 244, 255, 0.55);
+  border-radius: 10px;
+  background: rgba(0, 16, 22, 0.86);
+  box-shadow: 0 0 18px rgba(88, 232, 255, 0.2);
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.quad-damage-title {
+  margin: 0;
+  color: #93f7ff;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.quad-damage-value {
+  margin: 4px 0 6px;
+  color: #ebfeff;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.quad-damage-track {
+  width: 100%;
+  height: 7px;
+  border: 1px solid rgba(112, 244, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(6, 34, 42, 0.82);
+  overflow: hidden;
+}
+
+.quad-damage-fill {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #1ad9ff 0%, #9fffff 100%);
+  box-shadow: 0 0 12px rgba(92, 235, 255, 0.42);
+}
+
 .ability-fill {
   height: 100%;
   width: 0;
@@ -1294,6 +1340,13 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.kill-feed p.announcement.quad {
+  border-color: rgba(102, 240, 255, 0.55);
+  background: rgba(6, 20, 28, 0.84);
+  color: #9df9ff;
+  box-shadow: 0 0 12px rgba(83, 226, 255, 0.16);
+}
+
 .chat-panel {
   position: fixed;
   top: 0;
@@ -1424,6 +1477,18 @@ button:disabled {
     radial-gradient(circle at 20% 18%, rgba(180, 0, 0, 0.25), rgba(180, 0, 0, 0) 46%),
     radial-gradient(circle at 82% 30%, rgba(170, 0, 0, 0.22), rgba(170, 0, 0, 0) 44%),
     radial-gradient(circle at 40% 84%, rgba(150, 0, 0, 0.2), rgba(150, 0, 0, 0) 42%);
+}
+
+.quad-damage-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 23;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms linear;
+  background:
+    radial-gradient(circle at center, rgba(0, 255, 255, 0) 44%, rgba(0, 220, 255, 0.08) 72%, rgba(0, 160, 210, 0.22) 100%),
+    linear-gradient(135deg, rgba(0, 255, 255, 0.08), rgba(0, 120, 190, 0.02) 38%, rgba(0, 255, 255, 0.06));
 }
 
 .scoreboard-card {
@@ -1606,6 +1671,10 @@ button:disabled {
 }
 
 #app:not(.in-room) #damageOverlay {
+  display: none;
+}
+
+#app:not(.in-room) #quadDamageOverlay {
   display: none;
 }
 

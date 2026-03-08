@@ -40,6 +40,10 @@ struct RoomMeta {
     mana_pickups: Vec<PickupState>,
     shield_pickups: Vec<PickupState>,
     health_pickups: Vec<PickupState>,
+    quad_damage_spawn_at_ms: i64,
+    quad_damage_land_at_ms: i64,
+    quad_damage_position: Option<(f64, f64)>,
+    quad_damage_active: bool,
 }
 
 #[derive(Clone)]
@@ -164,6 +168,7 @@ struct CombatState {
     silent_cd_until_ms: i64,
     neoorphen_cd_until_ms: i64,
     pumori_cd_until_ms: i64,
+    quad_damage_until_ms: i64,
 }
 
 impl WsRoomsState {
@@ -197,6 +202,12 @@ const HEALTH_PICKUP_REGEN_AMOUNT: f64 = MAX_HEALTH / 3.0;
 const HEALTH_REGEN_PER_SECOND: f64 = 10.0;
 const MANA_REGEN_PER_SECOND: f64 = 12.0;
 const HIT_DAMAGE: f64 = 50.0;
+const QUAD_DAMAGE_INTERVAL_MS: i64 = 180_000;
+const QUAD_DAMAGE_PICKUP_RADIUS: f64 = 1.5;
+const QUAD_DAMAGE_DURATION_MS: i64 = 15_000;
+const QUAD_DAMAGE_MULTIPLIER: f64 = 2.0;
+const QUAD_DAMAGE_FALL_MS: i64 = 3_000;
+const DEV_MODE: bool = cfg!(debug_assertions);
 const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
@@ -493,6 +504,10 @@ impl RoomMeta {
             mana_pickups,
             shield_pickups,
             health_pickups,
+            quad_damage_spawn_at_ms: now_ms() + QUAD_DAMAGE_INTERVAL_MS,
+            quad_damage_land_at_ms: 0,
+            quad_damage_position: None,
+            quad_damage_active: false,
         }
     }
 
@@ -518,6 +533,10 @@ impl RoomMeta {
         self.mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
         self.shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
         self.health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
+        self.quad_damage_spawn_at_ms = now_ms() + QUAD_DAMAGE_INTERVAL_MS;
+        self.quad_damage_land_at_ms = 0;
+        self.quad_damage_position = None;
+        self.quad_damage_active = false;
     }
 }
 
@@ -711,6 +730,8 @@ impl Inner {
             client.character.as_deref(),
             now
           ),
+          "quadDamageUntilMs": client.combat.quad_damage_until_ms,
+          "quadDamageRemainingMs": (client.combat.quad_damage_until_ms - now).max(0),
           "pendingHealthRegen": client.combat.pending_health_regen,
           "state": player_state_json(&client.state),
           "ts": client.state_ts
@@ -723,6 +744,7 @@ impl Inner {
         if let Some(room_obj) = room_json.as_object_mut() {
             if let Some(meta) = self.room_meta.get(room_id) {
                 room_obj.insert("pickups".to_string(), pickup_state_payload(meta, now_ms()));
+                room_obj.insert("quadDamage".to_string(), quad_damage_state_payload(meta, now_ms()));
             }
         }
         let mut players = Vec::new();
@@ -874,38 +896,46 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             ticker.tick().await;
             let mut inner = ping_state.inner.write().await;
             let now = now_ms();
-            let Some(entry) = inner.clients.get_mut(&ping_client_id) else {
+            let Some((room_id_for_public, health, shield, mana, quad_damage_until_ms)) =
+                (match inner.clients.get_mut(&ping_client_id) {
+                    Some(entry) => {
+                        update_combat_regen(&mut entry.combat, now);
+                        entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
+                        entry.latency_probe_id = entry.latency_probe_seq;
+                        entry.latency_probe_sent_at = now;
+                        let payload = json!({
+                          "type": "ping",
+                          "ok": true,
+                          "data": {
+                            "probeId": entry.latency_probe_id,
+                            "serverTs": now
+                          }
+                        });
+                        Inner::enqueue_client_message(entry, Some("ping"), payload.to_string());
+                        let resources_payload =
+                            player_resources_payload(&entry.combat, entry.character.as_deref(), now);
+                        Inner::enqueue_client_message(
+                            entry,
+                            Some("player_resources"),
+                            resources_payload.to_string(),
+                        );
+                        Some((
+                            entry.room_id.clone(),
+                            entry.combat.health.round() as i64,
+                            entry.combat.shield.round() as i64,
+                            entry.combat.mana.round() as i64,
+                            entry.combat.quad_damage_until_ms,
+                        ))
+                    }
+                    None => None,
+                })
+            else {
                 break;
             };
-            update_combat_regen(&mut entry.combat, now);
-            entry.latency_probe_seq = entry.latency_probe_seq.wrapping_add(1);
-            entry.latency_probe_id = entry.latency_probe_seq;
-            entry.latency_probe_sent_at = now;
-            let payload = json!({
-              "type": "ping",
-              "ok": true,
-              "data": {
-                "probeId": entry.latency_probe_id,
-                "serverTs": now
-              }
-            });
-            Inner::enqueue_client_message(entry, Some("ping"), payload.to_string());
-            let resources_payload =
-                player_resources_payload(&entry.combat, entry.character.as_deref(), now);
-            Inner::enqueue_client_message(
-                entry,
-                Some("player_resources"),
-                resources_payload.to_string(),
-            );
-            let room_id_for_public = entry.room_id.clone();
-            let public_resources = Some((
-                entry.combat.health.round() as i64,
-                entry.combat.shield.round() as i64,
-                entry.combat.mana.round() as i64,
-            ));
-            if let (Some(room_id), Some((health, shield, mana))) =
-                (room_id_for_public, public_resources)
-            {
+            if let Some(room_id) = room_id_for_public.as_deref() {
+                maybe_spawn_quad_damage(&mut inner, room_id, now);
+            }
+            if let Some(room_id) = room_id_for_public {
                 inner.broadcast_room(
                     &room_id,
                     json!({
@@ -916,6 +946,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                         "health": health,
                         "shield": shield,
                         "mana": mana,
+                        "quadDamageUntilMs": quad_damage_until_ms,
                         "ts": now
                       }
                     }),
@@ -2599,6 +2630,162 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 );
             }
         }
+        "player_pickup_quad" => {
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let client_pickup_position = message
+                .get("position")
+                .and_then(|v| {
+                    let x = v.get("x").and_then(Value::as_f64)?;
+                    let z = v.get("z").and_then(Value::as_f64)?;
+                    if x.is_finite() && z.is_finite() {
+                        Some((x, z))
+                    } else {
+                        None
+                    }
+                });
+            let now = now_ms();
+            let Some(player_state) = inner.clients.get(client_id).cloned() else {
+                return;
+            };
+            if !player_state.combat.alive {
+                return;
+            }
+            let mut collected = None;
+            if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                if meta.quad_damage_position.is_some()
+                    && !meta.quad_damage_active
+                    && meta.quad_damage_land_at_ms > 0
+                    && now >= meta.quad_damage_land_at_ms
+                {
+                    meta.quad_damage_active = true;
+                }
+                if meta.quad_damage_active {
+                    if let Some((x, z)) = meta.quad_damage_position {
+                        let server_dx = player_state.state.position.x - x;
+                        let server_dz = player_state.state.position.z - z;
+                        let mut can_take = ((server_dx * server_dx) + (server_dz * server_dz)).sqrt()
+                            <= QUAD_DAMAGE_PICKUP_RADIUS;
+                        if !can_take {
+                            if let Some((client_x, client_z)) = client_pickup_position {
+                                let drift_dx = client_x - player_state.state.position.x;
+                                let drift_dz = client_z - player_state.state.position.z;
+                                let drift = ((drift_dx * drift_dx) + (drift_dz * drift_dz)).sqrt();
+                                if drift <= PICKUP_CLIENT_POS_MAX_DRIFT {
+                                    let client_dx = client_x - x;
+                                    let client_dz = client_z - z;
+                                    can_take = ((client_dx * client_dx) + (client_dz * client_dz)).sqrt()
+                                        <= QUAD_DAMAGE_PICKUP_RADIUS;
+                                }
+                            }
+                        }
+                        if can_take {
+                            meta.quad_damage_active = false;
+                            meta.quad_damage_position = None;
+                            meta.quad_damage_land_at_ms = 0;
+                            meta.quad_damage_spawn_at_ms = now + QUAD_DAMAGE_INTERVAL_MS;
+                            collected = Some((x, z));
+                        }
+                    }
+                }
+            }
+            if collected.is_none() {
+                return;
+            }
+            let player_name = {
+                let Some(entry) = inner.clients.get_mut(client_id) else {
+                    return;
+                };
+                entry.combat.quad_damage_until_ms = now + QUAD_DAMAGE_DURATION_MS;
+                entry.name.clone()
+            };
+            let announcement = format!("QUAD: {} recogio una Mejora de Poder", player_name);
+            if let Some(entry) = inner.clients.get(client_id) {
+                inner.send_to(
+                    client_id,
+                    player_resources_payload(&entry.combat, entry.character.as_deref(), now),
+                );
+            }
+            inner.broadcast_room(
+                &room_id,
+                json!({
+                  "type":"quad_damage_collected",
+                  "ok": true,
+                  "data": {
+                    "playerId": client_id,
+                    "playerName": player_name,
+                    "durationMs": QUAD_DAMAGE_DURATION_MS,
+                    "announcement": announcement,
+                    "ts": now
+                  }
+                }),
+                None,
+            );
+            inner.broadcast_room_state(&room_id);
+        }
+        "dev_trigger_quad_damage" => {
+            if !DEV_MODE {
+                return;
+            }
+            let Some(room_id) = client.room_id.clone() else {
+                return;
+            };
+            let Some(room) = inner.rooms.rooms.get(&room_id) else {
+                return;
+            };
+            if room.status != RoomStatus::InGame {
+                return;
+            }
+            let Some(player) = inner.clients.get(client_id) else {
+                return;
+            };
+            let center_x = player.state.position.x;
+            let center_z = player.state.position.z;
+            let now = now_ms();
+            let mut spawned_payload: Option<Value> = None;
+            if let Some(meta) = inner.room_meta.get_mut(&room_id) {
+                let seed = (now as u64) ^ hash_room_id(&room_id) ^ hash_room_id(client_id) ^ 0x0BAD_1DEAu64;
+                let mut rng = SeededRng::new(seed);
+                let mut selected = None;
+                for _ in 0..48 {
+                    let angle = rng.next_f64() * std::f64::consts::TAU;
+                    let radius = 3.0 + (rng.next_f64() * 10.0);
+                    let x = center_x + (angle.cos() * radius);
+                    let z = center_z + (angle.sin() * radius);
+                    if is_valid_player_position(meta, x, z, QUAD_DAMAGE_PICKUP_RADIUS) {
+                        selected = Some((x, z));
+                        break;
+                    }
+                }
+                if let Some((x, z)) = selected {
+                    meta.quad_damage_position = Some((x, z));
+                    meta.quad_damage_active = false;
+                    meta.quad_damage_land_at_ms = now + 500;
+                    meta.quad_damage_spawn_at_ms = now + QUAD_DAMAGE_INTERVAL_MS;
+                    spawned_payload = Some(json!({
+                      "type":"quad_damage_incoming",
+                      "ok": true,
+                      "data": {
+                        "x": x,
+                        "z": z,
+                        "landAtMs": meta.quad_damage_land_at_ms,
+                        "durationMs": QUAD_DAMAGE_DURATION_MS
+                      }
+                    }));
+                }
+            }
+            if let Some(payload) = spawned_payload {
+                inner.broadcast_room(&room_id, payload, None);
+                inner.broadcast_room_state(&room_id);
+            }
+        }
         "player_resources" => {}
         "player_move" => {
             let Some(room_id) = client.room_id.clone() else {
@@ -2795,7 +2982,8 @@ fn accept_rate_limited_event(inner: &mut Inner, client_id: &str, event_type: &st
         "player_pickup_ammo"
         | "player_pickup_mana"
         | "player_pickup_shield"
-        | "player_pickup_health" => {
+        | "player_pickup_health"
+        | "player_pickup_quad" => {
             if now - client.last_pickup_req_at_ms < PICKUP_REQ_MIN_INTERVAL_MS {
                 if pickup_trace_enabled() {
                     debug!(
@@ -3857,11 +4045,15 @@ fn apply_hit_and_emit(
     let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
     let mut death_award_eligible = false;
-    let applied_damage = if headshot {
+    let quad_damage = is_quad_damage_active_for_attacker(inner, attacker_id, ts);
+    let mut applied_damage = if headshot {
         base_damage * HEADSHOT_DAMAGE_MULTIPLIER
     } else {
         base_damage
     };
+    if quad_damage {
+        applied_damage *= QUAD_DAMAGE_MULTIPLIER;
+    }
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
             return false;
@@ -3882,6 +4074,7 @@ fn apply_hit_and_emit(
         victim.combat.pending_health_regen = 0.0;
         if victim.combat.health <= 0.0 {
             victim.combat.alive = false;
+            victim.combat.quad_damage_until_ms = 0;
             victim.combat.respawn_available_at_ms = ts + respawn_delay_ms;
             if ts > victim.combat.last_death_award_at_ms {
                 victim.combat.last_death_award_at_ms = ts;
@@ -4230,9 +4423,11 @@ async fn apply_delayed_authoritative_hit(
         };
         let ts = now_ms();
         if send_hit_confirm {
+            let quad_damage = is_quad_damage_active_for_attacker(&inner, &attacker_id, ts);
             let mut data = json!({
               "victimId": victim_id,
               "headshot": revalidated_headshot,
+              "quadDamage": quad_damage,
               "ts": ts
             });
             if let Some(shot_ts_value) = shot_ts {
@@ -4337,21 +4532,23 @@ fn apply_radial_falloff_damage(
             splash_damage,
             ts,
         ) {
+            let quad_damage = is_quad_damage_active_for_attacker(inner, attacker_id, ts);
             inner.send_to(
                 attacker_id,
                 json!({
                   "type":"hit_confirm",
-                  "data": { "victimId": victim_id, "headshot": false }
+                  "data": { "victimId": victim_id, "headshot": false, "quadDamage": quad_damage }
                 }),
             );
             winner = true;
             break;
         } else {
+            let quad_damage = is_quad_damage_active_for_attacker(inner, attacker_id, ts);
             inner.send_to(
                 attacker_id,
                 json!({
                   "type":"hit_confirm",
-                  "data": { "victimId": victim_id, "headshot": false }
+                  "data": { "victimId": victim_id, "headshot": false, "quadDamage": quad_damage }
                 }),
             );
         }
@@ -5049,6 +5246,7 @@ fn default_combat_state() -> CombatState {
         silent_cd_until_ms: 0,
         neoorphen_cd_until_ms: 0,
         pumori_cd_until_ms: 0,
+        quad_damage_until_ms: 0,
     }
 }
 
@@ -5131,9 +5329,19 @@ fn player_resources_payload(combat: &CombatState, character: Option<&str>, now_m
         "isReloading": is_reloading,
         "reloadRemainingMs": reload_remaining_ms,
         "pendingHealthRegen": combat.pending_health_regen,
-        "lunarRainCooldownMs": current_special_cooldown_remaining_ms(combat, character, now_ms_v)
+        "lunarRainCooldownMs": current_special_cooldown_remaining_ms(combat, character, now_ms_v),
+        "quadDamageUntilMs": combat.quad_damage_until_ms,
+        "quadDamageRemainingMs": (combat.quad_damage_until_ms - now_ms_v).max(0)
       }
     })
+}
+
+fn is_quad_damage_active_for_attacker(inner: &Inner, attacker_id: &str, ts: i64) -> bool {
+    inner
+        .clients
+        .get(attacker_id)
+        .map(|entry| entry.combat.quad_damage_until_ms > ts)
+        .unwrap_or(false)
 }
 
 fn current_special_cooldown_remaining_ms(
@@ -6229,6 +6437,27 @@ fn pickup_state_payload(meta: &RoomMeta, now: i64) -> Value {
     })
 }
 
+fn quad_damage_state_payload(meta: &RoomMeta, now: i64) -> Value {
+    if let Some((x, z)) = meta.quad_damage_position {
+        return json!({
+          "active": meta.quad_damage_active && meta.quad_damage_land_at_ms <= now,
+          "x": x,
+          "z": z,
+          "landAtMs": meta.quad_damage_land_at_ms,
+          "durationMs": QUAD_DAMAGE_DURATION_MS,
+          "spawnAtMs": meta.quad_damage_spawn_at_ms
+        });
+    }
+    json!({
+      "active": false,
+      "x": Value::Null,
+      "z": Value::Null,
+      "landAtMs": 0,
+      "durationMs": QUAD_DAMAGE_DURATION_MS,
+      "spawnAtMs": meta.quad_damage_spawn_at_ms
+    })
+}
+
 fn pickup_vec_payload(pickups: &[PickupState], now: i64) -> Vec<Value> {
     let mut out = Vec::with_capacity(pickups.len());
     for (index, pickup) in pickups.iter().enumerate() {
@@ -6296,6 +6525,58 @@ fn consume_pickup(
     let respawn_at = now + PICKUP_RESPAWN_MS;
     pickup.respawn_at_ms = respawn_at;
     Some(respawn_at)
+}
+
+fn create_quad_damage_position(meta: &RoomMeta, seed: u64) -> Option<(f64, f64)> {
+    let mut rng = SeededRng::new(seed ^ 0xA51C_4D3Bu64);
+    for _ in 0..96 {
+        let x = (rng.next_f64() - 0.5) * 170.0;
+        let z = (rng.next_f64() - 0.5) * 170.0;
+        if is_valid_player_position(meta, x, z, QUAD_DAMAGE_PICKUP_RADIUS) {
+            return Some((x, z));
+        }
+    }
+    None
+}
+
+fn maybe_spawn_quad_damage(inner: &mut Inner, room_id: &str, now: i64) {
+    let has_players = inner
+        .rooms
+        .rooms
+        .get(room_id)
+        .map(|room| room.status == RoomStatus::InGame && !room.players.is_empty())
+        .unwrap_or(false);
+    if !has_players {
+        return;
+    }
+    let mut spawned_payload: Option<Value> = None;
+    if let Some(meta) = inner.room_meta.get_mut(room_id) {
+        if meta.quad_damage_position.is_some() && !meta.quad_damage_active && meta.quad_damage_land_at_ms > 0 && now >= meta.quad_damage_land_at_ms {
+            meta.quad_damage_active = true;
+        }
+        if meta.quad_damage_position.is_none() && now >= meta.quad_damage_spawn_at_ms {
+            let seed = (now as u64) ^ hash_room_id(room_id);
+            if let Some((x, z)) = create_quad_damage_position(meta, seed) {
+                meta.quad_damage_position = Some((x, z));
+                meta.quad_damage_active = false;
+                meta.quad_damage_land_at_ms = now + QUAD_DAMAGE_FALL_MS;
+                spawned_payload = Some(json!({
+                  "type":"quad_damage_incoming",
+                  "ok": true,
+                  "data": {
+                    "x": x,
+                    "z": z,
+                    "landAtMs": meta.quad_damage_land_at_ms,
+                    "durationMs": QUAD_DAMAGE_DURATION_MS
+                  }
+                }));
+            }
+        }
+    }
+    if let Some(payload) = spawned_payload {
+        inner.broadcast_room(room_id, payload, None);
+        inner.broadcast_room_state(room_id);
+    }
 }
 
 fn map_collision_hash(profile: &MapProfile, boxes: &[MapBox]) -> String {
