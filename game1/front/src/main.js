@@ -3017,6 +3017,22 @@ const bootLobbyLoader = async () => {
     }
     tick(`Audio pain ${level.threshold} cargado`);
   }
+  for (let i = 0; i < stepSoundCandidates.length; i += 1) {
+    const candidate = stepSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await canPlayAudioUrl(candidate))) {
+      continue;
+    }
+    stepSoundUrls.push(candidate);
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await preloadAudioSource(candidate, 6000))) {
+      markWarning(`audio: ${candidate}`);
+    }
+    tick(`Audio step ${stepSoundUrls.length} cargado`);
+    if (stepSoundUrls.length >= 4) {
+      break;
+    }
+  }
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3266,9 +3282,21 @@ const painSoundLevels = [
   { threshold: 75, candidates: ['/sound_effects/pain75_1.wav', '/sound_effecs/pain75_1.wav'] },
   { threshold: 100, candidates: ['/sound_effects/pain100_1.wav', '/sound_effecs/pain100_1.wav'] },
 ];
+const stepSoundCandidates = [
+  '/sound_effects/step1.wav',
+  '/sound_effects/step2.wav',
+  '/sound_effects/step3.wav',
+  '/sound_effects/step4.wav',
+  '/sound_effecs/step1.wav',
+  '/sound_effecs/step2.wav',
+  '/sound_effecs/step3.wav',
+  '/sound_effecs/step4.wav',
+];
 const painSoundUrlCache = new Map();
+const stepSoundUrls = [];
 const painSoundCooldownMs = 220;
 let lastPainSoundAt = 0;
+let footstepTimer = 0;
 let localAttackSoundCharacter = '';
 const pooledAudioVoices = new Map();
 const remoteShootMaxDistance = 140;
@@ -3915,7 +3943,19 @@ const playPainSoundForHealth = async (healthValue) => {
     return;
   }
   lastPainSoundAt = now;
-  playPooledOneShotAudio(src, Math.max(0.04, Math.min(1, 0.34 * settings.masterVolume * settings.sfxVolume)), 8, 1);
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.17 * settings.masterVolume * settings.sfxVolume)), 8, 1);
+};
+
+const playFootstepSound = () => {
+  if (!audioUnlocked || stepSoundUrls.length === 0) {
+    return;
+  }
+  const index = Math.floor(Math.random() * stepSoundUrls.length);
+  const src = stepSoundUrls[index];
+  if (!src) {
+    return;
+  }
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.16 * settings.masterVolume * settings.sfxVolume)), 6, 1);
 };
 
 const stopShootSound = () => {
@@ -5564,6 +5604,7 @@ const resetCombatStats = () => {
   localSpawnProtectedUntilMs = 0;
   selfQuadDamageUntilMs = 0;
   stopQuadLoopSound();
+  footstepTimer = 0;
   quadDamageLandingShakeUntil = 0;
   quadDamageLandingShakeStrength = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
@@ -8840,6 +8881,27 @@ const updateFpBob = (delta) => {
   if (fpBob.intensity > 0.0005) {
     fpBob.phase += delta * FP_BOB_SPEED * fpBob.intensity;
   }
+};
+
+const updateFootsteps = (delta) => {
+  if (!canPlay() || isRespawning || isJumping) {
+    footstepTimer = 0;
+    return;
+  }
+  const horizontalSpeed = Math.hypot(moveVelocity.x, moveVelocity.z);
+  const moving = horizontalSpeed > 1.2 && (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD);
+  if (!moving || camera.position.y > (playerGroundY + 0.05)) {
+    footstepTimer = 0;
+    return;
+  }
+  const normalizedSpeed = Math.max(0.35, Math.min(1, horizontalSpeed / speed));
+  const interval = THREE.MathUtils.lerp(0.56, 0.29, normalizedSpeed);
+  footstepTimer += delta;
+  if (footstepTimer < interval) {
+    return;
+  }
+  footstepTimer = 0;
+  playFootstepSound();
 };
 
 const getClosestRemoteCharacterHitPoint = (origin, direction, maxDistance, options = {}) => {
@@ -12620,6 +12682,7 @@ const animate = () => {
     updateMovement(delta);
     updateJump(delta);
     applyLocalMovementReconciliation(delta);
+    updateFootsteps(delta);
     updateHealthRegen(delta);
     updateLocalAvatar(delta);
     updateLocalHitboxDebug();
