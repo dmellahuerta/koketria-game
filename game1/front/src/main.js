@@ -8031,7 +8031,8 @@ const connectWebSocket = () => {
       const kind = String(payload.data?.kind || '').trim().toLowerCase();
       const index = Number(payload.data?.index);
       const active = Boolean(payload.data?.active);
-      const respawnAtMs = Number(payload.data?.respawnAtMs || 0);
+      const respawnAtMsRaw = Number(payload.data?.respawnAtMs);
+      const respawnAtMs = Number.isFinite(respawnAtMsRaw) ? respawnAtMsRaw : 0;
       if (!Number.isFinite(index) || !kind) {
         return;
       }
@@ -11169,7 +11170,7 @@ const updateAmmoPickups = (delta) => {
     const pickup = ammoPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
+      if (nowMs >= (Number.isFinite(Number(pickup.respawnAtMs)) ? Number(pickup.respawnAtMs) : 0)) {
         pickup.active = true;
         pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
@@ -11212,7 +11213,7 @@ const updateShieldPickups = (delta) => {
     const pickup = shieldPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
+      if (nowMs >= (Number.isFinite(Number(pickup.respawnAtMs)) ? Number(pickup.respawnAtMs) : 0)) {
         pickup.active = true;
         pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
@@ -11250,7 +11251,7 @@ const updateHealthPickups = (delta) => {
     const pickup = healthPickups[i];
 
     if (!pickup.active) {
-      if (nowMs >= Number(pickup.respawnAtMs || 0)) {
+      if (nowMs >= (Number.isFinite(Number(pickup.respawnAtMs)) ? Number(pickup.respawnAtMs) : 0)) {
         pickup.active = true;
         pickup.respawnAtMs = 0;
         pickup.mesh.visible = true;
