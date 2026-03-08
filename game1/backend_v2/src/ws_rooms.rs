@@ -26,6 +26,8 @@ struct Inner {
     clients: HashMap<String, ClientSession>,
     room_meta: HashMap<String, RoomMeta>,
     client_seq: u64,
+    dirty_room_states: HashSet<String>,
+    last_room_state_flush_ms: i64,
 }
 
 #[derive(Clone)]
@@ -116,8 +118,8 @@ struct ClientSession {
     bot_orbit_radius: f64,
     bot_orbit_speed: f64,
     bot_move_speed: f64,
-    tx_critical: mpsc::UnboundedSender<String>,
-    tx_regular: mpsc::Sender<String>,
+    tx_critical: mpsc::UnboundedSender<Arc<str>>,
+    tx_regular: mpsc::Sender<Arc<str>>,
     bot_task_abort: Option<AbortHandle>,
 }
 
@@ -183,6 +185,8 @@ impl WsRoomsState {
                 clients: HashMap::new(),
                 room_meta,
                 client_seq: 0,
+                dirty_room_states: HashSet::new(),
+                last_room_state_flush_ms: 0,
             }),
         })
     }
@@ -207,6 +211,8 @@ const QUAD_DAMAGE_PICKUP_RADIUS: f64 = 1.5;
 const QUAD_DAMAGE_DURATION_MS: i64 = 30_000;
 const QUAD_DAMAGE_MULTIPLIER: f64 = 2.0;
 const QUAD_DAMAGE_FALL_MS: i64 = 3_000;
+const ROOM_STATE_BROADCAST_MIN_INTERVAL_MS: i64 = 50;
+const STATE_HISTORY_MAX_ENTRIES: usize = 64;
 const DEV_MODE: bool = cfg!(debug_assertions);
 const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
@@ -554,7 +560,7 @@ fn is_regular_event_type(event_type: &str) -> bool {
 }
 
 impl Inner {
-    fn enqueue_client_message(client: &ClientSession, event_type: Option<&str>, data: String) {
+    fn enqueue_client_message(client: &ClientSession, event_type: Option<&str>, data: Arc<str>) {
         if event_type.is_some_and(is_regular_event_type) {
             match client.tx_regular.try_send(data) {
                 Ok(()) => {}
@@ -563,7 +569,7 @@ impl Inner {
             }
             return;
         }
-        let _ = client.tx_critical.send(data);
+            let _ = client.tx_critical.send(data);
     }
 
     fn ensure_room_meta(&mut self, room_id: &str) {
@@ -585,7 +591,11 @@ impl Inner {
                 .get("type")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            Self::enqueue_client_message(client, event_type.as_deref(), payload.to_string());
+            Self::enqueue_client_message(
+                client,
+                event_type.as_deref(),
+                Arc::from(payload.to_string()),
+            );
         }
     }
 
@@ -597,13 +607,13 @@ impl Inner {
             .get("type")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let data = payload.to_string();
+        let data: Arc<str> = Arc::from(payload.to_string());
         for player_id in &room.players {
             if exclude_client_id == Some(player_id.as_str()) {
                 continue;
             }
             if let Some(client) = self.clients.get(player_id) {
-                Self::enqueue_client_message(client, event_type.as_deref(), data.clone());
+                Self::enqueue_client_message(client, event_type.as_deref(), Arc::clone(&data));
             }
         }
     }
@@ -642,12 +652,12 @@ impl Inner {
             .get("type")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let text = payload.to_string();
+        let text: Arc<str> = Arc::from(payload.to_string());
         for client in self.clients.values() {
             if client.is_bot || client.room_id.is_some() {
                 continue;
             }
-            Self::enqueue_client_message(client, event_type.as_deref(), text.clone());
+            Self::enqueue_client_message(client, event_type.as_deref(), Arc::clone(&text));
         }
     }
 
@@ -775,28 +785,44 @@ impl Inner {
           "ok": true,
           "data": self.public_rooms_json()
         });
-        let text = payload.to_string();
+        let text: Arc<str> = Arc::from(payload.to_string());
         for client in self.clients.values() {
-            Self::enqueue_client_message(client, Some("rooms_list"), text.clone());
+            Self::enqueue_client_message(client, Some("rooms_list"), Arc::clone(&text));
         }
     }
 
-    fn broadcast_room_state(&self, room_id: &str) {
-        if let Some(state) = self.room_state_json(room_id) {
-            self.broadcast_room(
-                room_id,
-                json!({ "type": "room_state", "ok": true, "data": state }),
-                None,
-            );
+    fn broadcast_room_state(&mut self, room_id: &str) {
+        self.dirty_room_states.insert(room_id.to_string());
+        self.flush_dirty_room_states(false);
+    }
+
+    fn flush_dirty_room_states(&mut self, force: bool) {
+        if self.dirty_room_states.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        if !force && (now - self.last_room_state_flush_ms) < ROOM_STATE_BROADCAST_MIN_INTERVAL_MS {
+            return;
+        }
+        let room_ids: Vec<String> = self.dirty_room_states.drain().collect();
+        self.last_room_state_flush_ms = now;
+        for room_id in room_ids {
+            if let Some(state) = self.room_state_json(&room_id) {
+                self.broadcast_room(
+                    &room_id,
+                    json!({ "type": "room_state", "ok": true, "data": state }),
+                    None,
+                );
+            }
         }
     }
 }
 
 pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (out_critical_tx, mut out_critical_rx) = mpsc::unbounded_channel::<String>();
+    let (out_critical_tx, mut out_critical_rx) = mpsc::unbounded_channel::<Arc<str>>();
     let (out_regular_tx, mut out_regular_rx) =
-        mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
+        mpsc::channel::<Arc<str>>(CLIENT_REGULAR_QUEUE_CAPACITY);
 
     let write_task = tokio::spawn(async move {
         loop {
@@ -809,7 +835,11 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             let Some(msg) = next_msg else {
                 break;
             };
-            if ws_tx.send(AxumWsMessage::Text(msg.into())).await.is_err() {
+            if ws_tx
+                .send(AxumWsMessage::Text(msg.as_ref().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -882,7 +912,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
         (client_id, connected_payload)
     };
     info!("[ws_rooms] connected client_id={}", client_id);
-    let _ = out_critical_tx.send(connected_payload.to_string());
+    let _ = out_critical_tx.send(Arc::from(connected_payload.to_string()));
     {
         let inner = state.inner.read().await;
         inner.broadcast_lobby_presence();
@@ -911,13 +941,17 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
                             "serverTs": now
                           }
                         });
-                        Inner::enqueue_client_message(entry, Some("ping"), payload.to_string());
+                        Inner::enqueue_client_message(
+                            entry,
+                            Some("ping"),
+                            Arc::from(payload.to_string()),
+                        );
                         let resources_payload =
                             player_resources_payload(&entry.combat, entry.character.as_deref(), now);
                         Inner::enqueue_client_message(
                             entry,
                             Some("player_resources"),
-                            resources_payload.to_string(),
+                            Arc::from(resources_payload.to_string()),
                         );
                         Some((
                             entry.room_id.clone(),
@@ -935,6 +969,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             if let Some(room_id) = room_id_for_public.as_deref() {
                 maybe_spawn_quad_damage(&mut inner, room_id, now);
             }
+            inner.flush_dirty_room_states(false);
             if let Some(room_id) = room_id_for_public {
                 inner.broadcast_room(
                     &room_id,
@@ -979,12 +1014,14 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             Ok(v) => v,
             Err(_) => {
                 let _ = out_critical_tx.send(
-                    json!({
-                      "type": "error",
-                      "ok": false,
-                      "error": { "code": "INVALID_JSON", "message": "Mensaje invalido" }
-                    })
-                    .to_string(),
+                    Arc::from(
+                        json!({
+                          "type": "error",
+                          "ok": false,
+                          "error": { "code": "INVALID_JSON", "message": "Mensaje invalido" }
+                        })
+                        .to_string(),
+                    ),
                 );
                 continue;
             }
@@ -3204,8 +3241,8 @@ fn handle_add_bot_command(inner: &mut Inner, room_id: &str) -> Option<String> {
     let bot_orbit_speed = 0.30 + (rng.next_f64() * 0.45);
     let bot_move_speed = 3.5 + (rng.next_f64() * 2.5);
 
-    let (tx_critical, mut rx_critical) = mpsc::unbounded_channel::<String>();
-    let (tx_regular, mut rx_regular) = mpsc::channel::<String>(CLIENT_REGULAR_QUEUE_CAPACITY);
+    let (tx_critical, mut rx_critical) = mpsc::unbounded_channel::<Arc<str>>();
+    let (tx_regular, mut rx_regular) = mpsc::channel::<Arc<str>>(CLIENT_REGULAR_QUEUE_CAPACITY);
     tokio::spawn(async move {
         loop {
             let next_msg = tokio::select! {
@@ -5357,6 +5394,9 @@ fn push_state_snapshot(client: &mut ClientSession, ts: i64) {
         ts,
         position: client.state.position.clone(),
     });
+    while client.state_history.len() > STATE_HISTORY_MAX_ENTRIES {
+        client.state_history.pop_front();
+    }
     let cutoff = ts - STATE_HISTORY_WINDOW_MS;
     while client.state_history.len() > 2 {
         let first_ts = client.state_history.front().map(|s| s.ts).unwrap_or(ts);

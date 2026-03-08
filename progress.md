@@ -59,3 +59,5 @@ Original prompt: $develop-web-game prueba los ultimos cambios implementados
   - Frontend: pickup meteor con caída, HUD/overlay local, sonido, anuncio en kill feed, glow cyan remoto, preload de asset/sonido.
   - Validación: `cargo check -q` OK, `npm run build` OK, Playwright básico OK en lobby sin `pageerror`; `state-0.json` generado en `output/web-game-quad-check-basic`.
   - Limitación de test: la corrida con `.room-card button` no entró a sala por timeout del selector; no se validó el flujo completo de recolección in-game en esta pasada.
+
+- 2026-03-08: perf pass aplicado. Backend: room_state coalesced por dirty flag + flush interval, payload compartido con Arc<str>, state_history con limite duro. Frontend: cache de materials para impacts, pooling de pickup sparks, menos allocaciones por frame en quad damage/hammer, rain/snow usan performance.now() una vez por frame, audio one-shot con pool por src.

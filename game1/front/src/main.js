@@ -3221,6 +3221,7 @@ const quadDamageSoundCandidates = [
 ];
 let quadDamageSoundUrl = '';
 let localAttackSoundCharacter = '';
+const pooledAudioVoices = new Map();
 const remoteShootMaxDistance = 140;
 const remoteShootMinDistance = 6;
 const remoteAttackVoices = [];
@@ -3629,6 +3630,42 @@ const resolveQuadDamageSoundUrl = async () => {
   return '';
 };
 
+const playPooledOneShotAudio = (src, volume, maxVoices = 8, playbackRate = 1) => {
+  if (!src) {
+    return;
+  }
+  const poolKey = `${src}|${maxVoices}`;
+  let pool = pooledAudioVoices.get(poolKey);
+  if (!pool) {
+    pool = [];
+    pooledAudioVoices.set(poolKey, pool);
+  }
+  let voice = pool.find((entry) => entry.paused || entry.ended);
+  if (!voice) {
+    if (pool.length >= maxVoices) {
+      voice = pool[0];
+      voice.pause();
+    } else {
+      voice = new Audio(src);
+      voice.preload = 'auto';
+      voice.loop = false;
+      pool.push(voice);
+    }
+  }
+  if (voice.src !== new URL(src, window.location.href).href) {
+    voice.src = src;
+    voice.load();
+  }
+  voice.loop = false;
+  voice.playbackRate = playbackRate;
+  voice.volume = volume;
+  voice.currentTime = 0;
+  const maybePromise = voice.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {});
+  }
+};
+
 const applyAudioSource = (audio, src) => {
   const current = audio.getAttribute('data-attack-src') || '';
   if (current === src) {
@@ -3679,35 +3716,7 @@ preLobbyMusic.addEventListener('ended', () => {
 
 const startShootSound = () => {
   const currentSrc = shootSound.getAttribute('data-attack-src') || shootSound.src || defaultAttackSoundUrl;
-  const voice = new Audio(currentSrc);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.volume = shootSound.volume;
-
-  if (localAttackVoices.length >= maxLocalAttackVoices) {
-    const oldVoice = localAttackVoices.shift();
-    if (oldVoice) {
-      oldVoice.pause();
-      oldVoice.currentTime = 0;
-    }
-  }
-  localAttackVoices.push(voice);
-
-  const cleanup = () => {
-    const idx = localAttackVoices.indexOf(voice);
-    if (idx >= 0) {
-      localAttackVoices.splice(idx, 1);
-    }
-  };
-  voice.addEventListener('ended', cleanup, { once: true });
-  voice.addEventListener('pause', cleanup, { once: true });
-
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {
-      cleanup();
-    });
-  }
+  playPooledOneShotAudio(currentSrc, shootSound.volume, maxLocalAttackVoices, 1);
 };
 
 const playHitSound = async (characterId, headshot = false) => {
@@ -3715,31 +3724,8 @@ const playHitSound = async (characterId, headshot = false) => {
   if (!src) {
     return;
   }
-  const voice = new Audio(src);
-  voice.preload = 'auto';
-  voice.loop = false;
   const baseVol = 0.33 * settings.masterVolume * settings.sfxVolume;
-  voice.volume = Math.max(0.02, Math.min(1, headshot ? baseVol * 1.2 : baseVol));
-  if (localHitVoices.length >= maxLocalHitVoices) {
-    const oldVoice = localHitVoices.shift();
-    if (oldVoice) {
-      oldVoice.pause();
-      oldVoice.currentTime = 0;
-    }
-  }
-  localHitVoices.push(voice);
-  const cleanup = () => {
-    const idx = localHitVoices.indexOf(voice);
-    if (idx >= 0) {
-      localHitVoices.splice(idx, 1);
-    }
-  };
-  voice.addEventListener('ended', cleanup, { once: true });
-  voice.addEventListener('pause', cleanup, { once: true });
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => cleanup());
-  }
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, headshot ? baseVol * 1.2 : baseVol)), maxLocalHitVoices, 1);
 };
 
 const playHeadshotSound = async () => {
@@ -3747,14 +3733,7 @@ const playHeadshotSound = async () => {
   if (!src) {
     return;
   }
-  const voice = new Audio(src);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.volume = Math.max(0.02, Math.min(1, 0.52 * settings.masterVolume * settings.sfxVolume));
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {});
-  }
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.52 * settings.masterVolume * settings.sfxVolume)), 6, 1);
 };
 
 const playKillConfirmSound = async () => {
@@ -3762,14 +3741,7 @@ const playKillConfirmSound = async () => {
   if (!src) {
     return;
   }
-  const voice = new Audio(src);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.volume = Math.max(0.02, Math.min(1, 0.55 * settings.masterVolume * settings.sfxVolume));
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {});
-  }
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.55 * settings.masterVolume * settings.sfxVolume)), 6, 1);
 };
 
 const playQuadDamageSound = async () => {
@@ -3777,14 +3749,7 @@ const playQuadDamageSound = async () => {
   if (!src) {
     return;
   }
-  const voice = new Audio(src);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.volume = Math.max(0.02, Math.min(1, 0.62 * settings.masterVolume * settings.sfxVolume));
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {});
-  }
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.62 * settings.masterVolume * settings.sfxVolume)), 6, 1);
 };
 
 const stopShootSound = () => {
@@ -3823,35 +3788,12 @@ const registerRemoteShootSound = async (origin, characterId = '') => {
     src = await resolveCharacterAttackSoundUrl(characterId);
   }
 
-  const voice = new Audio(src || defaultAttackSoundUrl);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.volume = volume * settings.masterVolume * settings.sfxVolume;
-
-  if (remoteAttackVoices.length >= maxRemoteAttackVoices) {
-    const oldVoice = remoteAttackVoices.shift();
-    if (oldVoice) {
-      oldVoice.pause();
-      oldVoice.currentTime = 0;
-    }
-  }
-  remoteAttackVoices.push(voice);
-
-  const cleanup = () => {
-    const idx = remoteAttackVoices.indexOf(voice);
-    if (idx >= 0) {
-      remoteAttackVoices.splice(idx, 1);
-    }
-  };
-  voice.addEventListener('ended', cleanup, { once: true });
-  voice.addEventListener('pause', cleanup, { once: true });
-
-  const maybePromise = voice.play();
-  if (maybePromise && typeof maybePromise.catch === 'function') {
-    maybePromise.catch(() => {
-      cleanup();
-    });
-  }
+  playPooledOneShotAudio(
+    src || defaultAttackSoundUrl,
+    volume * settings.masterVolume * settings.sfxVolume,
+    maxRemoteAttackVoices,
+    1,
+  );
 };
 
 const updateRemoteShootSound = () => {};
@@ -3877,20 +3819,7 @@ const playSpecialMissileSound = (src, startPos, ownerId) => {
     if (remoteVol <= 0.02) return;
     vol = remoteVol * settings.masterVolume * settings.sfxVolume;
   }
-  const voice = new Audio(src);
-  voice.preload = 'auto';
-  voice.loop = false;
-  voice.playbackRate = SPECIAL_MISSILE_PLAYBACK_RATE;
-  voice.volume = vol;
-  specialMissileVoices.push(voice);
-  const cleanup = () => {
-    const idx = specialMissileVoices.indexOf(voice);
-    if (idx >= 0) specialMissileVoices.splice(idx, 1);
-  };
-  voice.addEventListener('ended', cleanup, { once: true });
-  voice.addEventListener('pause', cleanup, { once: true });
-  const p = voice.play();
-  if (p && typeof p.catch === 'function') p.catch(() => cleanup());
+  playPooledOneShotAudio(src, vol, maxSpecialMissileVoices, SPECIAL_MISSILE_PLAYBACK_RATE);
 };
 
 
@@ -3916,6 +3845,7 @@ const getTracerMaterial = (color) => {
 };
 const impactGeometry = new THREE.SphereGeometry(0.11, 8, 8);
 const impactMaterial = new THREE.MeshBasicMaterial({ color: 0x7dff92, transparent: true, opacity: 0.9 });
+const impactMaterialCache = new Map();
 const hitWaveGeometry = new THREE.SphereGeometry(0.22, 14, 12);
 const hitWaveMaterial = new THREE.MeshBasicMaterial({
   color: 0x9fffb6,
@@ -3940,6 +3870,7 @@ const activePumoriOrbitSpecials = [];
 const maxSilentSpecialVisualRays = 48;
 const pickupSparkGeometry = new THREE.SphereGeometry(0.045, 6, 6);
 const activePickupSparks = [];
+const pooledPickupSparks = [];
 const maxActiveTracers = 420;
 const maxActiveImpacts = 680;
 const maxActivePickupSparks = 980;
@@ -3953,6 +3884,9 @@ const tmpSegDir = new THREE.Vector3();
 const tmpSegToCenter = new THREE.Vector3();
 const tmpClosestPoint = new THREE.Vector3();
 const tmpTravelVec = new THREE.Vector3();
+const tmpTravelVecB = new THREE.Vector3();
+const tmpTravelVecC = new THREE.Vector3();
+const tmpTravelVecD = new THREE.Vector3();
 const tmpLocalHead = new THREE.Vector3();
 const tmpLocalBody = new THREE.Vector3();
 const tmpCapsuleA = new THREE.Vector3();
@@ -3962,6 +3896,16 @@ const tmpCapsuleD = new THREE.Vector3();
 const tracerUpAxis = new THREE.Vector3(0, 1, 0);
 const tmpWorldQuatA = new THREE.Quaternion();
 const tmpWorldQuatB = new THREE.Quaternion();
+
+const getImpactMaterial = (color) => {
+  const key = color instanceof THREE.Color ? `c:${color.getHexString()}` : `n:${String(color)}`;
+  if (!impactMaterialCache.has(key)) {
+    const mat = impactMaterial.clone();
+    mat.color.set(color);
+    impactMaterialCache.set(key, mat);
+  }
+  return impactMaterialCache.get(key);
+};
 
 const getVfxLoadSheddingFactor = () => {
   let factor = 1;
@@ -6947,8 +6891,7 @@ const createImpact = (position, color = 0x7dff92) => {
   if (activeImpacts.length >= getDynamicMaxImpacts()) {
     return null;
   }
-  const impact = new THREE.Mesh(impactGeometry, impactMaterial.clone());
-  impact.material.color = new THREE.Color(color);
+  const impact = new THREE.Mesh(impactGeometry, getImpactMaterial(color));
   impact.position.copy(position);
   impact.userData.life = 0.26;
   scene.add(impact);
@@ -10527,6 +10470,42 @@ const clampPendingHealthRegenToMissing = () => {
 const pickupFloatSpeed = 2.2;
 const pickupFloatAmplitude = 0.1;
 
+const acquirePickupSpark = (color) => {
+  const spark = pooledPickupSparks.pop() || {
+    mesh: new THREE.Mesh(
+      pickupSparkGeometry,
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.6,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    ),
+    velocity: new THREE.Vector3(),
+    life: 0,
+    initialLife: 0,
+  };
+  spark.mesh.material.color.set(color);
+  spark.mesh.visible = true;
+  spark.mesh.scale.setScalar(1);
+  return spark;
+};
+
+const recyclePickupSpark = (spark) => {
+  if (!spark?.mesh) {
+    return;
+  }
+  scene.remove(spark.mesh);
+  spark.mesh.visible = false;
+  spark.life = 0;
+  spark.initialLife = 0;
+  spark.velocity.set(0, 0, 0);
+  if (pooledPickupSparks.length < maxActivePickupSparks) {
+    pooledPickupSparks.push(spark);
+  }
+};
+
 const spawnPickupSpark = (pickup, color) => {
   if (!pickup?.mesh || !pickup.active || !pickup.mesh.visible) {
     return;
@@ -10535,40 +10514,28 @@ const spawnPickupSpark = (pickup, color) => {
   if (activePickupSparks.length >= maxActivePickupSparks) {
     const oldSpark = activePickupSparks.shift();
     if (oldSpark) {
-      scene.remove(oldSpark.mesh);
-      oldSpark.mesh.geometry.dispose();
-      oldSpark.mesh.material.dispose();
+      recyclePickupSpark(oldSpark);
     }
   }
-
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.55 + (Math.random() * 0.25),
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-  const spark = new THREE.Mesh(pickupSparkGeometry, material);
+  const spark = acquirePickupSpark(color);
+  spark.mesh.material.opacity = 0.55 + (Math.random() * 0.25);
   const angle = Math.random() * Math.PI * 2;
   const radius = 0.11 + (Math.random() * 0.28);
-  spark.position.set(
+  spark.mesh.position.set(
     pickup.mesh.position.x + Math.cos(angle) * radius,
     pickup.mesh.position.y + 0.08 + (Math.random() * 0.32),
     pickup.mesh.position.z + Math.sin(angle) * radius,
   );
-  scene.add(spark);
+  scene.add(spark.mesh);
 
-  const life = 0.95 + (Math.random() * 0.85);
-  activePickupSparks.push({
-    mesh: spark,
-    life,
-    initialLife: life,
-    velocity: new THREE.Vector3(
-      (Math.random() - 0.5) * 0.16,
-      1.6 + (Math.random() * 1.25),
-      (Math.random() - 0.5) * 0.16,
-    ),
-  });
+  spark.life = 0.95 + (Math.random() * 0.85);
+  spark.initialLife = spark.life;
+  spark.velocity.set(
+    (Math.random() - 0.5) * 0.16,
+    1.6 + (Math.random() * 1.25),
+    (Math.random() - 0.5) * 0.16,
+  );
+  activePickupSparks.push(spark);
 };
 
 const spawnQuadDamageAuraSpark = (position, moving = false) => {
@@ -10578,38 +10545,27 @@ const spawnQuadDamageAuraSpark = (position, moving = false) => {
   if (activePickupSparks.length >= maxActivePickupSparks) {
     const oldSpark = activePickupSparks.shift();
     if (oldSpark) {
-      scene.remove(oldSpark.mesh);
-      oldSpark.mesh.geometry.dispose();
-      oldSpark.mesh.material.dispose();
+      recyclePickupSpark(oldSpark);
     }
   }
-  const material = new THREE.MeshBasicMaterial({
-    color: Math.random() > 0.45 ? 0x67f6ff : 0x9be7ff,
-    transparent: true,
-    opacity: 0.5 + (Math.random() * 0.18),
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-  const spark = new THREE.Mesh(pickupSparkGeometry, material);
+  const spark = acquirePickupSpark(Math.random() > 0.45 ? 0x67f6ff : 0x9be7ff);
+  spark.mesh.material.opacity = 0.5 + (Math.random() * 0.18);
   const angle = Math.random() * Math.PI * 2;
   const radius = moving ? 0.3 + (Math.random() * 0.4) : 0.16 + (Math.random() * 0.22);
-  spark.position.set(
+  spark.mesh.position.set(
     position.x + Math.cos(angle) * radius,
     position.y + 0.5 + (Math.random() * 1.0),
     position.z + Math.sin(angle) * radius,
   );
-  scene.add(spark);
-  const life = moving ? 0.75 + (Math.random() * 0.55) : 0.45 + (Math.random() * 0.3);
-  activePickupSparks.push({
-    mesh: spark,
-    life,
-    initialLife: life,
-    velocity: new THREE.Vector3(
-      (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
-      1.0 + (Math.random() * 0.75),
-      (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
-    ),
-  });
+  scene.add(spark.mesh);
+  spark.life = moving ? 0.75 + (Math.random() * 0.55) : 0.45 + (Math.random() * 0.3);
+  spark.initialLife = spark.life;
+  spark.velocity.set(
+    (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
+    1.0 + (Math.random() * 0.75),
+    (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
+  );
+  activePickupSparks.push(spark);
 };
 
 function createQuadDamageFallbackMesh() {
@@ -10900,7 +10856,7 @@ function updateQuadDamagePickup(delta) {
     const startAtMs = quadDamagePickup.landAtMs - 3000;
     const progress = Math.max(0, Math.min(1, (nowMs - startAtMs) / 3000));
     const eased = progress * progress;
-    const previousPosition = quadDamagePickup.mesh.position.clone();
+    tmpTravelVecB.copy(quadDamagePickup.mesh.position);
     const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
     const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
     if (core) {
@@ -10916,19 +10872,19 @@ function updateQuadDamagePickup(delta) {
       THREE.MathUtils.lerp(quadDamagePickup.startPosition.z, quadDamagePickup.z, eased),
     );
     quadDamagePickup.mesh.rotation.y += delta * 2.4;
-    const currentPosition = quadDamagePickup.mesh.position.clone();
+    const currentPosition = quadDamagePickup.mesh.position;
     if (!state.showCollisionOnly) {
-      tmpTravelVec.subVectors(currentPosition, previousPosition);
+      tmpTravelVec.subVectors(currentPosition, tmpTravelVecB);
       if (tmpTravelVec.lengthSq() > 0.0001) {
-        const tailDir = tmpTravelVec.clone().normalize();
-        const longTailStart = currentPosition.clone().sub(tailDir.clone().multiplyScalar(18));
-        const shortTailStart = currentPosition.clone().sub(tailDir.clone().multiplyScalar(9));
-        createTracer(longTailStart, currentPosition, 0x67f6ff, {
+        tmpTravelVecC.copy(tmpTravelVec).normalize();
+        tmpTravelVecD.copy(currentPosition).addScaledVector(tmpTravelVecC, -18);
+        createTracer(tmpTravelVecD, currentPosition, 0x67f6ff, {
           radiusScale: 4.4,
           life: 0.9,
           opacity: 0.72,
         });
-        createTracer(shortTailStart, currentPosition, 0xffde84, {
+        tmpTravelVecD.copy(currentPosition).addScaledVector(tmpTravelVecC, -9);
+        createTracer(tmpTravelVecD, currentPosition, 0xffde84, {
           radiusScale: 2.5,
           life: 0.72,
           opacity: 0.46,
@@ -10955,12 +10911,13 @@ function updateQuadDamagePickup(delta) {
   }
   quadDamagePickup.mesh.visible = true;
   quadDamagePickup.mesh.rotation.y += delta * 1.6;
+  const nowSeconds = nowPerf / 1000;
   const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
   const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
   const beamOuter = quadDamagePickup.mesh.getObjectByName('quad_damage_beam_outer');
   const beamInner = quadDamagePickup.mesh.getObjectByName('quad_damage_beam_inner');
   if (core) {
-    const corePulse = 1 + (Math.sin((nowPerf / 1000) * 3.8 + quadDamagePickup.phase) * 0.12);
+    const corePulse = 1 + (Math.sin((nowSeconds * 3.8) + quadDamagePickup.phase) * 0.12);
     core.scale.setScalar(corePulse);
   }
   if (halo) {
@@ -10969,20 +10926,20 @@ function updateQuadDamagePickup(delta) {
   if (beamOuter) {
     beamOuter.visible = true;
     beamOuter.rotation.y += delta * 0.12;
-    beamOuter.material.opacity = 0.16 + (((Math.sin((nowPerf / 1000) * 1.3) + 1) * 0.5) * 0.08);
-    const beamPulse = 1 + (Math.sin((nowPerf / 1000) * 2.1 + quadDamagePickup.phase) * 0.06);
+    beamOuter.material.opacity = 0.16 + (((Math.sin(nowSeconds * 1.3) + 1) * 0.5) * 0.08);
+    const beamPulse = 1 + (Math.sin((nowSeconds * 2.1) + quadDamagePickup.phase) * 0.06);
     beamOuter.scale.set(beamPulse, 1, beamPulse);
   }
   if (beamInner) {
     beamInner.visible = true;
     beamInner.rotation.y -= delta * 0.18;
-    beamInner.material.opacity = 0.24 + (((Math.sin((nowPerf / 1000) * 1.8) + 1) * 0.5) * 0.12);
-    const innerPulse = 1 + (Math.sin((nowPerf / 1000) * 2.8 + quadDamagePickup.phase + 0.8) * 0.08);
+    beamInner.material.opacity = 0.24 + (((Math.sin(nowSeconds * 1.8) + 1) * 0.5) * 0.12);
+    const innerPulse = 1 + (Math.sin((nowSeconds * 2.8) + quadDamagePickup.phase + 0.8) * 0.08);
     beamInner.scale.set(innerPulse, 1, innerPulse);
   }
   quadDamagePickup.mesh.position.set(
     quadDamagePickup.x,
-    quadDamagePickup.baseY + (Math.sin((nowPerf / 1000) * quadDamagePickupFloatSpeed + quadDamagePickup.phase) * quadDamagePickupFloatAmplitude),
+    quadDamagePickup.baseY + (Math.sin((nowSeconds * quadDamagePickupFloatSpeed) + quadDamagePickup.phase) * quadDamagePickupFloatAmplitude),
     quadDamagePickup.z,
   );
   if (Math.random() < delta * 4.6) {
@@ -11022,10 +10979,8 @@ const updatePickupSparks = (delta) => {
     spark.mesh.material.opacity = opacityFactor * 0.75;
 
     if (spark.life <= 0) {
-      scene.remove(spark.mesh);
-      spark.mesh.geometry.dispose();
-      spark.mesh.material.dispose();
       activePickupSparks.splice(i, 1);
+      recyclePickupSpark(spark);
     }
   }
 };
@@ -11282,14 +11237,16 @@ const updateRain = (delta) => {
     return;
   }
 
-  const wind = 0.15 + (Math.sin(performance.now() * 0.0024) * 0.2);
+  const now = performance.now();
+  const wind = 0.15 + (Math.sin(now * 0.0024) * 0.2);
+  const swayBase = now * 0.0015;
   for (let i = 0; i < rainCount; i += 1) {
     const xIndex = i * 3;
     const yIndex = i * 3 + 1;
     const zIndex = i * 3 + 2;
     rainPos[yIndex] -= rainVel[i] * delta;
     rainPos[xIndex] += wind * delta * rainVel[i] * 0.35;
-    rainPos[zIndex] += Math.sin((performance.now() * 0.0015) + i) * 0.015;
+    rainPos[zIndex] += Math.sin(swayBase + i) * 0.015;
     if (rainPos[yIndex] < 0.2) {
       rainPos[yIndex] = Math.random() * 120 + 25;
       rainPos[xIndex] = camera.position.x + (Math.random() - 0.5) * 220;
@@ -11304,13 +11261,16 @@ const updateSnow = (delta) => {
     return;
   }
 
+  const now = performance.now();
+  const swayXBase = now * 0.0009;
+  const swayZBase = now * 0.0007;
   for (let i = 0; i < snowCount; i += 1) {
     const xIndex = i * 3;
     const yIndex = xIndex + 1;
     const zIndex = xIndex + 2;
     snowPos[yIndex] -= snowVel[i] * delta;
-    snowPos[xIndex] += Math.sin((performance.now() * 0.0009) + i) * 0.02;
-    snowPos[zIndex] += Math.cos((performance.now() * 0.0007) + i) * 0.02;
+    snowPos[xIndex] += Math.sin(swayXBase + i) * 0.02;
+    snowPos[zIndex] += Math.cos(swayZBase + i) * 0.02;
     if (snowPos[yIndex] < 0.2) {
       snowPos[yIndex] = Math.random() * 120 + 25;
       snowPos[xIndex] = camera.position.x + (Math.random() - 0.5) * 180;
@@ -11595,7 +11555,6 @@ const updateEffects = (delta) => {
     impact.material.opacity = Math.max(0, impact.userData.life * 5);
     if (impact.userData.life <= 0) {
       scene.remove(impact);
-      impact.material.dispose();
       activeImpacts.splice(i, 1);
     }
   }
@@ -11725,7 +11684,7 @@ const updateHammerProjectiles = (delta) => {
     const projectile = activeHammerProjectiles[i];
     projectile.prevPos.copy(projectile.pos);
     projectile.velocity.y -= hammerGravity * delta;
-    projectile.pos.add(projectile.velocity.clone().multiplyScalar(delta));
+    projectile.pos.addScaledVector(projectile.velocity, delta);
     projectile.mesh.position.copy(projectile.pos);
     projectile.mesh.visible = !state.showCollisionOnly;
     ensureProjectileCollisionDebug(projectile, 0.4, 0xffeaa5);
