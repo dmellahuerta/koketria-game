@@ -10794,7 +10794,7 @@ function ensureQuadDamagePickupVisual(data = {}) {
       mesh,
       x,
       z,
-      baseY: 1.05,
+      baseY: 0.84,
       startPosition: new THREE.Vector3(x, quadDamagePickupFallStartY, z),
       approachDirection: new THREE.Vector2(0, -1),
       phase: Math.random() * Math.PI * 2,
@@ -10808,7 +10808,7 @@ function ensureQuadDamagePickupVisual(data = {}) {
   }
   quadDamagePickup.x = x;
   quadDamagePickup.z = z;
-  quadDamagePickup.baseY = 1.05;
+  quadDamagePickup.baseY = 0.84;
   const approach = createQuadDamageApproach(x, z);
   quadDamagePickup.startPosition.copy(approach.startPosition);
   quadDamagePickup.approachDirection.copy(approach.direction);
