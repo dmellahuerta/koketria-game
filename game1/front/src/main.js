@@ -6626,7 +6626,7 @@ const createSacredHammerVisual = (start, end, options = {}) => {
     mesh: hammer,
     prevPos: start.clone(),
     pos: start.clone(),
-    velocity: dirNorm.clone().multiplyScalar(100).add(upAxis.clone().multiplyScalar(12.5)),
+    velocity: dirNorm.clone().multiplyScalar(80).add(upAxis.clone().multiplyScalar(12.5)),
     origin: start.clone(),
     right: rightAxis,
     up: upAxis,

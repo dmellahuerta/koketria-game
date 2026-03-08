@@ -5529,7 +5529,7 @@ fn projectile_speed_units_per_second(character: Option<&str>) -> f64 {
         "silentman" | "silenmant" => 240.0,
         "neoorphen" => 190.0,
         "pezunalunar" | "pezuanalunar" => 230.0,
-        "pumori" => 190.0,
+        "pumori" => 80.0,
         _ => 120.0,
     }
 }
