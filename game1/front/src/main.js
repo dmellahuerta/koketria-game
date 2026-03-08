@@ -6087,16 +6087,19 @@ const applyRemoteQuadDamageVisual = (entry, enabled) => {
     const source = Array.isArray(originalMaterial) ? originalMaterial[0] : originalMaterial;
     backups.push({ mesh: node, material: originalMaterial });
     node.material = new THREE.MeshPhysicalMaterial({
-      color: 0x00ffff,
-      emissive: 0x00d8ff,
-      emissiveIntensity: 0.7,
-      transmission: 0.6,
-      roughness: 0.1,
+      color: 0xbffcff,
+      emissive: 0x4ed8ff,
+      emissiveIntensity: 0.22,
+      transmission: 0.22,
+      roughness: 0.24,
       metalness: 0.2,
       transparent: true,
-      opacity: 0.88,
+      opacity: 0.96,
       map: source?.map || null,
       alphaMap: source?.alphaMap || null,
+      normalMap: source?.normalMap || null,
+      roughnessMap: source?.roughnessMap || null,
+      metalnessMap: source?.metalnessMap || null,
       skinning: Boolean(node.isSkinnedMesh),
       side: source?.side ?? THREE.FrontSide,
     });
@@ -10496,6 +10499,47 @@ const spawnPickupSpark = (pickup, color) => {
   });
 };
 
+const spawnQuadDamageAuraSpark = (position, moving = false) => {
+  if (!position) {
+    return;
+  }
+  if (activePickupSparks.length >= maxActivePickupSparks) {
+    const oldSpark = activePickupSparks.shift();
+    if (oldSpark) {
+      scene.remove(oldSpark.mesh);
+      oldSpark.mesh.geometry.dispose();
+      oldSpark.mesh.material.dispose();
+    }
+  }
+  const material = new THREE.MeshBasicMaterial({
+    color: Math.random() > 0.45 ? 0x67f6ff : 0x9be7ff,
+    transparent: true,
+    opacity: 0.5 + (Math.random() * 0.18),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const spark = new THREE.Mesh(pickupSparkGeometry, material);
+  const angle = Math.random() * Math.PI * 2;
+  const radius = moving ? 0.3 + (Math.random() * 0.4) : 0.16 + (Math.random() * 0.22);
+  spark.position.set(
+    position.x + Math.cos(angle) * radius,
+    position.y + 0.5 + (Math.random() * 1.0),
+    position.z + Math.sin(angle) * radius,
+  );
+  scene.add(spark);
+  const life = moving ? 0.75 + (Math.random() * 0.55) : 0.45 + (Math.random() * 0.3);
+  activePickupSparks.push({
+    mesh: spark,
+    life,
+    initialLife: life,
+    velocity: new THREE.Vector3(
+      (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
+      1.0 + (Math.random() * 0.75),
+      (Math.random() - 0.5) * (moving ? 0.42 : 0.18),
+    ),
+  });
+};
+
 function createQuadDamageFallbackMesh() {
   return new THREE.Mesh(
     new THREE.TorusKnotGeometry(0.24, 0.08, 96, 12),
@@ -10707,6 +10751,7 @@ function updateQuadDamagePickup(delta) {
     const startAtMs = quadDamagePickup.landAtMs - 3000;
     const progress = Math.max(0, Math.min(1, (nowMs - startAtMs) / 3000));
     const eased = progress * progress;
+    const previousPosition = quadDamagePickup.mesh.position.clone();
     const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
     const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
     if (core) {
@@ -10722,6 +10767,32 @@ function updateQuadDamagePickup(delta) {
       quadDamagePickup.z,
     );
     quadDamagePickup.mesh.rotation.y += delta * 2.4;
+    const currentPosition = quadDamagePickup.mesh.position.clone();
+    if (!state.showCollisionOnly) {
+      createTracer(
+        currentPosition.clone().add(new THREE.Vector3(0, 12, 0)),
+        currentPosition,
+        0x67f6ff,
+        { radiusScale: 4.2, life: 0.65, opacity: 0.72 },
+      );
+      createTracer(
+        currentPosition.clone().add(new THREE.Vector3(0, 22, 0)),
+        currentPosition.clone().add(new THREE.Vector3(0, 4, 0)),
+        0xffde84,
+        { radiusScale: 2.8, life: 0.95, opacity: 0.5 },
+      );
+      if (previousPosition.distanceToSquared(currentPosition) > 0.0001) {
+        createTracer(previousPosition, currentPosition, 0x9ef8ff, {
+          radiusScale: 3.2,
+          life: 0.72,
+          opacity: 0.62,
+        });
+      }
+      if (Math.random() < delta * 24) {
+        spawnQuadDamageAuraSpark(currentPosition, true);
+        spawnQuadDamageAuraSpark(currentPosition, true);
+      }
+    }
     if (!quadDamagePickup.announcedLanding && (progress >= 1 || nowMs >= quadDamagePickup.landAtMs)) {
       quadDamagePickup.incoming = false;
       quadDamagePickup.active = true;
@@ -10755,6 +10826,9 @@ function updateQuadDamagePickup(delta) {
   if (Math.random() < delta * 4.6) {
     spawnPickupSpark(quadDamagePickup, 0xffdc85);
     spawnPickupSpark(quadDamagePickup, 0x67f6ff);
+    if (Math.random() < 0.7) {
+      spawnQuadDamageAuraSpark(quadDamagePickup.mesh.position, false);
+    }
   }
   if (!canPlay() || isRespawning) {
     return;
@@ -11274,6 +11348,15 @@ const updateRemotePlayers = (delta) => {
     if (entry.teamOutline) {
       const distance = entry.group.position.distanceTo(getRenderCamera().position);
       entry.teamOutline.visible = !state.showCollisionOnly && shouldShowTeamMarkers() && !entry.isDead && distance <= 55;
+    }
+    if (!entry.isDead && remoteQuadDamagePlayers.has(entry.id)) {
+      const isMovingForAura = shouldMoveAnim || entry.smoothedMoveSpeed > 0.55;
+      if (Math.random() < delta * (isMovingForAura ? 10 : 4)) {
+        spawnQuadDamageAuraSpark(entry.group.position, isMovingForAura);
+        if (isMovingForAura && Math.random() < 0.55) {
+          spawnQuadDamageAuraSpark(entry.group.position, true);
+        }
+      }
     }
 
     if (entry.mixer) {
