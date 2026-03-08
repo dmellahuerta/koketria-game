@@ -2998,6 +2998,11 @@ const bootLobbyLoader = async () => {
     markWarning('audio: quad_damage');
   }
   tick('Audio quad damage cargado');
+  const quadDamageFireSrc = await resolveQuadDamageFireSoundUrl();
+  if (!quadDamageFireSrc || !(await preloadAudioSource(quadDamageFireSrc, 6000))) {
+    markWarning('audio: quad_damage_fire');
+  }
+  tick('Audio quad damage fire cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3220,6 +3225,15 @@ const quadDamageSoundCandidates = [
   '/sound_effecs/quad_damage.mp3',
 ];
 let quadDamageSoundUrl = '';
+const quadDamageFireSoundCandidates = [
+  '/sound_effects/quad_damage_hit.mp3',
+  '/sound_effects/quad_damage_hit.wav',
+  '/sound_effects/quad_damage_fire.wav',
+  '/sound_effecs/quad_damage_hit.mp3',
+  '/sound_effecs/quad_damage_hit.wav',
+  '/sound_effecs/quad_damage_fire.wav',
+];
+let quadDamageFireSoundUrl = '';
 let localAttackSoundCharacter = '';
 const pooledAudioVoices = new Map();
 const remoteShootMaxDistance = 140;
@@ -3630,6 +3644,21 @@ const resolveQuadDamageSoundUrl = async () => {
   return '';
 };
 
+const resolveQuadDamageFireSoundUrl = async () => {
+  if (quadDamageFireSoundUrl) {
+    return quadDamageFireSoundUrl;
+  }
+  for (let i = 0; i < quadDamageFireSoundCandidates.length; i += 1) {
+    const candidate = quadDamageFireSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      quadDamageFireSoundUrl = candidate;
+      return candidate;
+    }
+  }
+  return '';
+};
+
 const playPooledOneShotAudio = (src, volume, maxVoices = 8, playbackRate = 1) => {
   if (!src) {
     return;
@@ -3752,6 +3781,15 @@ const playQuadDamageSound = async () => {
   playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, 0.62 * settings.masterVolume * settings.sfxVolume)), 6, 1);
 };
 
+const playQuadDamageFireSound = async (volumeScale = 1) => {
+  const src = await resolveQuadDamageFireSoundUrl();
+  if (!src) {
+    return;
+  }
+  const baseVolume = 0.34 * settings.masterVolume * settings.sfxVolume * Math.max(0, volumeScale);
+  playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, baseVolume)), 12, 1);
+};
+
 const stopShootSound = () => {
   shootSoundActive = false;
 };
@@ -3794,6 +3832,14 @@ const registerRemoteShootSound = async (origin, characterId = '') => {
     maxRemoteAttackVoices,
     1,
   );
+};
+
+const registerRemoteQuadDamageShootSound = async (origin) => {
+  const volume = getRemoteShootVolume(origin);
+  if (volume <= 0.02) {
+    return;
+  }
+  await playQuadDamageFireSound(volume / 0.2);
 };
 
 const updateRemoteShootSound = () => {};
@@ -7644,6 +7690,9 @@ const connectWebSocket = () => {
         }
       }
       registerRemoteShootSound(origin, shooterCharacter);
+      if (shot.quadDamage) {
+        void registerRemoteQuadDamageShootSound(origin);
+      }
       return;
     }
 
@@ -10308,6 +10357,9 @@ const shoot = () => {
   const shotId = localShotSeq;
   pendingShotAcks.set(shotId, performance.now());
   startShootSound();
+  if (Number(selfQuadDamageUntilMs || 0) > getEstimatedServerNowMs()) {
+    void playQuadDamageFireSound();
+  }
 
   const shootPayload = {
     type: 'player_shoot',

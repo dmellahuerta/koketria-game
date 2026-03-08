@@ -1567,7 +1567,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             let client_shot_ts =
                 sanitize_client_shot_ts(now, message.get("shotTs").and_then(Value::as_i64));
             let client_shot_id = message.get("shotId").and_then(Value::as_u64);
-            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>)> = None;
+            let mut prepared_shot: Option<(Vec3, Vec3, Option<String>, f64, Option<i64>, bool)> = None;
             {
                 let Some(shooter) = inner.clients.get_mut(client_id) else {
                     return;
@@ -1650,6 +1650,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         shooter.character.clone(),
                         shooter.latency_ms,
                         client_shot_ts,
+                        shooter.combat.quad_damage_until_ms > now,
                     ));
                 }
             }
@@ -1659,7 +1660,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
             if shot_blocked {
                 return;
             }
-            let Some((origin, direction, character_for_shot, shooter_latency_ms, client_shot_ts)) = prepared_shot
+            let Some((origin, direction, character_for_shot, shooter_latency_ms, client_shot_ts, quad_damage)) = prepared_shot
             else {
                 return;
             };
@@ -1706,6 +1707,7 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                     "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
                     "direction": { "x": direction.x, "y": direction.y, "z": direction.z },
                     "distance": effective_distance,
+                    "quadDamage": quad_damage,
                     "ts": now
                   }
                 }),
@@ -3572,7 +3574,7 @@ fn bot_apply_authoritative_shot(
     bot_id: &str,
 ) {
     let now = now_ms();
-    let (origin, fallback_direction, character_for_shot) = {
+    let (origin, fallback_direction, character_for_shot, quad_damage) = {
         let Some(entry) = inner.clients.get_mut(bot_id) else {
             return;
         };
@@ -3596,7 +3598,12 @@ fn bot_apply_authoritative_shot(
                 y: 0.0,
                 z: entry.state.rotation.yaw.sin(),
             });
-        (origin, direction, entry.character.clone())
+        (
+            origin,
+            direction,
+            entry.character.clone(),
+            entry.combat.quad_damage_until_ms > now,
+        )
     };
     let direction = bot_pick_target_direction(inner, room_id, bot_id, &origin, &fallback_direction);
 
@@ -3624,6 +3631,7 @@ fn bot_apply_authoritative_shot(
             "origin": { "x": origin.x, "y": origin.y, "z": origin.z },
             "direction": { "x": direction.x, "y": direction.y, "z": direction.z },
             "distance": effective_distance,
+            "quadDamage": quad_damage,
             "ts": now
           }
         }),
