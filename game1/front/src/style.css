@@ -1466,6 +1466,8 @@ button:disabled {
 
 #damageOverlay {
   --bleed-inner: 20%;
+  --damage-flash: 0;
+  --damage-vignette: 0.75;
   position: fixed;
   inset: 0;
   z-index: 24;
@@ -1473,10 +1475,11 @@ button:disabled {
   opacity: 0;
   transition: opacity 70ms linear;
   background:
-    radial-gradient(circle at center, rgba(130, 0, 0, 0) var(--bleed-inner), rgba(130, 0, 0, 0.26) 78%, rgba(110, 0, 0, 0.75) 100%),
-    radial-gradient(circle at 20% 18%, rgba(180, 0, 0, 0.25), rgba(180, 0, 0, 0) 46%),
-    radial-gradient(circle at 82% 30%, rgba(170, 0, 0, 0.22), rgba(170, 0, 0, 0) 44%),
-    radial-gradient(circle at 40% 84%, rgba(150, 0, 0, 0.2), rgba(150, 0, 0, 0) 42%);
+    radial-gradient(circle at center, rgba(255, 70, 70, calc(var(--damage-flash) * 0.48)) 0%, rgba(255, 40, 40, calc(var(--damage-flash) * 0.22)) 18%, rgba(255, 0, 0, 0) 42%),
+    radial-gradient(circle at center, rgba(130, 0, 0, 0) var(--bleed-inner), rgba(145, 0, 0, calc(var(--damage-vignette) * 0.38)) 78%, rgba(110, 0, 0, var(--damage-vignette)) 100%),
+    radial-gradient(circle at 20% 18%, rgba(200, 0, 0, calc(var(--damage-flash) * 0.42)), rgba(180, 0, 0, 0) 46%),
+    radial-gradient(circle at 82% 30%, rgba(185, 0, 0, calc(var(--damage-flash) * 0.36)), rgba(170, 0, 0, 0) 44%),
+    radial-gradient(circle at 40% 84%, rgba(170, 0, 0, calc(var(--damage-flash) * 0.32)), rgba(150, 0, 0, 0) 42%);
 }
 
 .quad-damage-overlay {

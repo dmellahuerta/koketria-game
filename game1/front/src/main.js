@@ -5419,6 +5419,8 @@ const updateBleedEffect = (delta = 0) => {
   const opacity = Math.max(0, Math.min(0.92, bleedIntensity + pulse + bleedHitFlash));
   damageOverlay.style.opacity = opacity.toFixed(3);
   damageOverlay.style.setProperty('--bleed-inner', `${20 + lowHealthFactor * 24}%`);
+  damageOverlay.style.setProperty('--damage-flash', String(Math.max(0, Math.min(1, bleedHitFlash * 2.1))));
+  damageOverlay.style.setProperty('--damage-vignette', String((0.36 + (lowHealthFactor * 0.44) + (bleedHitFlash * 0.65)).toFixed(3)));
 };
 
 const triggerHitConfirm = (headshot = false) => {
@@ -8127,7 +8129,7 @@ const connectWebSocket = () => {
         shield = Math.max(0, Math.min(maxShield, Math.round(nextShield)));
       }
       clampPendingHealthRegenToMissing();
-      bleedHitFlash = Math.min(0.45, bleedHitFlash + (isHeadshot ? 0.35 : 0.2));
+      bleedHitFlash = Math.min(0.6, bleedHitFlash + (isHeadshot ? 0.48 : 0.28));
       triggerDamageIndicator(payload.data?.fromPlayerId);
       if (health < prevHealth || shield < prevShield) {
         void playPainSoundForHealth(health);
