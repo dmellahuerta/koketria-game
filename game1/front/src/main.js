@@ -10574,12 +10574,39 @@ function ensureQuadDamagePickupVisual(data = {}) {
   }
   if (!quadDamagePickup?.mesh) {
     const mesh = createPickupVisualGroup('quad_damage', createQuadDamageFallbackMesh);
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.34, 18, 18),
+      new THREE.MeshBasicMaterial({
+        color: 0x67f6ff,
+        transparent: true,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    core.name = 'quad_damage_core';
+    core.position.y = 0.42;
+    mesh.add(core);
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.52, 0.06, 12, 32),
+      new THREE.MeshBasicMaterial({
+        color: 0xffde84,
+        transparent: true,
+        opacity: 0.88,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    halo.name = 'quad_damage_halo';
+    halo.rotation.x = Math.PI / 2;
+    halo.position.y = 0.24;
+    mesh.add(halo);
     scene.add(mesh);
     quadDamagePickup = {
       mesh,
       x,
       z,
-      baseY: 0.68,
+      baseY: 1.05,
       phase: Math.random() * Math.PI * 2,
       active: false,
       incoming: true,
@@ -10591,7 +10618,7 @@ function ensureQuadDamagePickupVisual(data = {}) {
   }
   quadDamagePickup.x = x;
   quadDamagePickup.z = z;
-  quadDamagePickup.baseY = 0.68;
+  quadDamagePickup.baseY = 1.05;
   quadDamagePickup.incoming = true;
   quadDamagePickup.active = false;
   quadDamagePickup.landed = false;
@@ -10680,13 +10707,22 @@ function updateQuadDamagePickup(delta) {
     const startAtMs = quadDamagePickup.landAtMs - 3000;
     const progress = Math.max(0, Math.min(1, (nowMs - startAtMs) / 3000));
     const eased = progress * progress;
+    const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
+    const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
+    if (core) {
+      core.scale.setScalar(1.15 + ((1 - progress) * 0.65));
+    }
+    if (halo) {
+      halo.rotation.z += delta * 2.8;
+      halo.scale.setScalar(1.05 + ((1 - progress) * 0.35));
+    }
     quadDamagePickup.mesh.position.set(
       quadDamagePickup.x,
       quadDamagePickupFallStartY + ((quadDamagePickup.baseY - quadDamagePickupFallStartY) * eased),
       quadDamagePickup.z,
     );
     quadDamagePickup.mesh.rotation.y += delta * 2.4;
-    if (!quadDamagePickup.announcedLanding && nowMs >= quadDamagePickup.landAtMs) {
+    if (!quadDamagePickup.announcedLanding && (progress >= 1 || nowMs >= quadDamagePickup.landAtMs)) {
       quadDamagePickup.incoming = false;
       quadDamagePickup.active = true;
       quadDamagePickup.landed = true;
@@ -10702,6 +10738,15 @@ function updateQuadDamagePickup(delta) {
   }
   quadDamagePickup.mesh.visible = true;
   quadDamagePickup.mesh.rotation.y += delta * 1.6;
+  const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
+  const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
+  if (core) {
+    const corePulse = 1 + (Math.sin((nowPerf / 1000) * 3.8 + quadDamagePickup.phase) * 0.12);
+    core.scale.setScalar(corePulse);
+  }
+  if (halo) {
+    halo.rotation.z += delta * 1.8;
+  }
   quadDamagePickup.mesh.position.set(
     quadDamagePickup.x,
     quadDamagePickup.baseY + (Math.sin((nowPerf / 1000) * quadDamagePickupFloatSpeed + quadDamagePickup.phase) * quadDamagePickupFloatAmplitude),
