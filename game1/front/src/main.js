@@ -3003,6 +3003,11 @@ const bootLobbyLoader = async () => {
     markWarning('audio: quad_damage_fire');
   }
   tick('Audio quad damage fire cargado');
+  const quadLoopSrc = await resolveQuadLoopSoundUrl();
+  if (!quadLoopSrc || !(await preloadAudioSource(quadLoopSrc, 6000))) {
+    markWarning('audio: quad_loop');
+  }
+  tick('Audio quad loop cargado');
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3194,10 +3199,15 @@ const battleMusic = new Audio(getBattleThemeTrackPath('battle1'));
 battleMusic.preload = 'auto';
 battleMusic.loop = true;
 battleMusic.volume = 0.38;
+const quadLoopSound = new Audio('/sound_effects/quad.wav');
+quadLoopSound.preload = 'auto';
+quadLoopSound.loop = true;
+quadLoopSound.volume = 0.24;
 let audioUnlocked = false;
 let preLobbyMusicActive = false;
 let lobbyMusicActive = false;
 let battleMusicActive = false;
+let quadLoopSoundActive = false;
 let waitForPreLobbyToEndForLobby = false;
 let activeBattleThemeId = 'battle1';
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
@@ -3234,6 +3244,13 @@ const quadDamageFireSoundCandidates = [
   '/sound_effecs/quad_damage_fire.wav',
 ];
 let quadDamageFireSoundUrl = '';
+const quadLoopSoundCandidates = [
+  '/sound_effects/quad.wav',
+  '/sound_effects/quad.mp3',
+  '/sound_effecs/quad.wav',
+  '/sound_effecs/quad.mp3',
+];
+let quadLoopSoundUrl = '';
 let localAttackSoundCharacter = '';
 const pooledAudioVoices = new Map();
 const remoteShootMaxDistance = 140;
@@ -3406,6 +3423,7 @@ const applyGameSettings = () => {
   preLobbyMusic.volume = 0.28 * effectiveMaster * settings.musicVolume;
   lobbyMusic.volume = 0.34 * effectiveMaster * settings.musicVolume;
   battleMusic.volume = 0.38 * effectiveMaster * settings.musicVolume;
+  quadLoopSound.volume = 0.24 * effectiveMaster * settings.sfxVolume;
   camera.fov = settings.fov;
   camera.updateProjectionMatrix();
   thirdPersonCamera.fov = settings.fov;
@@ -3659,6 +3677,21 @@ const resolveQuadDamageFireSoundUrl = async () => {
   return '';
 };
 
+const resolveQuadLoopSoundUrl = async () => {
+  if (quadLoopSoundUrl) {
+    return quadLoopSoundUrl;
+  }
+  for (let i = 0; i < quadLoopSoundCandidates.length; i += 1) {
+    const candidate = quadLoopSoundCandidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      quadLoopSoundUrl = candidate;
+      return candidate;
+    }
+  }
+  return '';
+};
+
 const playPooledOneShotAudio = (src, volume, maxVoices = 8, playbackRate = 1) => {
   if (!src) {
     return;
@@ -3788,6 +3821,34 @@ const playQuadDamageFireSound = async (volumeScale = 1) => {
   }
   const baseVolume = 0.34 * settings.masterVolume * settings.sfxVolume * Math.max(0, volumeScale);
   playPooledOneShotAudio(src, Math.max(0.02, Math.min(1, baseVolume)), 12, 1);
+};
+
+const stopQuadLoopSound = () => {
+  if (!quadLoopSoundActive && quadLoopSound.paused) {
+    return;
+  }
+  quadLoopSound.pause();
+  quadLoopSound.currentTime = 0;
+  quadLoopSoundActive = false;
+};
+
+const startQuadLoopSound = async () => {
+  if (!audioUnlocked || quadLoopSoundActive) {
+    return;
+  }
+  const src = await resolveQuadLoopSoundUrl();
+  if (!src) {
+    return;
+  }
+  applyLoopAudioSource(quadLoopSound, src, 'data-quad-loop-src');
+  quadLoopSound.volume = 0.24 * settings.masterVolume * settings.sfxVolume;
+  quadLoopSoundActive = true;
+  const maybePromise = quadLoopSound.play();
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(() => {
+      quadLoopSoundActive = false;
+    });
+  }
 };
 
 const stopShootSound = () => {
@@ -5435,6 +5496,7 @@ const resetCombatStats = () => {
   lastRespawnRequestAt = 0;
   localSpawnProtectedUntilMs = 0;
   selfQuadDamageUntilMs = 0;
+  stopQuadLoopSound();
   quadDamageLandingShakeUntil = 0;
   quadDamageLandingShakeStrength = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
@@ -10912,6 +10974,11 @@ function applyQuadDamageStateSnapshot(quadState) {
 function updateQuadDamageHud() {
   const remainingMs = Math.max(0, Number(selfQuadDamageUntilMs || 0) - getEstimatedServerNowMs());
   const active = remainingMs > 0;
+  if (active) {
+    void startQuadLoopSound();
+  } else {
+    stopQuadLoopSound();
+  }
   if (quadDamageHud) {
     quadDamageHud.classList.toggle('hidden', !active);
   }
