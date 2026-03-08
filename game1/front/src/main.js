@@ -10015,7 +10015,7 @@ window.addEventListener('keydown', (event) => {
     devCollectNearestRequestKind = 'mana';
     return;
   }
-  if (import.meta.env.DEV && event.code === 'Digit1' && state.joinedRoom) {
+  if (import.meta.env.DEV && event.code === 'F1' && state.joinedRoom) {
     event.preventDefault();
     sendWs({ type: 'dev_trigger_quad_damage' });
     return;
