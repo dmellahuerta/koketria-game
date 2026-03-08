@@ -4323,6 +4323,7 @@ const quadDamagePickupFallStartY = 80;
 const quadDamagePickupFloatAmplitude = 0.1;
 const quadDamagePickupFloatSpeed = 2.2;
 const quadDamagePickupRadiusSq = 1.5 * 1.5;
+const quadDamageDurationMs = 30000;
 
 const createSeededRng = (seed) => {
   // Keep deterministic parity with backend_v2 SeededRng (u64 LCG).
@@ -10758,6 +10759,36 @@ function ensureQuadDamagePickupVisual(data = {}) {
     halo.rotation.x = Math.PI / 2;
     halo.position.y = 0.24;
     mesh.add(halo);
+    const beamOuter = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.25, 2.2, 52, 18, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x67f6ff,
+        transparent: true,
+        opacity: 0.2,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    beamOuter.name = 'quad_damage_beam_outer';
+    beamOuter.position.y = 26;
+    beamOuter.visible = false;
+    mesh.add(beamOuter);
+    const beamInner = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.34, 0.78, 52, 14, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xd8ffff,
+        transparent: true,
+        opacity: 0.34,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    beamInner.name = 'quad_damage_beam_inner';
+    beamInner.position.y = 26;
+    beamInner.visible = false;
+    mesh.add(beamInner);
     scene.add(mesh);
     quadDamagePickup = {
       mesh,
@@ -10845,7 +10876,7 @@ function updateQuadDamageHud() {
     quadDamageText.textContent = `${Math.ceil(remainingMs / 1000)}s`;
   }
   if (quadDamageFill) {
-    quadDamageFill.style.width = `${Math.max(0, Math.min(100, (remainingMs / 15000) * 100)).toFixed(1)}%`;
+    quadDamageFill.style.width = `${Math.max(0, Math.min(100, (remainingMs / quadDamageDurationMs) * 100)).toFixed(1)}%`;
   }
 }
 
@@ -10926,12 +10957,28 @@ function updateQuadDamagePickup(delta) {
   quadDamagePickup.mesh.rotation.y += delta * 1.6;
   const core = quadDamagePickup.mesh.getObjectByName('quad_damage_core');
   const halo = quadDamagePickup.mesh.getObjectByName('quad_damage_halo');
+  const beamOuter = quadDamagePickup.mesh.getObjectByName('quad_damage_beam_outer');
+  const beamInner = quadDamagePickup.mesh.getObjectByName('quad_damage_beam_inner');
   if (core) {
     const corePulse = 1 + (Math.sin((nowPerf / 1000) * 3.8 + quadDamagePickup.phase) * 0.12);
     core.scale.setScalar(corePulse);
   }
   if (halo) {
     halo.rotation.z += delta * 1.8;
+  }
+  if (beamOuter) {
+    beamOuter.visible = true;
+    beamOuter.rotation.y += delta * 0.12;
+    beamOuter.material.opacity = 0.16 + (((Math.sin((nowPerf / 1000) * 1.3) + 1) * 0.5) * 0.08);
+    const beamPulse = 1 + (Math.sin((nowPerf / 1000) * 2.1 + quadDamagePickup.phase) * 0.06);
+    beamOuter.scale.set(beamPulse, 1, beamPulse);
+  }
+  if (beamInner) {
+    beamInner.visible = true;
+    beamInner.rotation.y -= delta * 0.18;
+    beamInner.material.opacity = 0.24 + (((Math.sin((nowPerf / 1000) * 1.8) + 1) * 0.5) * 0.12);
+    const innerPulse = 1 + (Math.sin((nowPerf / 1000) * 2.8 + quadDamagePickup.phase + 0.8) * 0.08);
+    beamInner.scale.set(innerPulse, 1, innerPulse);
   }
   quadDamagePickup.mesh.position.set(
     quadDamagePickup.x,
