@@ -2184,6 +2184,8 @@ const localAvatar = {
   team: null,
   teamOutline: null,
   visualOpacity: 1,
+  quadDamageMaterialBackup: null,
+  quadDamageFxApplied: false,
 };
 const spawnProtectionVisualOpacity = 0.46;
 
@@ -5740,7 +5742,68 @@ const buildAnimatedRemoteModel = (resource) => {
   };
 };
 
+const restoreLocalQuadDamageMaterials = () => {
+  if (!localAvatar.quadDamageMaterialBackup) {
+    return;
+  }
+  for (let i = 0; i < localAvatar.quadDamageMaterialBackup.length; i += 1) {
+    const backup = localAvatar.quadDamageMaterialBackup[i];
+    if (!backup?.mesh) {
+      continue;
+    }
+    const quadMat = backup.mesh.material;
+    backup.mesh.material = backup.material;
+    if (quadMat && quadMat !== backup.material && typeof quadMat.dispose === 'function') {
+      quadMat.dispose();
+    }
+  }
+  localAvatar.quadDamageMaterialBackup = null;
+  localAvatar.quadDamageFxApplied = false;
+};
+
+const applyLocalQuadDamageVisual = (enabled) => {
+  if (!localAvatar.avatarRoot) {
+    return;
+  }
+  if (!enabled) {
+    restoreLocalQuadDamageMaterials();
+    return;
+  }
+  if (localAvatar.quadDamageFxApplied) {
+    return;
+  }
+  const backups = [];
+  localAvatar.avatarRoot.traverse((node) => {
+    if (!node.isMesh || !node.material) {
+      return;
+    }
+    const originalMaterial = node.material;
+    const source = Array.isArray(originalMaterial) ? originalMaterial[0] : originalMaterial;
+    backups.push({ mesh: node, material: originalMaterial });
+    node.material = new THREE.MeshPhysicalMaterial({
+      color: 0xd9ffff,
+      emissive: 0x58deff,
+      emissiveIntensity: 0.16,
+      transmission: 0.34,
+      roughness: 0.18,
+      metalness: 0.14,
+      transparent: true,
+      opacity: 0.88,
+      map: source?.map || null,
+      alphaMap: source?.alphaMap || null,
+      normalMap: source?.normalMap || null,
+      roughnessMap: source?.roughnessMap || null,
+      metalnessMap: source?.metalnessMap || null,
+      skinning: Boolean(node.isSkinnedMesh),
+      side: source?.side ?? THREE.FrontSide,
+    });
+  });
+  localAvatar.quadDamageMaterialBackup = backups;
+  localAvatar.quadDamageFxApplied = true;
+};
+
 const disposeLocalAvatar = () => {
+  restoreLocalQuadDamageMaterials();
   if (localAvatar.mixer) {
     localAvatar.mixer.stopAllAction();
     if (localAvatar.avatarRoot) {
@@ -5763,6 +5826,8 @@ const disposeLocalAvatar = () => {
   localAvatar.funnyUntil = 0;
   localAvatar.teamOutline = null;
   localAvatar.visualOpacity = 1;
+  localAvatar.quadDamageMaterialBackup = null;
+  localAvatar.quadDamageFxApplied = false;
 };
 
 const ensureLocalAvatar = async () => {
@@ -5789,6 +5854,7 @@ const ensureLocalAvatar = async () => {
   localAvatar.funnyUntil = 0;
   localAvatar.visualOpacity = 1;
   applyAvatarVisualOpacity(localAvatar.avatarRoot || localAvatar.group, 1);
+  applyLocalQuadDamageVisual(Number(selfQuadDamageUntilMs || 0) > getEstimatedServerNowMs());
   ensureLocalTeamOutline();
   setLocalAvatarAnimation('idle');
 };
@@ -5797,6 +5863,8 @@ const updateLocalAvatar = (delta) => {
   if (!localAvatar.group) {
     return;
   }
+  const quadDamageActive = Number(selfQuadDamageUntilMs || 0) > getEstimatedServerNowMs();
+  applyLocalQuadDamageVisual(quadDamageActive);
   const localProtected = getEstimatedServerNowMs() < Number(localSpawnProtectedUntilMs || 0);
   const localTargetOpacity = localProtected ? spawnProtectionVisualOpacity : 1;
   if (Math.abs(localAvatar.visualOpacity - localTargetOpacity) > 0.001) {
@@ -5825,6 +5893,12 @@ const updateLocalAvatar = (delta) => {
 
   const now = performance.now();
   const moving = keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD;
+  if (quadDamageActive && Math.random() < delta * (moving ? 10 : 4)) {
+    spawnQuadDamageAuraSpark(localAvatar.group.position, moving);
+    if (moving && Math.random() < 0.55) {
+      spawnQuadDamageAuraSpark(localAvatar.group.position, true);
+    }
+  }
   if (localAvatar.funnyUntil > now) {
     setLocalAvatarAnimation('funny');
   } else if (isJumping) {
@@ -10602,15 +10676,15 @@ function spawnQuadDamageLandingEffect(position) {
     impactB.scale.setScalar(1.7);
     impactB.userData.life = 0.36;
   }
-  const shockOuter = createHitWave(position, 0x7ef6ff, {
+  const shockOuter = createHitWave(position, 0x67f6ff, {
     scale: 3.2,
-    life: 1.2,
-    expand: 11.5,
+    life: 1.55,
+    expand: 8.1,
   });
-  const shockInner = createHitWave(position, 0xffde84, {
-    scale: 2.1,
-    life: 0.92,
-    expand: 8.6,
+  const shockInner = createHitWave(position, 0xbffcff, {
+    scale: 2.35,
+    life: 1.25,
+    expand: 6.2,
   });
   if (shockOuter) {
     shockOuter.position.y += 0.08;
