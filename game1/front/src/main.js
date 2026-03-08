@@ -3008,6 +3008,15 @@ const bootLobbyLoader = async () => {
     markWarning('audio: quad_loop');
   }
   tick('Audio quad loop cargado');
+  for (let i = 0; i < painSoundLevels.length; i += 1) {
+    const level = painSoundLevels[i];
+    // eslint-disable-next-line no-await-in-loop
+    const painSrc = await resolvePainSoundUrl(level.threshold);
+    if (!painSrc || !(await preloadAudioSource(painSrc, 6000))) {
+      markWarning(`audio: pain${level.threshold}`);
+    }
+    tick(`Audio pain ${level.threshold} cargado`);
+  }
   for (let i = 0; i < battleThemeIds.length; i += 1) {
     const themeId = battleThemeIds[i];
     const themePath = getBattleThemeTrackPath(themeId);
@@ -3251,6 +3260,15 @@ const quadLoopSoundCandidates = [
   '/sound_effecs/quad.mp3',
 ];
 let quadLoopSoundUrl = '';
+const painSoundLevels = [
+  { threshold: 25, candidates: ['/sound_effects/pain25_1.wav', '/sound_effecs/pain25_1.wav'] },
+  { threshold: 50, candidates: ['/sound_effects/pain50_1.wav', '/sound_effecs/pain50_1.wav'] },
+  { threshold: 75, candidates: ['/sound_effects/pain75_1.wav', '/sound_effecs/pain75_1.wav'] },
+  { threshold: 100, candidates: ['/sound_effects/pain100_1.wav', '/sound_effecs/pain100_1.wav'] },
+];
+const painSoundUrlCache = new Map();
+const painSoundCooldownMs = 220;
+let lastPainSoundAt = 0;
 let localAttackSoundCharacter = '';
 const pooledAudioVoices = new Map();
 const remoteShootMaxDistance = 140;
@@ -3692,6 +3710,27 @@ const resolveQuadLoopSoundUrl = async () => {
   return '';
 };
 
+const resolvePainSoundUrl = async (threshold) => {
+  const key = String(threshold);
+  if (painSoundUrlCache.has(key)) {
+    return painSoundUrlCache.get(key) || '';
+  }
+  const level = painSoundLevels.find((entry) => entry.threshold === threshold);
+  if (!level) {
+    return '';
+  }
+  for (let i = 0; i < level.candidates.length; i += 1) {
+    const candidate = level.candidates[i];
+    // eslint-disable-next-line no-await-in-loop
+    if (await canPlayAudioUrl(candidate)) {
+      painSoundUrlCache.set(key, candidate);
+      return candidate;
+    }
+  }
+  painSoundUrlCache.set(key, '');
+  return '';
+};
+
 const playPooledOneShotAudio = (src, volume, maxVoices = 8, playbackRate = 1) => {
   if (!src) {
     return;
@@ -3849,6 +3888,34 @@ const startQuadLoopSound = async () => {
       quadLoopSoundActive = false;
     });
   }
+};
+
+const getPainSoundThreshold = (healthValue) => {
+  const normalized = Math.max(0, Math.min(100, Number(healthValue) || 0));
+  if (normalized <= 25) {
+    return 25;
+  }
+  if (normalized <= 50) {
+    return 50;
+  }
+  if (normalized <= 75) {
+    return 75;
+  }
+  return 100;
+};
+
+const playPainSoundForHealth = async (healthValue) => {
+  const now = performance.now();
+  if (!audioUnlocked || now - lastPainSoundAt < painSoundCooldownMs) {
+    return;
+  }
+  const threshold = getPainSoundThreshold(healthValue);
+  const src = await resolvePainSoundUrl(threshold);
+  if (!src) {
+    return;
+  }
+  lastPainSoundAt = now;
+  playPooledOneShotAudio(src, Math.max(0.04, Math.min(1, 0.34 * settings.masterVolume * settings.sfxVolume)), 8, 1);
 };
 
 const stopShootSound = () => {
@@ -8007,6 +8074,8 @@ const connectWebSocket = () => {
       if (!state.self || !canPlay()) {
         return;
       }
+      const prevHealth = health;
+      const prevShield = shield;
       const nextHealth = Number(payload.data?.health);
       const nextShield = Number(payload.data?.shield);
       const isHeadshot = Boolean(payload.data?.headshot);
@@ -8019,6 +8088,9 @@ const connectWebSocket = () => {
       clampPendingHealthRegenToMissing();
       bleedHitFlash = Math.min(0.45, bleedHitFlash + (isHeadshot ? 0.35 : 0.2));
       triggerDamageIndicator(payload.data?.fromPlayerId);
+      if (health < prevHealth || shield < prevShield) {
+        void playPainSoundForHealth(health);
+      }
       updateHud();
       return;
     }
