@@ -583,7 +583,7 @@ const maxKillFeedMessages = 8;
 const killFeedMessageTtlMs = 7000;
 const quadDamageKillFeedTtlMs = 8000;
 const activeDamageFloats = [];
-const damageFloatLifetimeMs = 720;
+const damageFloatLifetimeMs = 860;
 let damageFloatSeq = 0;
 const lobbyChatMessages = [];
 const maxLobbyChatMessages = 80;
@@ -900,7 +900,7 @@ const spawnDamageFloat = (playerId, damage, headshot = false, quadDamage = false
     element,
     startedAt: performance.now(),
     velocityX: (Math.random() * 180) - 90,
-    velocityY: 120 + (Math.random() * 70),
+    velocityY: 145 + (Math.random() * 55),
     swirlX: (Math.random() * 22) - 11,
     lastX: window.innerWidth * 0.5,
     lastY: window.innerHeight * 0.45,
@@ -960,7 +960,7 @@ const updateDamageFloats = () => {
     }
     const time = ageMs / 1000;
     const driftX = (entry.velocityX * time * (1 - (progress * 0.18))) + (entry.swirlX * Math.sin(progress * Math.PI * 1.2));
-    const rise = (entry.velocityY * time) - (26 * time * time);
+    const rise = (entry.velocityY * time) - (235 * time * time);
     const scale = progress < 0.14
       ? (0.7 + (progress / 0.14) * 0.62)
       : (1.32 - ((progress - 0.14) / 0.86) * 0.26);
