@@ -10562,7 +10562,7 @@ const shoot = () => {
   const moveFactor = Math.min(1, movingSpeed / Math.max(0.001, speed));
   const isBulletWeapon = !usingMana;
   const bulletSpread = isBulletWeapon
-    ? ((0.0018 + (moveFactor * 0.0032) + (isJumping ? 0.0055 : 0) + (shotSpread * 0.0048)) * (1 / settings.mouseSensitivity))
+    ? (0.0018 + (moveFactor * 0.0032) + (isJumping ? 0.0055 : 0) + (shotSpread * 0.0048))
     : 0;
   const shotDirection = baseDirection.clone();
   if (bulletSpread > 0) {
@@ -10639,7 +10639,7 @@ const shoot = () => {
 
   muzzleFlash.intensity = 2.3;
   recoilKick = Math.min(1.3, recoilKick + 0.52 + (moveFactor * 0.14) + (isJumping ? 0.18 : 0));
-  shotSpread = Math.min(maxShotSpread, shotSpread + (isBulletWeapon ? (0.22 + moveFactor * 0.18 + (isJumping ? 0.24 : 0)) : 0.08));
+  shotSpread = Math.min(maxShotSpread, shotSpread + (isBulletWeapon ? (0.22 + moveFactor * 0.18 + (isJumping ? 0.10 : 0)) : 0.08));
 
   pitch += (Math.random() * 0.5 + 0.5) * recoilVertical;
   yaw += (Math.random() - 0.5) * recoilHorizontal;
