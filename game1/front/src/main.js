@@ -583,7 +583,7 @@ const maxKillFeedMessages = 8;
 const killFeedMessageTtlMs = 7000;
 const quadDamageKillFeedTtlMs = 8000;
 const activeDamageFloats = [];
-const damageFloatLifetimeMs = 900;
+const damageFloatLifetimeMs = 720;
 let damageFloatSeq = 0;
 const lobbyChatMessages = [];
 const maxLobbyChatMessages = 80;
@@ -899,8 +899,9 @@ const spawnDamageFloat = (playerId, damage, headshot = false, quadDamage = false
     playerId: String(playerId || ''),
     element,
     startedAt: performance.now(),
-    xJitter: (Math.random() * 28) - 14,
-    yJitter: Math.random() * 10,
+    velocityX: (Math.random() * 180) - 90,
+    velocityY: 120 + (Math.random() * 70),
+    swirlX: (Math.random() * 22) - 11,
     lastX: window.innerWidth * 0.5,
     lastY: window.innerHeight * 0.45,
   });
@@ -957,14 +958,14 @@ const updateDamageFloats = () => {
         entry.lastY = ((1 - tmpDamageFloatScreen.y) * 0.5) * screenHeight;
       }
     }
-    const rise = 56 * (1 - ((1 - progress) * (1 - progress)));
-    const driftX = entry.xJitter * (1 - (progress * 0.42));
-    const driftY = entry.yJitter * (1 - progress);
-    const scale = progress < 0.2
-      ? (0.78 + (progress / 0.2) * 0.46)
-      : (1.24 - ((progress - 0.2) / 0.8) * 0.18);
+    const time = ageMs / 1000;
+    const driftX = (entry.velocityX * time * (1 - (progress * 0.18))) + (entry.swirlX * Math.sin(progress * Math.PI * 1.2));
+    const rise = (entry.velocityY * time) - (26 * time * time);
+    const scale = progress < 0.14
+      ? (0.7 + (progress / 0.14) * 0.62)
+      : (1.32 - ((progress - 0.14) / 0.86) * 0.26);
     entry.element.style.opacity = String(1 - (progress * 0.92));
-    entry.element.style.transform = `translate(${entry.lastX + driftX}px, ${entry.lastY - rise - driftY}px) scale(${scale.toFixed(3)})`;
+    entry.element.style.transform = `translate(${entry.lastX + driftX}px, ${entry.lastY - rise}px) scale(${scale.toFixed(3)})`;
   }
 };
 
