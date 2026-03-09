@@ -219,7 +219,7 @@ const DEV_MODE: bool = cfg!(debug_assertions);
 const HEADSHOT_DAMAGE_MULTIPLIER: f64 = 2.0;
 const SHIELD_DAMAGE_REDUCTION: f64 = 0.6;
 const SHIELD_HIT_COST_PER_HIT: f64 = 25.0;
-const HEADSHOT_RADIUS: f64 = 0.26;
+const HEADSHOT_RADIUS: f64 = 0.30;
 const BODYSHOT_RADIUS: f64 = 0.46;
 const TORSO_RADIUS: f64 = 0.46;
 const TORSO_CAPSULE_RADIUS: f64 = 0.46;
@@ -227,8 +227,8 @@ const LEGS_CAPSULE_RADIUS: f64 = 0.46;
 const CAPSULE_SAMPLE_STEPS: usize = 7;
 // Player position is anchored around eye/camera height (y ~= 1.7).
 // Config tool offsets are feet-anchored, so these are converted to runtime anchor.
-const HEAD_CENTER_OFFSET_Y: f64 = -0.3;
-const BODY_CENTER_OFFSET_Y: f64 = -1.185;
+const HEAD_CENTER_OFFSET_Y: f64 = -0.18;
+const BODY_CENTER_OFFSET_Y: f64 = -0.65;
 const LUNAR_SPECIAL_COOLDOWN_MS: i64 = 30_000;
 const SILENT_SPECIAL_COOLDOWN_MS: i64 = 5_000;
 const NEOORPHEN_SPECIAL_COOLDOWN_MS: i64 = 30_000;
@@ -5962,7 +5962,7 @@ fn find_best_hit(
                 });
             }
             let torso_min_y = sample.y - 0.28;
-            let torso_max_y = sample.y + 0.58;
+            let torso_max_y = sample.y + 0.15;
             let legs_min_y = sample.y - 1.05;
             let legs_max_y = sample.y - 0.18;
             if let Some(torso_capsule_dist) = ray_hit_vertical_capsule(
@@ -5998,7 +5998,7 @@ fn find_best_hit(
         }
 
         let candidate_hit = match (head_hit, best_body_hit) {
-            (Some(head_dist), Some(body_dist)) => Some((false, body_dist.min(head_dist))),
+            (Some(head_dist), Some(body_dist)) => Some((true, head_dist.min(body_dist))),
             (Some(head_dist), None) => Some((true, head_dist)),
             (None, Some(body_dist)) => Some((false, body_dist)),
             (None, None) => None,
