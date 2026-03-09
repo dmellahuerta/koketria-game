@@ -3736,6 +3736,7 @@ fn bot_pick_target_direction(
     let Some(room) = inner.rooms.rooms.get(room_id) else {
         return fallback.clone();
     };
+    let mut rng = SeededRng::new((now_ms() as u64) ^ hash_room_id(room_id) ^ hash_room_id(bot_id) ^ 0xB07A_1A1Du64);
     let mut best_dir: Option<Vec3> = None;
     let mut best_d2 = f64::MAX;
     for victim_id in &room.players {
@@ -3753,14 +3754,16 @@ fn bot_pick_target_direction(
         }
         let target = Vec3 {
             x: victim.state.position.x,
-            y: victim.state.position.y + (BODY_CENTER_OFFSET_Y * 0.45),
+            y: victim.state.position.y - 0.65,
             z: victim.state.position.z,
         };
-        let to = Vec3 {
+        let mut to = Vec3 {
             x: target.x - origin.x,
             y: target.y - origin.y,
             z: target.z - origin.z,
         };
+        to.x += (rng.next_f64() * 2.0 - 1.0) * 0.06;
+        to.y += (rng.next_f64() * 2.0 - 1.0) * 0.06;
         let d2 = to.x * to.x + to.y * to.y + to.z * to.z;
         if d2 < 0.001 || d2 >= best_d2 {
             continue;
