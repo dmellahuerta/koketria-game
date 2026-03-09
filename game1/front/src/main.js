@@ -258,6 +258,12 @@ app.innerHTML = `
     </div>
   </div>
 
+  <div id="roundStartOverlay" class="hidden">
+    <div class="round-start-card">
+      <span id="roundStartText">3</span>
+    </div>
+  </div>
+
   <div id="damageOverlay"></div>
   <div id="quadDamageOverlay" class="quad-damage-overlay hidden"></div>
   <div id="damageIndicator"></div>
@@ -403,6 +409,8 @@ const respawnCounter = document.querySelector('#respawnCounter');
 const winnerScreen = document.querySelector('#winnerScreen');
 const winnerText = document.querySelector('#winnerText');
 const winnerCounter = document.querySelector('#winnerCounter');
+const roundStartOverlay = document.querySelector('#roundStartOverlay');
+const roundStartText = document.querySelector('#roundStartText');
 const damageOverlay = document.querySelector('#damageOverlay');
 const quadDamageOverlay = document.querySelector('#quadDamageOverlay');
 const damageIndicator = document.querySelector('#damageIndicator');
@@ -1611,6 +1619,90 @@ const updateRoundTimerHud = () => {
     roundTimerValue.textContent = '00:00';
   }
   roundTimerHud.classList.remove('hidden');
+};
+
+const maybeTriggerRoundStartCountdown = (room, previousStatus = '', previousRoundStartedAtMs = 0) => {
+  if (!room || String(room.status || '') !== 'in_game') {
+    return;
+  }
+  const roundStartedAtMs = Number(room.roundStartedAtMs || 0);
+  if (!Number.isFinite(roundStartedAtMs) || roundStartedAtMs <= 0) {
+    return;
+  }
+  const nowMs = getEstimatedServerNowMs();
+  if (nowMs - roundStartedAtMs > 3600) {
+    return;
+  }
+  const changedRound = roundStartedAtMs !== Number(previousRoundStartedAtMs || 0);
+  const enteredInGame = String(previousStatus || '') !== 'in_game';
+  if (!changedRound && !enteredInGame) {
+    return;
+  }
+  if (roundStartedAtMs === lastRoundStartShownAt) {
+    return;
+  }
+  lastRoundStartShownAt = roundStartedAtMs;
+  roundStartSequenceEndsAt = roundStartedAtMs + 3800;
+};
+
+const updateRoundStartCountdown = () => {
+  if (!roundStartOverlay || !roundStartText || !state.joinedRoom?.room) {
+    roundStartOverlay?.classList.add('hidden');
+    return;
+  }
+  const room = state.joinedRoom.room;
+  if (String(room.status || '') !== 'in_game' || roundStartSequenceEndsAt <= 0) {
+    roundStartOverlay.classList.add('hidden');
+    return;
+  }
+  const nowMs = getEstimatedServerNowMs();
+  if (nowMs >= roundStartSequenceEndsAt) {
+    roundStartSequenceEndsAt = 0;
+    roundStartOverlay.classList.add('hidden');
+    return;
+  }
+  const elapsed = Math.max(0, nowMs - (roundStartSequenceEndsAt - 3800));
+  let text = '3';
+  if (elapsed >= 3000) {
+    text = 'GO!';
+  } else if (elapsed >= 2000) {
+    text = '1';
+  } else if (elapsed >= 1000) {
+    text = '2';
+  }
+  roundStartText.textContent = text;
+  roundStartOverlay.classList.remove('hidden');
+};
+
+const playLowHealthWarningBeep = () => {
+  if (!uiAudioContext || !audioUnlocked) {
+    return;
+  }
+  const now = uiAudioContext.currentTime;
+  const gain = uiAudioContext.createGain();
+  const osc = uiAudioContext.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(740, now);
+  osc.frequency.exponentialRampToValueAtTime(620, now + 0.12);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.055 * settings.masterVolume * settings.sfxVolume), now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+  osc.connect(gain);
+  gain.connect(uiAudioContext.destination);
+  osc.start(now);
+  osc.stop(now + 0.17);
+};
+
+const updateLowHealthWarning = () => {
+  if (!canPlay() || isRespawning || health >= lowHealthWarningThreshold) {
+    return;
+  }
+  const now = performance.now();
+  if (now - lastLowHealthWarningAt < lowHealthWarningIntervalMs) {
+    return;
+  }
+  lastLowHealthWarningAt = now;
+  playLowHealthWarningBeep();
 };
 
 const forceHideTeamModeUiIfNeeded = (room) => {
@@ -3279,11 +3371,13 @@ const quadLoopSound = new Audio('/sound_effects/quad.wav');
 quadLoopSound.preload = 'auto';
 quadLoopSound.loop = true;
 quadLoopSound.volume = 0.24;
+let uiAudioContext = null;
 let audioUnlocked = false;
 let preLobbyMusicActive = false;
 let lobbyMusicActive = false;
 let battleMusicActive = false;
 let quadLoopSoundActive = false;
+let lastLowHealthWarningAt = 0;
 let waitForPreLobbyToEndForLobby = false;
 let activeBattleThemeId = 'battle1';
 const defaultAttackSoundUrl = '/8d82b5_Doom_Chaingun_Firing_Sound_Effect.mp3';
@@ -3358,6 +3452,8 @@ const localHitVoices = [];
 const maxLocalHitVoices = 24;
 const lunarSpecialCooldownMs = 30_000;
 const silentSpecialCooldownMs = 5_000;
+const lowHealthWarningThreshold = 30;
+const lowHealthWarningIntervalMs = 1200;
 let lunarRainCooldownEndsAt = 0;
 let lastLunarCooldownShown = null;
 
@@ -3880,6 +3976,15 @@ const unlockBackgroundMusic = () => {
     return;
   }
   audioUnlocked = true;
+  if (!uiAudioContext) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) {
+      uiAudioContext = new AudioCtx();
+    }
+  }
+  if (uiAudioContext?.state === 'suspended') {
+    uiAudioContext.resume().catch(() => {});
+  }
   refreshBackgroundMusic();
 };
 
@@ -4360,6 +4465,8 @@ const respawnRequestRetryMs = 700;
 let isMatchEnding = false;
 let matchWinnerEndsAt = 0;
 let matchWinnerSecondsLeft = 0;
+let roundStartSequenceEndsAt = 0;
+let lastRoundStartShownAt = 0;
 let bleedIntensity = 0;
 let bleedHitFlash = 0;
 let recoilKick = 0;
@@ -4406,7 +4513,7 @@ const remoteMediumCatchupDistance = 3.1;
 const remoteSnapDistance = 11.5;
 const remoteAnimMoveSpeedOn = 0.55;
 const remoteAnimMoveSpeedOff = 0.32;
-const remoteAnimSwitchCooldownMs = 140;
+const remoteAnimSwitchCooldownMs = 80;
 const remoteMovingSignalHoldMs = 220;
 const localReconcileSoftError = 0.20;
 const localReconcileHardSnapDistance = 3.2;
@@ -5660,6 +5767,11 @@ const resetCombatStats = () => {
   selfQuadDamageUntilMs = 0;
   stopQuadLoopSound();
   footstepTimer = 0;
+  roundStartSequenceEndsAt = 0;
+  lastLowHealthWarningAt = 0;
+  if (roundStartOverlay) {
+    roundStartOverlay.classList.add('hidden');
+  }
   quadDamageLandingShakeUntil = 0;
   quadDamageLandingShakeStrength = 0;
   respawnSecondsLeft = getRespawnDurationSeconds();
@@ -7527,6 +7639,8 @@ const syncLocalTeamFromRoom = (roomState) => {
 
 const applyRoomState = (roomState, options = {}) => {
   const wasOutsideRoom = !state.joinedRoom;
+  const previousStatus = state.joinedRoom?.room?.status || '';
+  const previousRoundStartedAtMs = Number(state.joinedRoom?.room?.roundStartedAtMs || 0);
   if (wasOutsideRoom) {
     resetCombatStats();
   }
@@ -7562,6 +7676,7 @@ const applyRoomState = (roomState, options = {}) => {
   if (roomState.room.status !== 'cooldown') {
     hideWinnerOverlay();
   }
+  maybeTriggerRoundStartCountdown(roomState.room, previousStatus, previousRoundStartedAtMs);
   updateVersusLobbyUi();
   updateHud();
 };
@@ -8501,6 +8616,8 @@ const connectWebSocket = () => {
 
     if (payload.type === 'game_state') {
       if (state.joinedRoom && state.joinedRoom.room.id === payload.data.roomId) {
+        const previousStatus = state.joinedRoom.room.status || '';
+        const previousRoundStartedAtMs = Number(state.joinedRoom.room.roundStartedAtMs || 0);
         state.joinedRoom.room.status = payload.data.status;
         state.joinedRoom.room.hostId = payload.data.hostId;
         if (payload.data.mode) {
@@ -8548,6 +8665,7 @@ const connectWebSocket = () => {
         syncModeUiClass();
         forceHideTeamModeUiIfNeeded(state.joinedRoom.room);
         syncLobbyScreens();
+        maybeTriggerRoundStartCountdown(state.joinedRoom.room, previousStatus, previousRoundStartedAtMs);
         updateVersusLobbyUi();
         updateHud();
         refreshBackgroundMusic();
@@ -12775,6 +12893,8 @@ const animate = () => {
     updateBleedEffect(delta);
     updateQuadDamageHud();
     updateRoundTimerHud();
+    updateRoundStartCountdown();
+    updateLowHealthWarning();
     if (shouldRenderLobbyPreview() && previewState.mixer) {
       previewState.mixer.update(delta);
     }

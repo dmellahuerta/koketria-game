@@ -1498,6 +1498,42 @@ button:disabled {
   margin-bottom: 10px;
 }
 
+#roundStartOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#roundStartOverlay.hidden {
+  display: none;
+}
+
+.round-start-card {
+  min-width: 140px;
+  padding: 20px 30px;
+  border-radius: 18px;
+  border: 1px solid rgba(180, 240, 255, 0.34);
+  background: rgba(5, 10, 16, 0.56);
+  box-shadow: 0 0 40px rgba(90, 180, 255, 0.18);
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+#roundStartText {
+  display: block;
+  font-size: clamp(2.8rem, 8vw, 5.2rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #f3fbff;
+  text-shadow:
+    0 0 18px rgba(125, 220, 255, 0.7),
+    0 0 42px rgba(90, 190, 255, 0.32);
+}
+
 #damageOverlay {
   --bleed-inner: 20%;
   --damage-flash: 0;
