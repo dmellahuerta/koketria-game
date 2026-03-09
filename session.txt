@@ -1,1 +1,2 @@
 codex resume 019c9183-1048-7a43-8d2e-d1ba0d541c7c
+ npx claude --resume b126a0cd-0c5c-4aa5-9fea-65e2a7478883
