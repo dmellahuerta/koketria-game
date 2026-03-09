@@ -154,6 +154,10 @@ app.innerHTML = `
       <span id="teamScoreBlue" class="team-score blue">AZUL 0</span>
       <span id="teamScoreTarget" class="team-score-target">META 10</span>
     </div>
+    <div id="roundTimerHud" class="round-timer-hud hidden">
+      <span id="roundTimerLabel" class="round-timer-label">TIEMPO</span>
+      <span id="roundTimerValue" class="round-timer-value">00:00</span>
+    </div>
 
     <div id="ammoBarWrap" class="side-bar left">
       <span id="ammoSideLabel">30 / 90</span>
@@ -424,6 +428,9 @@ const teamScoreHud = document.querySelector('#teamScoreHud');
 const teamScoreRed = document.querySelector('#teamScoreRed');
 const teamScoreBlue = document.querySelector('#teamScoreBlue');
 const teamScoreTarget = document.querySelector('#teamScoreTarget');
+const roundTimerHud = document.querySelector('#roundTimerHud');
+const roundTimerLabel = document.querySelector('#roundTimerLabel');
+const roundTimerValue = document.querySelector('#roundTimerValue');
 const stats = document.querySelector('#stats');
 const roomHud = document.querySelector('#roomHud');
 const stateHud = document.querySelector('#stateHud');
@@ -1569,6 +1576,43 @@ const updateTeamScoreHud = () => {
   teamScoreHud.classList.remove('hidden');
 };
 
+const formatRoundClock = (totalMs) => {
+  const totalSeconds = Math.max(0, Math.floor(totalMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const updateRoundTimerHud = () => {
+  if (!roundTimerHud || !roundTimerLabel || !roundTimerValue || !state.joinedRoom?.room) {
+    roundTimerHud?.classList.add('hidden');
+    roundTimerHud?.classList.remove('with-team-score');
+    return;
+  }
+  const room = state.joinedRoom.room;
+  const mode = String(room.mode || 'freeforall').toLowerCase();
+  const status = String(room.status || '');
+  if (status !== 'in_game') {
+    roundTimerHud.classList.add('hidden');
+    roundTimerHud.classList.remove('with-team-score');
+    return;
+  }
+  const nowMs = getEstimatedServerNowMs();
+  const roundStartedAtMs = Number(room.roundStartedAtMs || 0);
+  const roundEndsAtMs = Number(room.roundEndsAtMs || 0);
+  const isVersusMode = mode === 'versusmatch';
+  roundTimerHud.classList.toggle('with-team-score', isVersusMode);
+  roundTimerLabel.textContent = isVersusMode ? 'RESTA' : 'TIEMPO';
+  if (isVersusMode && roundEndsAtMs > 0) {
+    roundTimerValue.textContent = formatRoundClock(roundEndsAtMs - nowMs);
+  } else if (roundStartedAtMs > 0) {
+    roundTimerValue.textContent = formatRoundClock(nowMs - roundStartedAtMs);
+  } else {
+    roundTimerValue.textContent = '00:00';
+  }
+  roundTimerHud.classList.remove('hidden');
+};
+
 const forceHideTeamModeUiIfNeeded = (room) => {
   if (!room) {
     return;
@@ -1576,6 +1620,13 @@ const forceHideTeamModeUiIfNeeded = (room) => {
   const roomMode = String(room.mode || 'freeforall').toLowerCase();
   if (roomMode !== 'versusmatch' && teamScoreHud) {
     teamScoreHud.classList.add('hidden');
+  }
+  if (!roundTimerHud) {
+    return;
+  }
+  if (roomMode !== 'versusmatch' && String(room.status || '') !== 'in_game') {
+    roundTimerHud.classList.add('hidden');
+    roundTimerHud.classList.remove('with-team-score');
   }
 };
 
@@ -5314,6 +5365,7 @@ const updateHud = () => {
     playersHud.textContent = 'Jugadores: -';
     hostControls.classList.add('hidden');
     updateTeamScoreHud();
+    updateRoundTimerHud();
     return;
   }
 
@@ -5342,6 +5394,7 @@ const updateHud = () => {
   renderPerfPanel();
   updateBleedEffect();
   updateTeamScoreHud();
+  updateRoundTimerHud();
 };
 
 const updateRespawnOverlay = () => {
@@ -8469,6 +8522,15 @@ const connectWebSocket = () => {
         if (payload.data.battleTheme) {
           state.joinedRoom.room.battleTheme = payload.data.battleTheme;
           setBattleTheme(payload.data.battleTheme);
+        }
+        if (Number.isFinite(Number(payload.data.roundStartedAtMs))) {
+          state.joinedRoom.room.roundStartedAtMs = Number(payload.data.roundStartedAtMs);
+        }
+        if (Number.isFinite(Number(payload.data.roundEndsAtMs))) {
+          state.joinedRoom.room.roundEndsAtMs = Number(payload.data.roundEndsAtMs);
+        }
+        if (Number.isFinite(Number(payload.data.roundDurationMs))) {
+          state.joinedRoom.room.roundDurationMs = Number(payload.data.roundDurationMs);
         }
         if (payload.data.status !== 'in_game' && isRespawning) {
           isRespawning = false;
@@ -12712,6 +12774,7 @@ const animate = () => {
     updateRemoteShootSound(delta);
     updateBleedEffect(delta);
     updateQuadDamageHud();
+    updateRoundTimerHud();
     if (shouldRenderLobbyPreview() && previewState.mixer) {
       previewState.mixer.update(delta);
     }

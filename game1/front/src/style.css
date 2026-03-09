@@ -990,6 +990,40 @@ button:disabled {
   opacity: 0.9;
 }
 
+.round-timer-hud {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(172, 228, 255, 0.28);
+  background: rgba(8, 12, 22, 0.74);
+  pointer-events: none;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+}
+
+.round-timer-hud.with-team-score {
+  top: 54px;
+}
+
+.round-timer-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(205, 229, 244, 0.84);
+}
+
+.round-timer-value {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #ffffff;
+}
+
 #matchInfo {
   position: fixed;
   top: 14px;
@@ -1670,6 +1704,10 @@ button:disabled {
 }
 
 #app:not(.versus-mode) #teamScoreHud {
+  display: none !important;
+}
+
+#app:not(.in-room) #roundTimerHud {
   display: none !important;
 }
 

@@ -46,6 +46,8 @@ struct RoomMeta {
     quad_damage_land_at_ms: i64,
     quad_damage_position: Option<(f64, f64)>,
     quad_damage_active: bool,
+    round_started_at_ms: i64,
+    round_ends_at_ms: i64,
 }
 
 #[derive(Clone)]
@@ -241,6 +243,7 @@ const FFA_KILLS_TO_WIN: i64 = 20;
 const VERSUS_1V1_KILLS_TO_WIN: i64 = 5;
 const VERSUS_2V2_KILLS_TO_WIN: i64 = 20;
 const ROUND_RESET_SECONDS: i64 = 10;
+const VERSUS_ROUND_DURATION_MS: i64 = 10 * 60 * 1000;
 const FFA_RESPAWN_MS: i64 = 5_000;
 const VERSUS_RESPAWN_MS: i64 = 3_000;
 const RESPAWN_SPAWN_PROTECTION_MS: i64 = 2_500;
@@ -490,6 +493,7 @@ struct PumoriOrbitHammer {
 
 impl RoomMeta {
     fn random_for(room_id: &str) -> Self {
+        let now = now_ms();
         let seed = room_seed(room_id, now_ms());
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
@@ -510,15 +514,18 @@ impl RoomMeta {
             mana_pickups,
             shield_pickups,
             health_pickups,
-            quad_damage_spawn_at_ms: now_ms() + QUAD_DAMAGE_INTERVAL_MS,
+            quad_damage_spawn_at_ms: now + QUAD_DAMAGE_INTERVAL_MS,
             quad_damage_land_at_ms: 0,
             quad_damage_position: None,
             quad_damage_active: false,
+            round_started_at_ms: now,
+            round_ends_at_ms: 0,
         }
     }
 
     fn rotate(&mut self, room_id: &str) {
-        let seed = room_seed(room_id, now_ms());
+        let now = now_ms();
+        let seed = room_seed(room_id, now);
         let map_seed = positive_seed(seed);
         let map_profile = create_map_profile(map_seed as u64);
         let map_collision = create_map_collision(map_seed as u64);
@@ -539,7 +546,7 @@ impl RoomMeta {
         self.mana_pickups = create_pickups(map_seed as u64, 0x85EB_CA6B, MANA_PICKUP_COUNT);
         self.shield_pickups = create_pickups(map_seed as u64, 0xC2B2_AE35, SHIELD_PICKUP_COUNT);
         self.health_pickups = create_pickups(map_seed as u64, 0x27D4_EB2F, HEALTH_PICKUP_COUNT);
-        self.quad_damage_spawn_at_ms = now_ms() + QUAD_DAMAGE_INTERVAL_MS;
+        self.quad_damage_spawn_at_ms = now + QUAD_DAMAGE_INTERVAL_MS;
         self.quad_damage_land_at_ms = 0;
         self.quad_damage_position = None;
         self.quad_damage_active = false;
@@ -700,7 +707,10 @@ impl Inner {
           "weather": meta.map(|m| m.weather.clone()).unwrap_or_else(|| "night".to_string()),
           "battleTheme": meta.map(|m| m.battle_theme.clone()).unwrap_or_else(|| "battle1".to_string()),
           "mapSeed": meta.map(|m| m.map_seed).unwrap_or(1),
-          "mapCollisionHash": meta.map(|m| m.map_collision_hash.clone()).unwrap_or_else(|| "".to_string())
+          "mapCollisionHash": meta.map(|m| m.map_collision_hash.clone()).unwrap_or_else(|| "".to_string()),
+          "roundStartedAtMs": meta.map(|m| m.round_started_at_ms).unwrap_or(0),
+          "roundEndsAtMs": meta.map(|m| m.round_ends_at_ms).unwrap_or(0),
+          "roundDurationMs": meta.map(|_| round_duration_ms_for_room(self, room_id)).unwrap_or(0)
         }))
     }
 
@@ -970,6 +980,13 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<WsRoomsState>) {
             };
             if let Some(room_id) = room_id_for_public.as_deref() {
                 maybe_spawn_quad_damage(&mut inner, room_id, now);
+                if maybe_finish_room_by_time_limit(&mut inner, room_id, now) {
+                    tokio::spawn(schedule_match_reset(
+                        Arc::clone(&ping_state),
+                        room_id.to_string(),
+                        ROUND_RESET_SECONDS as u64,
+                    ));
+                }
             }
             inner.flush_dirty_room_states(false);
             if let Some(room_id) = room_id_for_public {
@@ -1386,6 +1403,9 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                 } else {
                     RoomStatus::Cooldown
                 };
+            }
+            if event_type == "start_game" {
+                configure_round_timer_for_room(&mut inner, &room_id, now);
             }
             if event_type == "end_game" {
                 tokio::spawn(schedule_match_reset(
@@ -3950,7 +3970,10 @@ fn game_state_payload(inner: &Inner, room_id: &str) -> Value {
           "requiredPlayers": summary.get("requiredPlayers").cloned().unwrap_or(Value::Null),
           "maxPlayers": summary.get("maxPlayers").cloned().unwrap_or(Value::Null),
           "weather": summary.get("weather").cloned().unwrap_or(Value::Null),
-          "battleTheme": summary.get("battleTheme").cloned().unwrap_or(Value::Null)
+          "battleTheme": summary.get("battleTheme").cloned().unwrap_or(Value::Null),
+          "roundStartedAtMs": summary.get("roundStartedAtMs").cloned().unwrap_or(Value::Null),
+          "roundEndsAtMs": summary.get("roundEndsAtMs").cloned().unwrap_or(Value::Null),
+          "roundDurationMs": summary.get("roundDurationMs").cloned().unwrap_or(Value::Null)
         });
     }
     json!({
@@ -3962,7 +3985,10 @@ fn game_state_payload(inner: &Inner, room_id: &str) -> Value {
       "requiredPlayers": 0,
       "maxPlayers": 0,
       "weather": "night",
-      "battleTheme": "battle1"
+      "battleTheme": "battle1",
+      "roundStartedAtMs": 0,
+      "roundEndsAtMs": 0,
+      "roundDurationMs": 0
     })
 }
 
@@ -3987,6 +4013,25 @@ fn respawn_delay_ms_for_room(inner: &Inner, room_id: &str) -> i64 {
     FFA_RESPAWN_MS
 }
 
+fn round_duration_ms_for_room(inner: &Inner, room_id: &str) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return 0;
+    };
+    if room.mode == RoomMode::VersusMatch {
+        return VERSUS_ROUND_DURATION_MS;
+    }
+    0
+}
+
+fn configure_round_timer_for_room(inner: &mut Inner, room_id: &str, now: i64) {
+    inner.ensure_room_meta(room_id);
+    let duration_ms = round_duration_ms_for_room(inner, room_id);
+    if let Some(meta) = inner.room_meta.get_mut(room_id) {
+        meta.round_started_at_ms = now;
+        meta.round_ends_at_ms = if duration_ms > 0 { now + duration_ms } else { 0 };
+    }
+}
+
 fn team_kills(inner: &Inner, room_id: &str, team: Team) -> i64 {
     let Some(room) = inner.rooms.rooms.get(room_id) else {
         return 0;
@@ -4001,6 +4046,85 @@ fn team_kills(inner: &Inner, room_id: &str, team: Team) -> i64 {
         }
     }
     total
+}
+
+fn team_deaths(inner: &Inner, room_id: &str, team: Team) -> i64 {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return 0;
+    };
+    let mut total = 0;
+    for player_id in &room.players {
+        if room.teams.get(player_id).copied() != Some(team) {
+            continue;
+        }
+        if let Some(client) = inner.clients.get(player_id) {
+            total += client.deaths;
+        }
+    }
+    total
+}
+
+fn resolve_versus_timeout_winner(inner: &Inner, room_id: &str) -> (Value, Value, i64) {
+    let red_kills = team_kills(inner, room_id, Team::Red);
+    let blue_kills = team_kills(inner, room_id, Team::Blue);
+    let winner_team = if red_kills > blue_kills {
+        Some(Team::Red)
+    } else if blue_kills > red_kills {
+        Some(Team::Blue)
+    } else {
+        let red_deaths = team_deaths(inner, room_id, Team::Red);
+        let blue_deaths = team_deaths(inner, room_id, Team::Blue);
+        if red_deaths < blue_deaths {
+            Some(Team::Red)
+        } else if blue_deaths < red_deaths {
+            Some(Team::Blue)
+        } else {
+            None
+        }
+    };
+    if let Some(team) = winner_team {
+        let winner_client_id = inner.rooms.rooms.get(room_id).and_then(|r| {
+            r.players
+                .iter()
+                .find(|id| r.teams.get(*id).copied() == Some(team))
+                .cloned()
+        });
+        let payload = if let Some(winner_id) = winner_client_id {
+            if let Some(client) = inner.clients.get(&winner_id) {
+                json!({
+                  "id": client.id,
+                  "name": client.name,
+                  "character": client.character,
+                  "team": team.as_wire()
+                })
+            } else {
+                json!({
+                  "id": winner_id,
+                  "name": format!("Equipo {}", if team == Team::Red { "Rojo" } else { "Azul" }),
+                  "character": Value::Null,
+                  "team": team.as_wire()
+                })
+            }
+        } else {
+            json!({
+              "id": "",
+              "name": format!("Equipo {}", if team == Team::Red { "Rojo" } else { "Azul" }),
+              "character": Value::Null,
+              "team": team.as_wire()
+            })
+        };
+        return (payload, json!(team.as_wire()), team_kills(inner, room_id, team));
+    }
+    (
+        json!({
+          "id": "",
+          "name": "Empate",
+          "character": Value::Null,
+          "team": Value::Null
+        }),
+        Value::Null,
+        red_kills.max(blue_kills),
+    )
 }
 
 fn maybe_resolve_match_winner(
@@ -5021,6 +5145,7 @@ async fn schedule_match_reset(state: Arc<WsRoomsState>, room_id: String, seconds
     if let Some(meta) = inner.room_meta.get_mut(&room_id) {
         meta.rotate(&room_id);
     }
+    configure_round_timer_for_room(&mut inner, &room_id, now_ms());
     let mut bot_ids_to_restart = Vec::new();
     for player_id in player_ids {
         let spawn = pick_spawn_position(&inner, &room_id, Some(&player_id));
@@ -6640,6 +6765,55 @@ fn maybe_spawn_quad_damage(inner: &mut Inner, room_id: &str, now: i64) {
         inner.broadcast_room(room_id, payload, None);
         inner.broadcast_room_state(room_id);
     }
+}
+
+fn maybe_finish_room_by_time_limit(inner: &mut Inner, room_id: &str, now: i64) -> bool {
+    let Some(room) = inner.rooms.rooms.get(room_id) else {
+        return false;
+    };
+    if room.mode != RoomMode::VersusMatch || room.status != RoomStatus::InGame {
+        return false;
+    }
+    let round_ends_at_ms = inner
+        .room_meta
+        .get(room_id)
+        .map(|meta| meta.round_ends_at_ms)
+        .unwrap_or(0);
+    if round_ends_at_ms <= 0 || now < round_ends_at_ms {
+        return false;
+    }
+    if let Some(room_mut) = inner.rooms.rooms.get_mut(room_id) {
+        room_mut.status = RoomStatus::Cooldown;
+    }
+    let (winner_payload, winner_team, winner_score) = resolve_versus_timeout_winner(inner, room_id);
+    inner.broadcast_room(
+        room_id,
+        json!({
+          "type":"game_state",
+          "ok": true,
+          "data": game_state_payload(inner, room_id)
+        }),
+        None,
+    );
+    inner.broadcast_room(
+        room_id,
+        json!({
+          "type":"match_winner",
+          "ok": true,
+          "data": {
+            "winner": winner_payload,
+            "winnerTeam": winner_team,
+            "winnerScore": winner_score,
+            "killsToWin": kills_to_win_for_room(inner, room_id),
+            "countdownSeconds": ROUND_RESET_SECONDS,
+            "reason": "time_limit"
+          }
+        }),
+        None,
+    );
+    inner.broadcast_room_state(room_id);
+    inner.broadcast_rooms_list_all();
+    true
 }
 
 fn map_collision_hash(profile: &MapProfile, boxes: &[MapBox]) -> String {
