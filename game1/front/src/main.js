@@ -314,6 +314,7 @@ app.innerHTML = `
     <div id="chatLog" class="chat-log"></div>
   </div>
   <div id="killFeed" class="kill-feed"></div>
+  <div id="damageFloatLayer" class="damage-float-layer"></div>
 
   <div id="chatPanel" class="chat-panel">
     <div id="chatInputWrap" class="chat-input-wrap hidden">
@@ -476,6 +477,7 @@ const chatFeed = document.querySelector('#chatFeed');
 const chatPanel = document.querySelector('#chatPanel');
 const chatLog = document.querySelector('#chatLog');
 const killFeed = document.querySelector('#killFeed');
+const damageFloatLayer = document.querySelector('#damageFloatLayer');
 const chatInputWrap = document.querySelector('#chatInputWrap');
 const chatInput = document.querySelector('#chatInput');
 const crosshair = document.querySelector('#crosshair');
@@ -580,6 +582,9 @@ const killFeedMessages = [];
 const maxKillFeedMessages = 8;
 const killFeedMessageTtlMs = 7000;
 const quadDamageKillFeedTtlMs = 8000;
+const activeDamageFloats = [];
+const damageFloatLifetimeMs = 900;
+let damageFloatSeq = 0;
 const lobbyChatMessages = [];
 const maxLobbyChatMessages = 80;
 const versusChatMessages = [];
@@ -860,6 +865,107 @@ const pushKillFeedAnnouncement = (text, tone = 'quad', ttlMs = quadDamageKillFee
     killFeedMessages.splice(0, killFeedMessages.length - maxKillFeedMessages);
   }
   renderKillFeed();
+};
+
+const clearDamageFloats = () => {
+  while (activeDamageFloats.length > 0) {
+    const entry = activeDamageFloats.pop();
+    entry?.element?.remove();
+  }
+  if (damageFloatLayer) {
+    damageFloatLayer.innerHTML = '';
+  }
+};
+
+const formatDamageFloatValue = (value) => {
+  const rounded = Math.max(0, Math.round(Number(value) || 0));
+  return rounded > 0 ? String(rounded) : '';
+};
+
+const spawnDamageFloat = (playerId, damage, headshot = false, quadDamage = false) => {
+  if (!damageFloatLayer || !state.joinedRoom) {
+    return;
+  }
+  const text = formatDamageFloatValue(damage);
+  if (!text) {
+    return;
+  }
+  const element = document.createElement('div');
+  element.className = `damage-float${headshot ? ' headshot' : ''}${quadDamage ? ' quad' : ''}`;
+  element.textContent = text;
+  damageFloatLayer.appendChild(element);
+  activeDamageFloats.push({
+    id: damageFloatSeq += 1,
+    playerId: String(playerId || ''),
+    element,
+    startedAt: performance.now(),
+    xJitter: (Math.random() * 28) - 14,
+    yJitter: Math.random() * 10,
+    lastX: window.innerWidth * 0.5,
+    lastY: window.innerHeight * 0.45,
+  });
+};
+
+const resolveDamageFloatAnchor = (playerId, out) => {
+  const id = String(playerId || '');
+  if (!id) {
+    return false;
+  }
+  if (state.self && id === state.self.id) {
+    out.copy(camera.position);
+    out.y += 0.18;
+    return true;
+  }
+  const entry = state.remotePlayers.get(id);
+  if (!entry?.group) {
+    return false;
+  }
+  const profile = getRemoteHitboxProfileForCharacter(entry.character);
+  out.set(
+    entry.group.position.x,
+    entry.group.position.y + profile.headCenterOffsetY + 0.28,
+    entry.group.position.z,
+  );
+  return true;
+};
+
+const updateDamageFloats = () => {
+  if (!damageFloatLayer) {
+    return;
+  }
+  if (!state.joinedRoom || activeDamageFloats.length <= 0) {
+    clearDamageFloats();
+    return;
+  }
+  const now = performance.now();
+  const cam = getRenderCamera();
+  const screenWidth = window.innerWidth;
+  const screenHeight = window.innerHeight;
+  for (let i = activeDamageFloats.length - 1; i >= 0; i -= 1) {
+    const entry = activeDamageFloats[i];
+    const ageMs = now - entry.startedAt;
+    if (ageMs >= damageFloatLifetimeMs) {
+      entry.element?.remove();
+      activeDamageFloats.splice(i, 1);
+      continue;
+    }
+    const progress = Math.max(0, Math.min(1, ageMs / damageFloatLifetimeMs));
+    if (resolveDamageFloatAnchor(entry.playerId, tmpDamageFloatWorld)) {
+      tmpDamageFloatScreen.copy(tmpDamageFloatWorld).project(cam);
+      if (tmpDamageFloatScreen.z >= -1 && tmpDamageFloatScreen.z <= 1) {
+        entry.lastX = ((tmpDamageFloatScreen.x + 1) * 0.5) * screenWidth;
+        entry.lastY = ((1 - tmpDamageFloatScreen.y) * 0.5) * screenHeight;
+      }
+    }
+    const rise = 56 * (1 - ((1 - progress) * (1 - progress)));
+    const driftX = entry.xJitter * (1 - (progress * 0.42));
+    const driftY = entry.yJitter * (1 - progress);
+    const scale = progress < 0.2
+      ? (0.78 + (progress / 0.2) * 0.46)
+      : (1.24 - ((progress - 0.2) / 0.8) * 0.18);
+    entry.element.style.opacity = String(1 - (progress * 0.92));
+    entry.element.style.transform = `translate(${entry.lastX + driftX}px, ${entry.lastY - rise - driftY}px) scale(${scale.toFixed(3)})`;
+  }
 };
 
 const pushChatMessage = (playerName, text) => {
@@ -4266,6 +4372,8 @@ const tmpCapsuleD = new THREE.Vector3();
 const tracerUpAxis = new THREE.Vector3(0, 1, 0);
 const tmpWorldQuatA = new THREE.Quaternion();
 const tmpWorldQuatB = new THREE.Quaternion();
+const tmpDamageFloatWorld = new THREE.Vector3();
+const tmpDamageFloatScreen = new THREE.Vector3();
 
 const getImpactMaterial = (color) => {
   const key = color instanceof THREE.Color ? `c:${color.getHexString()}` : `n:${String(color)}`;
@@ -8308,6 +8416,9 @@ const connectWebSocket = () => {
 
     if (payload.type === 'hit_confirm') {
       const headshot = Boolean(payload.data?.headshot);
+      const quadDamage = Boolean(payload.data?.quadDamage);
+      const damage = Number(payload.data?.damage);
+      const victimId = String(payload.data?.victimId || '');
       triggerHitConfirm(headshot);
       const hitterCharacter = state.self?.character || activeCharacter;
       if (hitterCharacter) {
@@ -8315,6 +8426,9 @@ const connectWebSocket = () => {
       }
       if (headshot) {
         void playHeadshotSound();
+      }
+      if (victimId && Number.isFinite(damage) && damage > 0) {
+        spawnDamageFloat(victimId, damage, headshot, quadDamage);
       }
       return;
     }
@@ -12888,6 +13002,7 @@ const animate = () => {
     updateEffects(delta);
     updateCrosshair();
     updateDamageIndicator();
+    updateDamageFloats();
     renderSpecialStat(false);
     updateRemoteShootSound(delta);
     updateBleedEffect(delta);

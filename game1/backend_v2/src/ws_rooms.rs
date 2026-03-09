@@ -81,6 +81,12 @@ struct MapCollisionGrid {
     buckets: HashMap<(i32, i32), Vec<usize>>,
 }
 
+#[derive(Clone, Copy)]
+struct AppliedHitResult {
+    winner: bool,
+    damage: f64,
+}
+
 #[derive(Clone)]
 struct PickupState {
     x: f64,
@@ -1783,22 +1789,27 @@ async fn process_message(state: &Arc<WsRoomsState>, client_id: &str, message: Va
                         true,
                     ));
                 } else {
-                    inner.send_to(
-                        client_id,
-                        json!({
-                          "type":"hit_confirm",
-                          "ok": true,
-                          "data": {
-                            "victimId": victim_id,
-                            "headshot": headshot,
-                            "ts": now
-                          }
-                        }),
-                    );
-                    let winner = apply_hit_and_emit(
+                    let hit_result = apply_hit_and_emit(
                         &mut inner, &room_id, client_id, &victim_id, headshot, HIT_DAMAGE, now,
                     );
-                    if winner {
+                    if let Some(result) = hit_result {
+                        let quad_damage = is_quad_damage_active_for_attacker(&inner, client_id, now);
+                        inner.send_to(
+                            client_id,
+                            json!({
+                              "type":"hit_confirm",
+                              "ok": true,
+                              "data": {
+                                "victimId": victim_id,
+                                "headshot": headshot,
+                                "quadDamage": quad_damage,
+                                "damage": result.damage,
+                                "ts": now
+                              }
+                            }),
+                        );
+                    }
+                    if hit_result.map(|result| result.winner).unwrap_or(false) {
                         tokio::spawn(schedule_match_reset(
                             Arc::clone(state),
                             room_id.clone(),
@@ -4201,9 +4212,9 @@ fn apply_hit_and_emit(
     headshot: bool,
     base_damage: f64,
     ts: i64,
-) -> bool {
+) -> Option<AppliedHitResult> {
     if attacker_id == victim_id {
-        return false;
+        return None;
     }
     let respawn_delay_ms = respawn_delay_ms_for_room(inner, room_id);
     let mut died = false;
@@ -4219,16 +4230,17 @@ fn apply_hit_and_emit(
     }
     let (health, shield) = {
         let Some(victim) = inner.clients.get_mut(victim_id) else {
-            return false;
+            return None;
         };
         if !victim.combat.alive {
-            return false;
+            return None;
         }
         if ts < victim.combat.spawn_protected_until_ms {
-            return false;
+            return None;
         }
         if victim.combat.shield > 0.0 {
             let reduced = (applied_damage * (1.0 - SHIELD_DAMAGE_REDUCTION)).ceil();
+            applied_damage = reduced;
             victim.combat.shield = (victim.combat.shield - SHIELD_HIT_COST_PER_HIT).max(0.0);
             victim.combat.health = (victim.combat.health - reduced).max(0.0);
         } else {
@@ -4263,9 +4275,14 @@ fn apply_hit_and_emit(
         }),
     );
 
+    let result = AppliedHitResult {
+        winner: false,
+        damage: applied_damage.max(0.0),
+    };
+
     if !died || !death_award_eligible {
         inner.broadcast_room_state(room_id);
-        return false;
+        return Some(result);
     }
 
     if let Some(victim) = inner.clients.get_mut(victim_id) {
@@ -4301,7 +4318,7 @@ fn apply_hit_and_emit(
         .unwrap_or(false);
     if already_cooldown {
         inner.broadcast_room_state(room_id);
-        return false;
+        return Some(result);
     }
     if let Some((winner_payload, winner_team, winner_score, kills_to_win)) =
         maybe_resolve_match_winner(inner, room_id, attacker_id, killer_kills)
@@ -4335,11 +4352,14 @@ fn apply_hit_and_emit(
         );
         inner.broadcast_room_state(room_id);
         inner.broadcast_rooms_list_all();
-        return true;
+        return Some(AppliedHitResult {
+            winner: true,
+            damage: applied_damage.max(0.0),
+        });
     }
 
     inner.broadcast_room_state(room_id);
-    false
+    Some(result)
 }
 
 async fn run_pumori_orbit_damage(state: Arc<WsRoomsState>, room_id: String, caster_id: String) {
@@ -4585,27 +4605,7 @@ async fn apply_delayed_authoritative_hit(
             return;
         };
         let ts = now_ms();
-        if send_hit_confirm {
-            let quad_damage = is_quad_damage_active_for_attacker(&inner, &attacker_id, ts);
-            let mut data = json!({
-              "victimId": victim_id,
-              "headshot": revalidated_headshot,
-              "quadDamage": quad_damage,
-              "ts": ts
-            });
-            if let Some(shot_ts_value) = shot_ts {
-                data["shotTs"] = json!(shot_ts_value);
-            }
-            inner.send_to(
-                &attacker_id,
-                json!({
-                  "type":"hit_confirm",
-                  "ok": true,
-                  "data": data
-                }),
-            );
-        }
-        apply_hit_and_emit(
+        let hit_result = apply_hit_and_emit(
             &mut inner,
             &room_id,
             &attacker_id,
@@ -4613,7 +4613,31 @@ async fn apply_delayed_authoritative_hit(
             revalidated_headshot,
             base_damage,
             ts,
-        )
+        );
+        if send_hit_confirm {
+            if let Some(result) = hit_result {
+                let quad_damage = is_quad_damage_active_for_attacker(&inner, &attacker_id, ts);
+                let mut data = json!({
+                  "victimId": victim_id,
+                  "headshot": revalidated_headshot,
+                  "quadDamage": quad_damage,
+                  "damage": result.damage,
+                  "ts": ts
+                });
+                if let Some(shot_ts_value) = shot_ts {
+                    data["shotTs"] = json!(shot_ts_value);
+                }
+                inner.send_to(
+                    &attacker_id,
+                    json!({
+                      "type":"hit_confirm",
+                      "ok": true,
+                      "data": data
+                    }),
+                );
+            }
+        }
+        hit_result.map(|result| result.winner).unwrap_or(false)
     };
 
     if winner {
@@ -4686,7 +4710,7 @@ fn apply_radial_falloff_damage(
             splash_damage = splash_damage.min(base_damage);
         }
         splash_damage = splash_damage.max(1.0);
-        if apply_hit_and_emit(
+        if let Some(result) = apply_hit_and_emit(
             inner,
             room_id,
             attacker_id,
@@ -4700,20 +4724,18 @@ fn apply_radial_falloff_damage(
                 attacker_id,
                 json!({
                   "type":"hit_confirm",
-                  "data": { "victimId": victim_id, "headshot": false, "quadDamage": quad_damage }
+                  "data": {
+                    "victimId": victim_id,
+                    "headshot": false,
+                    "quadDamage": quad_damage,
+                    "damage": result.damage
+                  }
                 }),
             );
-            winner = true;
-            break;
-        } else {
-            let quad_damage = is_quad_damage_active_for_attacker(inner, attacker_id, ts);
-            inner.send_to(
-                attacker_id,
-                json!({
-                  "type":"hit_confirm",
-                  "data": { "victimId": victim_id, "headshot": false, "quadDamage": quad_damage }
-                }),
-            );
+            if result.winner {
+                winner = true;
+                break;
+            }
         }
     }
     winner
@@ -4905,7 +4927,7 @@ async fn apply_delayed_area_wave_damage(
                     damage = damage.min(base_damage);
                 }
                 damage = damage.max(1.0);
-                if apply_hit_and_emit(
+                if let Some(result) = apply_hit_and_emit(
                     &mut inner,
                     &room_id,
                     &caster_id,
@@ -4918,19 +4940,17 @@ async fn apply_delayed_area_wave_damage(
                         &caster_id,
                         json!({
                           "type":"hit_confirm",
-                          "data": { "victimId": victim_id, "headshot": false }
+                          "data": {
+                            "victimId": victim_id,
+                            "headshot": false,
+                            "damage": result.damage
+                          }
                         }),
                     );
-                    winner = true;
-                    break;
-                } else {
-                    inner.send_to(
-                        &caster_id,
-                        json!({
-                          "type":"hit_confirm",
-                          "data": { "victimId": victim_id, "headshot": false }
-                        }),
-                    );
+                    if result.winner {
+                        winner = true;
+                        break;
+                    }
                 }
             }
             if winner {

@@ -1381,6 +1381,60 @@ button:disabled {
   box-shadow: 0 0 12px rgba(83, 226, 255, 0.16);
 }
 
+.damage-float-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.damage-float {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 42px;
+  text-align: center;
+  font-family: 'Trebuchet MS', 'Arial Black', sans-serif;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  color: #ffe57b;
+  text-shadow:
+    -2px -2px 0 rgba(33, 14, 0, 0.95),
+    2px -2px 0 rgba(33, 14, 0, 0.95),
+    -2px 2px 0 rgba(33, 14, 0, 0.95),
+    2px 2px 0 rgba(33, 14, 0, 0.95),
+    0 0 14px rgba(255, 205, 78, 0.28);
+  transform: translate(-9999px, -9999px) scale(0.9);
+  transform-origin: center center;
+  will-change: transform, opacity;
+}
+
+.damage-float.headshot {
+  color: #ff9e5d;
+  text-shadow:
+    -2px -2px 0 rgba(59, 8, 0, 0.96),
+    2px -2px 0 rgba(59, 8, 0, 0.96),
+    -2px 2px 0 rgba(59, 8, 0, 0.96),
+    2px 2px 0 rgba(59, 8, 0, 0.96),
+    0 0 18px rgba(255, 99, 37, 0.38);
+}
+
+.damage-float.quad {
+  color: #92fbff;
+  text-shadow:
+    -2px -2px 0 rgba(0, 23, 34, 0.96),
+    2px -2px 0 rgba(0, 23, 34, 0.96),
+    -2px 2px 0 rgba(0, 23, 34, 0.96),
+    2px 2px 0 rgba(0, 23, 34, 0.96),
+    0 0 20px rgba(107, 249, 255, 0.42);
+}
+
+.damage-float.headshot.quad {
+  color: #ffffff;
+}
+
 .chat-panel {
   position: fixed;
   top: 0;
